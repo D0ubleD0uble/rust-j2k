@@ -139,7 +139,8 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// it counts any. Such
 /// a tile with no tile over a cap after it is left to the decode, so a file
 /// with no tile over a cap under the main header is still read no further
-/// than the first `SOT`.
+/// than the first `SOT`. With `strict` on, a refusal or a stop at a budget
+/// gives the decode's error for the tile-parts where its parse finds one.
 fn check_geometry(
     bytes: &[u8],
     parsed: &codestream::ParsedHeader,
@@ -148,6 +149,34 @@ fn check_geometry(
     cap: samples::Cap,
     strict: bool,
 ) -> Result<()> {
+    let counted = count_geometry(bytes, parsed, selection, reduction, cap, strict);
+    if !strict {
+        return counted.map(|_| ());
+    }
+    // With `strict` on, the decode parses every tile-part before it counts
+    // any tile, whatever the selection, so where the count refuses a tile or
+    // stops at a budget, that parse's fault comes first.
+    match counted {
+        Ok(true) => Ok(()),
+        Ok(false) => codestream::tile_parts_fault(bytes, parsed).map_or(Ok(()), Err),
+        Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => {
+            Err(codestream::tile_parts_fault(bytes, parsed).unwrap_or(error))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The count of [`check_geometry`], before a refusal or a stop at a budget
+/// meets the decode's parse of the tile-parts. `Ok(false)` means the count
+/// stopped at a budget, leaving the tiles past it to the decode.
+fn count_geometry(
+    bytes: &[u8],
+    parsed: &codestream::ParsedHeader,
+    selection: &window::Selection,
+    reduction: u8,
+    cap: samples::Cap,
+    strict: bool,
+) -> Result<bool> {
     let header = &parsed.header;
     let siz = &header.siz;
     let components = siz.components.len() as u64;
@@ -196,10 +225,6 @@ fn check_geometry(
     // The lowest tile read since the last one counted whose own header
     // could refuse it.
     let mut pending: Option<u32> = None;
-    // With `strict` on, a lower tile's refusal, held while the walk goes on
-    // to the next tile over a cap that the decode would find missing.
-    let mut refused: Option<Error> = None;
-    let held = |refused: Option<Error>| refused.map_or(Ok(()), Err);
     for index in 0..reads.len() as u32 {
         let Some((main_fits, may_refuse)) = fits(index) else {
             continue;
@@ -212,16 +237,14 @@ fn check_geometry(
         } else {
             steps = steps.saturating_add(main_resolutions);
             if steps > GEOMETRY_STEPS {
-                return held(refused);
+                return Ok(false);
             }
             tier2::check_tile(header, index, cap)
                 .err()
                 .filter(|error| matches!(error, Error::Limit(_)))
         };
         let Some(error) = over else {
-            if refused.is_none() {
-                pending.get_or_insert(index);
-            }
+            pending.get_or_insert(index);
             continue;
         };
         // The decode counts the lower tiles under their own headers first,
@@ -239,40 +262,17 @@ fn check_geometry(
                 return Err(rescue.walk_fault().unwrap_or(error));
             }
             for lower in lowest..index {
-                if !fits(lower).is_some_and(|(_, may_refuse)| may_refuse) {
-                    continue;
-                }
-                match rescue.count(lower, None) {
-                    Ok(true) => {}
-                    Ok(false) => return Ok(()),
-                    Err(error) if strict => {
-                        refused = Some(error);
-                        break;
-                    }
-                    Err(error) => return Err(error),
+                let counted = fits(lower).is_some_and(|(_, may_refuse)| may_refuse);
+                if counted && !rescue.count(lower, None)? {
+                    return Ok(false);
                 }
             }
-        }
-        if let Some(lower) = refused.take() {
-            // A lower tile is refused, but the decode refuses the file for a
-            // missing tile first. So the count goes on through the tiles over
-            // a cap as it would without the lower tiles, to the first that is
-            // missing (the decode's error for the tile-parts) or refused
-            // under its own header (the lower tile's error).
-            if rescue.find(index).is_none() {
-                return Err(rescue.walk_fault().unwrap_or(lower));
-            }
-            match rescue.count(index, Some(error)) {
-                Ok(true) => refused = Some(lower),
-                Ok(false) | Err(_) => return Err(lower),
-            }
-            continue;
         }
         if !rescue.count(index, Some(error))? {
-            return Ok(());
+            return Ok(false);
         }
     }
-    held(refused)
+    Ok(true)
 }
 
 /// The resolutions of tile-components `header` gives a tile.
@@ -1522,14 +1522,20 @@ pub(crate) mod tests {
 
     /// The walk goes only as far as the tile it counts: where tile 1 of 64
     /// is refused, it walks the 16 tile-parts of tile 0 and tile 1's first,
-    /// and reads tiles 0 and 1 by offset. A tile with no tile-part takes the
-    /// walk to the end of the tile-parts.
+    /// and reads tiles 0 and 1 by offset. With `strict` on the refusal then
+    /// runs the decode's parse of the tile-parts, which the decode runs
+    /// before it counts any tile, and which walks them all. A tile with no
+    /// tile-part takes the walk to the end of the tile-parts.
     #[test]
     fn a_refusal_at_an_early_tile_walks_little() {
         let bytes = rescued_tiles(64, 16, &[1], &[]);
-        let (reads, header) = sot_reads_of(&bytes, &DecodeOptions::default());
+        let lenient = DecodeOptions::default().with_strict(false);
+        let (reads, header) = sot_reads_of(&bytes, &lenient);
         assert!(matches!(header, Err(Error::Limit(_))), "{header:?}");
         assert_eq!(reads, 16 + 1 + 2);
+        let (reads, header) = sot_reads_of(&bytes, &DecodeOptions::default());
+        assert!(matches!(header, Err(Error::Limit(_))), "{header:?}");
+        assert_eq!(reads, 16 + 1 + 2 + (64 * 16 + 1));
         // Tile 1's tile-parts left out: with `strict` on the walk runs to
         // `EOC` to find it has none, and the file is refused with the
         // decode's error, from the decode's parse of the tile-parts, which
@@ -1544,7 +1550,6 @@ pub(crate) mod tests {
         );
         assert_eq!(reads, 63 * 16 + 1 + 1 + (63 * 16 + 1));
         // With it off the tile is left out and the rest are read by offset.
-        let lenient = DecodeOptions::default().with_strict(false);
         assert_eq!(sot_reads(&missing, &lenient), 63 * 16 + 1 + 63);
     }
 }

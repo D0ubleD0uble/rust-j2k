@@ -714,6 +714,27 @@ the missing tile ("the codestream carries no tile-part for tile 2") and
 refusal. `opj_decompress` 2.5.0 fails to read tile 1's `COD`.
 `tests/tile_geometry_cap.rs` checks it. It has no license restriction.
 
+`header/own_reduction_then_missing.j2k` (117 bytes, SHA-256
+`3e693058fe20389ec268ec92a1c282c5e6bc1b3d9b6931ec375a165277050bbb`) and
+`header/own_reduction_after_lower_data_fault.j2k` (117 bytes, SHA-256
+`ec27f69e8de7b42f43c36da4d3dc4d5dc4b6effbd2fd224d3bedab4f9ee9d773`) are
+inputs from the review of #501, committed as found. Each is a gray
+codestream with `XOsiz` 992 and tiles of 1000 x 1000, so tile 0 is 8 wide,
+whose main `COD` gives one level and 1x1 precincts at resolution 0, which
+puts the tiles 1000 wide over the precinct cap. Tile 0 has no tile-part
+`COD` and too little data for its packets; tile 1's tile-part `COD` gives
+it no levels. The first is 3000 wide and has no tile-part for tile 2: at
+resolution reduction 1 with `strict` on, `decode_with` refuses the file
+for the missing tile ("the codestream carries no tile-part for tile 2")
+and `read_header_with` does too, where it once gave tile 1's reduction
+refusal; with `strict` off both give that refusal. The second is 2000
+wide: at reduction 1 `read_header_with` gives tile 1's reduction refusal
+while `decode_with` first refuses tile 0's data ("the data of tile 0 ends
+before the last packet"), a difference the `read_header_with` docs list,
+and the `header` fuzz target accepts it. `opj_decompress` 2.5.0 fails to
+decode component 0 of both. `tests/tile_geometry_cap.rs` and
+`tests/read_header.rs` check them. They have no license restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and

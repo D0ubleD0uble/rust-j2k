@@ -1220,3 +1220,98 @@ fn lower_tiles_with_no_tile_part_cod_spend_no_budget() {
         assert!(limit.message().starts_with(&tile), "{limit}");
     }
 }
+
+/// An over-cap tile refused by its own reduction check, before a tile with
+/// no tile-part (a review find, the seed
+/// `tests/fixtures/header/own_reduction_then_missing.j2k`). Tile 0 is 8
+/// wide; tile 1, 1000 x 1000 and over the precinct cap under the main
+/// header, has a tile-part `COD` of no levels; tile 2 is missing. With
+/// `strict` on the decode refuses the file for tile 2 before it counts any
+/// tile, so at reduction 1 the header read gives that error too, for the
+/// whole image and for a window that reads tile 1 alone.
+#[test]
+fn a_missing_tile_comes_before_an_own_reduction_refusal() {
+    let bytes = include_bytes!("fixtures/header/own_reduction_then_missing.j2k");
+    let reduced = DecodeOptions::default().with_resolution_reduction(1);
+    let window = reduced
+        .clone()
+        .with_region(Region::Window(rust_j2k::Window::new(1000, 0, 1100, 100)));
+    for options in [&reduced, &window] {
+        let header = read_header_with(bytes, options);
+        assert!(
+            matches!(&header, Err(Error::Codestream(d))
+                if d.message() == "the codestream carries no tile-part for tile 2"),
+            "{header:?}"
+        );
+        assert_same_error(bytes, options);
+    }
+    // With `strict` off the decode leaves tile 2 out and refuses tile 1.
+    let lenient = reduced.clone().with_strict(false);
+    let header = read_header_with(bytes, &lenient);
+    assert!(
+        matches!(&header, Err(Error::InvalidOptions(d)) if d.message().ends_with("in tile 1")),
+        "{header:?}"
+    );
+    assert_same_error(bytes, &lenient);
+}
+
+/// `components` gray components over `rows` rows of two tiles: a 1 x 16
+/// tile (2r) with a tile-part `COD` of one level, or of none where `refuse`
+/// names the row, then a 16 x 16 tile (2r + 1), over the precinct cap under
+/// the main header and brought within by its tile-part `COD`. The tiles
+/// `missing` names have no tile-part.
+fn narrow_and_square(components: usize, rows: u32, refuse: &[u32], missing: &[u16]) -> Vec<u8> {
+    let siz = synth::siz_body(
+        [32, 16 * rows, 15, 0, 16, 16, 0, 0],
+        &vec![[7, 1, 1]; components],
+    );
+    let mut cod = synth::cod_body(1, 1, 0, 0);
+    cod[0] = 1;
+    cod.extend([0x00, 0x11]);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 4])),
+    ]
+    .concat();
+    let one = synth::seg(0xFF52, &synth::cod_body(1, 1, 0, 0));
+    let none = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
+    for tile in 0..2 * rows as u16 {
+        if missing.contains(&tile) {
+            continue;
+        }
+        let refused = tile % 2 == 0 && refuse.contains(&u32::from(tile / 2));
+        let own = if refused { &none } else { &one };
+        bytes.extend(synth::tile_part(tile, 0, 1, own, &vec![0; 2 * components]));
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
+}
+
+/// With `strict` on, a tile with no tile-part comes before a lower tile's
+/// refusal and before a stop at the count's budget (review finds): 60 rows
+/// of 4096 components, where counting the lower tiles under their own
+/// headers spends the budget before the missing tile. Tile 119 is missing
+/// with no tile refused, or with tile 40 refused under a reduction; tile
+/// 118, within the caps, is missing with tile 0 refused.
+#[test]
+fn a_missing_tile_comes_before_a_lower_refusal_or_a_budget_stop() {
+    let cases: [(&[u32], u16, u8); 4] = [
+        (&[], 119, 0),
+        (&[20], 119, 0),
+        (&[20], 119, 1),
+        (&[0], 118, 1),
+    ];
+    for (refuse, missing, reduction) in cases {
+        let bytes = narrow_and_square(4096, 60, refuse, &[missing]);
+        let options = DecodeOptions::default().with_resolution_reduction(reduction);
+        let header = read_header_with(&bytes, &options);
+        let expected = format!("the codestream carries no tile-part for tile {missing}");
+        assert!(
+            matches!(&header, Err(Error::Codestream(d)) if d.message() == expected),
+            "{refuse:?} {missing} r{reduction}: {header:?}"
+        );
+        assert_same_error(&bytes, &options);
+    }
+}

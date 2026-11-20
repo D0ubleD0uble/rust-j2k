@@ -144,16 +144,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whatever its size, as one with fewer levels than the reduction takes is
   refused too. With `strict` on it first looks up the tiles it would read
   up to the tile over a cap, and gives the decode's error for the
-  tile-parts where one of them has none; where it refuses a lower tile, it
-  goes on through the later tiles over a cap to the first that has no
-  tile-part (the decode's error) or that its own header refuses (the lower
-  tile's).
+  tile-parts where one of them has none. As the strict decode parses every
+  tile-part before it counts any tile, whatever the selection, a refusal or
+  a stop at the count's budget with `strict` on now runs that parse too and
+  gives its fault where it finds one.
   That reads the tile-part headers of those tiles in the same single walk;
   a file with no tile over a cap under the main header is still read no
-  further than the first `SOT`. On a file the decode refuses for a fault in
-  its tile-parts, the header read may still give a `Limit` or a reduction
-  refusal instead. The decode can still refuse first for what only decoding
-  finds in a lower tile (its packets or code-blocks), or, with `strict`
+  further than the first `SOT`. With `strict` off, on a file the decode
+  refuses for a fault in its tile-parts, the header read may still give a
+  `Limit` or a reduction refusal instead. The decode can still refuse
+  first for what only decoding finds in a lower tile (its packets or
+  code-blocks), before a tile over a cap or one its own header gives too
+  few levels for, or, with `strict`
   off, for the charge for the tiles read that have no tile-part; the
   `read_header_with` docs list these cases (#501).
 - `DecodeOptions::with_retry` no longer climbs a work bound one factor at a
