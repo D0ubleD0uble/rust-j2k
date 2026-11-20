@@ -699,6 +699,7 @@ fn a_palette_under_a_window_counts_the_window() {
 
 /// A window inside tile 0 of [`synth::two_large_tiles`]: it reads that tile
 /// alone.
+#[cfg(target_pointer_width = "64")]
 fn in_tile_0() -> DecodeOptions {
     window(0, 0, 16, 16)
 }
@@ -786,31 +787,58 @@ fn a_jp2_file_counts_all_its_bytes() {
     assert_eq!((header.width, header.height), (16, 16));
 }
 
+/// A 100-byte file of one `width` x `height` tile.
+fn hundred_byte_file(width: u32, height: u32) -> Vec<u8> {
+    let siz = synth::siz_body([width, height, 0, 0, width, height, 0, 0], &[[7, 1, 1]]);
+    let mut out = [
+        vec![0xFF, 0x4F],
+        seg(0xFF51, &siz),
+        seg(0xFF52, &synth::cod_body(1, 5, 4, 0)),
+        seg(0xFF5C, &synth::qcd_none_body(2, &[8; 16])),
+    ]
+    .concat();
+    // A comment pads the main header to 98 bytes; then `SOT`.
+    let comment = vec![b' '; 98 - out.len() - 4 - 2];
+    out.extend(seg(0xFF64, &[&[0, 1][..], &comment].concat()));
+    out.extend_from_slice(&[0xFF, 0x90]);
+    assert_eq!(out.len(), 100);
+    out
+}
+
+/// On a 32-bit target 2^29 samples are past what the target can address
+/// (2^29 - 1), so the file at the floor is refused as `AddressSpace`, with
+/// nothing to retry with, through `decode` and `read_header` alike.
+#[cfg(not(target_pointer_width = "64"))]
+#[test]
+fn a_100_byte_file_at_the_floor_is_past_the_address_space() {
+    let at_floor = hundred_byte_file(1 << 15, 1 << 14);
+    for result in [
+        read_header(&at_floor).map(|_| ()),
+        decode(&at_floor).map(|_| ()),
+    ] {
+        let Err(Error::Limit(m)) = result else {
+            panic!("{result:?}");
+        };
+        assert_eq!(m.kind(), LimitKind::AddressSpace, "{m}");
+        assert_eq!(m.retry_with(), None, "{m}");
+        assert!(
+            m.message()
+                .contains("536870912 samples, more than this target can address (536870911)"),
+            "{m}"
+        );
+    }
+}
+
 /// A file of 100 bytes is held to the floor: it cannot ask for more than
 /// 2^29 samples. One of exactly 2^29 is admitted, and one of a sample more
 /// refused, through `decode` and `read_header` alike.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_100_byte_file_is_held_to_2_to_the_29_samples() {
-    let file = |width: u32, height: u32| {
-        let siz = synth::siz_body([width, height, 0, 0, width, height, 0, 0], &[[7, 1, 1]]);
-        let mut out = [
-            vec![0xFF, 0x4F],
-            seg(0xFF51, &siz),
-            seg(0xFF52, &synth::cod_body(1, 5, 4, 0)),
-            seg(0xFF5C, &synth::qcd_none_body(2, &[8; 16])),
-        ]
-        .concat();
-        // A comment pads the main header to 98 bytes; then `SOT`.
-        let comment = vec![b' '; 98 - out.len() - 4 - 2];
-        out.extend(seg(0xFF64, &[&[0, 1][..], &comment].concat()));
-        out.extend_from_slice(&[0xFF, 0x90]);
-        assert_eq!(out.len(), 100);
-        out
-    };
-    let at_floor = file(1 << 15, 1 << 14);
+    let at_floor = hundred_byte_file(1 << 15, 1 << 14);
     let header = read_header(&at_floor).expect("2^29 samples fit");
     assert_eq!((header.width, header.height), (1 << 15, 1 << 14));
-    let over = file((1 << 15) + 1, 1 << 14);
+    let over = hundred_byte_file((1 << 15) + 1, 1 << 14);
     for m in [limit(read_header(&over)), limit(decode(&over))] {
         assert!(
             m.starts_with(
