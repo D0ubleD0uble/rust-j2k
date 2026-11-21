@@ -190,6 +190,10 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "too many steps to check",
     ),
     (
+        "work_bound/pocmulti_16tiles_4096_2.j2k",
+        "its tile-parts hold no packet bytes",
+    ),
+    (
         "work_bound/pocmulti_64tiles_4096_2.j2k",
         "its tile-parts hold no packet bytes",
     ),

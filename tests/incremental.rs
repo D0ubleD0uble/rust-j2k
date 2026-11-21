@@ -398,18 +398,27 @@ fn windowed(bytes: &[u8], options: &DecodeOptions) -> Option<DecodeOptions> {
 const COSTLY: [&str; 4] = ["work_bound/", "tier1_work_bound/", "psot0/", "budget/"];
 
 /// The fixtures the `share`-th of `SHARES` tests checks: every
-/// `SHARES`-th file, so that the costly ones spread over the tests.
+/// `SHARES`-th file, so that the costly ones spread over the tests. The
+/// `header/` files are dealt out among themselves first, since several of
+/// them take over ten seconds each in a debug build and must not meet in one
+/// test.
 fn share(share: usize) -> Vec<PathBuf> {
-    files(&fixtures())
+    let (header, rest): (Vec<_>, Vec<_>) = files(&fixtures())
         .into_iter()
-        .enumerate()
-        .filter(|(i, _)| i % SHARES == share)
-        .map(|(_, path)| path)
-        .collect()
+        .partition(|path| path.strip_prefix(fixtures()).unwrap().starts_with("header"));
+    let deal = |files: Vec<PathBuf>| {
+        files
+            .into_iter()
+            .enumerate()
+            .filter(move |(i, _)| i % SHARES == share)
+            .map(|(_, path)| path)
+    };
+    deal(header).chain(deal(rest)).collect()
 }
 
-/// How many tests the fixtures are split over, so they run in parallel.
-const SHARES: usize = 4;
+/// How many tests the fixtures are split over, so they run in parallel and
+/// none runs long in a debug build.
+const SHARES: usize = 16;
 
 /// Each fixture, fed in pieces and cut at many points, decodes as the
 /// one-shot decode of the same bytes does. Each refine and `finish` is
@@ -458,24 +467,35 @@ fn check_share(index: usize) {
     println!("{count} fixtures, {points} cut points, {images} streamed images");
 }
 
-#[test]
-fn fixtures_0_refine_to_the_one_shot_decode_of_their_prefixes() {
-    check_share(0);
+/// One test per share of the fixtures.
+macro_rules! share_tests {
+    ($($name:ident => $index:literal,)*) => {
+        $(
+            #[test]
+            fn $name() {
+                check_share($index);
+            }
+        )*
+    };
 }
 
-#[test]
-fn fixtures_1_refine_to_the_one_shot_decode_of_their_prefixes() {
-    check_share(1);
-}
-
-#[test]
-fn fixtures_2_refine_to_the_one_shot_decode_of_their_prefixes() {
-    check_share(2);
-}
-
-#[test]
-fn fixtures_3_refine_to_the_one_shot_decode_of_their_prefixes() {
-    check_share(3);
+share_tests! {
+    fixtures_0_refine_to_the_one_shot_decode_of_their_prefixes => 0,
+    fixtures_1_refine_to_the_one_shot_decode_of_their_prefixes => 1,
+    fixtures_2_refine_to_the_one_shot_decode_of_their_prefixes => 2,
+    fixtures_3_refine_to_the_one_shot_decode_of_their_prefixes => 3,
+    fixtures_4_refine_to_the_one_shot_decode_of_their_prefixes => 4,
+    fixtures_5_refine_to_the_one_shot_decode_of_their_prefixes => 5,
+    fixtures_6_refine_to_the_one_shot_decode_of_their_prefixes => 6,
+    fixtures_7_refine_to_the_one_shot_decode_of_their_prefixes => 7,
+    fixtures_8_refine_to_the_one_shot_decode_of_their_prefixes => 8,
+    fixtures_9_refine_to_the_one_shot_decode_of_their_prefixes => 9,
+    fixtures_10_refine_to_the_one_shot_decode_of_their_prefixes => 10,
+    fixtures_11_refine_to_the_one_shot_decode_of_their_prefixes => 11,
+    fixtures_12_refine_to_the_one_shot_decode_of_their_prefixes => 12,
+    fixtures_13_refine_to_the_one_shot_decode_of_their_prefixes => 13,
+    fixtures_14_refine_to_the_one_shot_decode_of_their_prefixes => 14,
+    fixtures_15_refine_to_the_one_shot_decode_of_their_prefixes => 15,
 }
 
 /// The MIXED HT files, where each code-block is an HT or a Part 1 block,
