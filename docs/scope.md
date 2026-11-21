@@ -29,7 +29,7 @@ refused or handled partly. The text under each table names them.
 | Non-zero image offset (XOsiz/YOsiz) | Yes |
 | Non-zero tile offset (XTOsiz/YTOsiz) | Yes |
 | CAP (capabilities) and CPF (corresponding profile) | Yes, with limits |
-| Part 2 markers (MCT, MCC, NLT, MCO, CBD) | No |
+| Part 2 markers (DCO, VMS, DFS, ADS, MCT, MCC, NLT, MCO, CBD, ATK) | No |
 
 Limits inside the decoded rows:
 

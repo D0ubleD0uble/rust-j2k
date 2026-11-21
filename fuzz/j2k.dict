@@ -32,11 +32,16 @@ com="\xff\x64"
 sot="\xff\x90"
 
 # Part 2 markers the decoder names in its rejects.
+dco="\xff\x70"
+vms="\xff\x71"
+dfs="\xff\x72"
+ads="\xff\x73"
 mct="\xff\x74"
 mcc="\xff\x75"
 nlt="\xff\x76"
 mco="\xff\x77"
 cbd="\xff\x78"
+atk="\xff\x79"
 
 # Composites: a whole SOP segment (Lsop = 4, Nsop = 0), and an SOT segment
 # skeleton (Isot 0, Psot 0 = runs to EOC, TPsot 0 of TNsot 1) that turns a
