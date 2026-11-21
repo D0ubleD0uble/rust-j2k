@@ -43,7 +43,7 @@ refusal under `ColorOutput::Srgb`).
 | [Stricter than the oracle on non-conforming streams](#stricter-than-the-oracle-on-non-conforming-streams) | refuses; OpenJPEG warns, reads on or invents values | 3 |
 | [Packets a POC sequence leaves out](#packets-a-poc-sequence-leaves-out) | refuses; OpenJPEG decodes them empty | 3 |
 | [Encoder mistakes OpenJPEG corrects](#encoder-mistakes-openjpeg-corrects) | corrects as OpenJPEG does; refuses mixed counts, differing restatements, and MCT on components that differ in depth or sign | 2 |
-| [Partial decode](#partial-decode) | with `strict` off: cut packets, POC gaps and packed-header overruns handled differently | 1, 3 |
+| [Partial decode](#partial-decode) | with `strict` off: cut packets, POC gaps, packed-header overruns and cut tile-part headers handled differently | 1, 3 |
 | [Signed 32-bit components](#signed-32-bit-components) | decodes; OpenJPEG refuses | 1 |
 | [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
 | [Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks) | decodes; OpenJPEG refuses | 1 |
@@ -1019,7 +1019,7 @@ whole file decodes: each tile whose later parts have not arrived is charged.
 `DecodeOptions::packet_work_limit` raises the bound for such a stream. The
 report holds at most five entries per tile-part, plus two.
 
-Three differences from OpenJPEG are deliberate.
+Four differences from OpenJPEG are deliberate.
 
 ### A cut packet keeps each code-block's whole layers
 
@@ -1075,6 +1075,45 @@ missing bits as 0 and decodes with no error; that is not a deliberate
 correction, so this decoder refuses (`tests/packed_overrun.rs`, fixtures in
 `tests/fixtures/packed_overrun/`). An inline header whose bits run past the end
 of the data is the data ending, and the packet adds nothing.
+
+### A tile-part header the input ends inside
+
+With `strict` off, a tile-part header that the input ends inside decodes:
+the codestream ends at that tile-part, none of the tile-part is read, and the
+report names it as `TruncatedTilePart` (with `declared` 0 when its `Psot` is
+0). OpenJPEG 2.5.0 refuses such a file with "Stream too short", even under
+`-allow-partial`. This is what lets every prefix of a file decode as it
+streams in.
+
+A fault in the header is read as the input ending only when the input ends
+inside what the error depends on. For most markers that is the marker
+segment the read fails at: a whole segment that is malformed, or a marker
+not allowed there, is refused with the error a strict decode gives, as in
+the main header. For an unrecognized marker, a Part 2 marker and a reserved
+`0xFF30` to `0xFF3F` code, the error depends on the markers after it, which
+must reach `SOD` for the code to be taken as a marker (otherwise it is lost
+sync). So these stay `Ok` until the input holds the header through `SOD`,
+or until those markers break. A longer input then fails at the same marker
+with the same error, so a prefix goes from `Ok` to one final error and
+never from one error to another. An `EPH`, or another marker not allowed
+there, followed by the end of the input is refused at once. OpenJPEG
+`-allow-partial` decodes that cut file, but refuses the whole file ("Marker
+size inconsistent with stream length"), so the refusal matches the whole
+file's result.
+
+For a tile-part whose `Psot` is 0, a segment whose length runs past the end
+of the input is also read as the input ending, even when the file ends in an
+`EOC`. OpenJPEG refuses it ("Marker size inconsistent with stream length").
+The `Psot` 0 tile-part runs to the end of the codestream, and, as in
+OpenJPEG, its last two bytes are not checked to be `FF D9`. A file cut inside
+that segment whose last two bytes happen to be `FF D9` looks the same.
+Trusting the closing `EOC` here would let a prefix fail where the whole file
+does not. The report then has no `MissingEoc`, since the input ends in
+`FF D9`.
+
+`tests/tile_part_header_cut.rs` checks each case, on prefixes of a tiled
+fixture with a fault put in its last tile-part (`Psot` 0) and in a middle
+one (`Psot` past the end).
 
 ## Signed 32-bit components
 

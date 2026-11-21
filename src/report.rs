@@ -197,7 +197,9 @@ pub enum ReportEntry {
         complete_reduction: Option<u8>,
     },
     /// The input ends inside this tile-part: its `Psot` declares more bytes
-    /// than remain. The bytes that are there are read.
+    /// than remain, or it is 0 and the input ends inside the tile-part's
+    /// header. The bytes that are there are read; of a header the input
+    /// ends inside, none are.
     #[non_exhaustive]
     TruncatedTilePart {
         /// The tile.
@@ -205,7 +207,8 @@ pub enum ReportEntry {
         /// The tile-part, as its `TPsot` numbers it.
         tile_part: u8,
         /// The tile-part's length as its `Psot` declares it, from its `SOT`
-        /// marker on.
+        /// marker on. 0 when `Psot` is 0 (the tile-part runs to the end of
+        /// the codestream).
         declared: u64,
         /// The bytes of it the input holds.
         present: u64,
@@ -276,6 +279,16 @@ impl fmt::Display for ReportEntry {
                     None => write!(f, ", and no reduction has every packet"),
                 }
             }
+            ReportEntry::TruncatedTilePart {
+                tile,
+                tile_part,
+                declared: 0,
+                present,
+            } => write!(
+                f,
+                "tile {tile} tile-part {tile_part} is cut short in its header: {present} bytes \
+                 of it are there, and its `Psot` is 0"
+            ),
             ReportEntry::TruncatedTilePart {
                 tile,
                 tile_part,
