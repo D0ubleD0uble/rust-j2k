@@ -1,13 +1,16 @@
 //! The walk of the tile-parts that looks for a fault and keeps no tile
 //! record: [`tile_parts_fault`] gives the error [`parse_tiles_with`] gives,
 //! in time linear in the input and with heap that grows with the tile count
-//! only.
+//! and, for the tiles a later tile-part restates a coding value of, their
+//! first tile-part's coding.
 //!
 //! It is [`walk_tiles`] step for step, with what a tile record holds cut to
 //! what the faults depend on: for each tile, the tile-parts seen, the count
 //! they declare, the `POC` volumes they carry, and where its first
-//! tile-part's header starts, which is read again where a later tile-part
-//! restates a value ([`check_restatement`]). The two walks are kept in step
+//! tile-part's header starts. That header is read again, once for the tile,
+//! at the first later tile-part that restates a value, and the coding it
+//! gives is kept for the tile's later restatements
+//! ([`check_restatement`]). The two walks are kept in step
 //! by a differential over every committed codestream and header seed in
 //! `tests.rs`, and over fuzzed input by the `header` fuzz target
 //! ([`crate::fuzz::tile_parts_walks_agree`]).
@@ -16,11 +19,13 @@
 //! [`walk_tiles`]: super::walk_tiles
 
 use std::cell::OnceCell;
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use super::{
-    Cursor, Error, MAX_POC_VOLUMES, Overrides, ParsedHeader, Result, TileHeader, check_poc_budget,
-    check_restatement, check_tile_in_full, count_is_one_short, decode_sot, marker,
-    read_tile_part_header, read_u16, segment, sot_at, tile_overrides_are_valid,
+    Cursor, Error, MAX_POC_VOLUMES, Overrides, ParsedHeader, Restated, Result, TileHeader,
+    check_poc_budget, check_restatement, check_tile_in_full, count_is_one_short, decode_sot,
+    marker, read_tile_part_header, read_u16, segment, sot_at, tile_overrides_are_valid,
 };
 
 /// What the walk keeps of one tile, 6 bytes.
@@ -46,8 +51,9 @@ const POC_FIRST: u8 = 2;
 const INVALID: u8 = 4;
 
 /// Where the header of each tile's first tile-part starts, for the tiles
-/// flagged [`CODES`]: 4 bytes a tile where the input is under 4 GiB.
-/// Nothing is held until a tile is flagged.
+/// flagged [`CODES`]. Nothing is held until a tile is flagged; then it
+/// holds an entry for every tile of the grid, 4 bytes each where the input
+/// is under 4 GiB and 8 bytes past that.
 enum Firsts {
     Narrow(Vec<u32>),
     Wide(Vec<usize>),
@@ -94,12 +100,16 @@ impl Firsts {
 /// The error [`parse_tiles_with`](super::parse_tiles_with) gives, `strict`
 /// or not, for the tile-parts after `parsed`'s main header, or `None` if it
 /// gives none. It reads `parsed` in place and keeps no tile record: its
-/// heap is 6 bytes a tile of the grid, and 4 more for each tile whose first
-/// tile-part carries a `COD`, `QCD`, `COC` or `QCC`, plus one tile-part
-/// header at a time.
+/// heap is 6 bytes a tile of the grid, and 4 more a tile (8 on an input of
+/// 4 GiB or more) once any tile's first tile-part carries a `COD`, `QCD`,
+/// `COC` or `QCC`, plus one tile-part header at a time, plus the first
+/// tile-part's coding for each tile that a later tile-part restates a
+/// value of. The walk again for a tile whose joined header is at fault
+/// starts once the first walk's record is let go, so the two are not held
+/// at once.
 pub(crate) fn tile_parts_fault(bytes: &[u8], parsed: &ParsedHeader, strict: bool) -> Option<Error> {
     walk(bytes, parsed, strict, None)
-        .and_then(|(seen, _)| check_headers(bytes, parsed, strict, &seen))
+        .and_then(|(seen, _)| check_headers(bytes, parsed, strict, seen))
         .err()
 }
 
@@ -124,6 +134,10 @@ fn walk(
     let mut count_correction = 0u16;
     let uniform = OnceCell::new();
     let summary = OnceCell::new();
+    // For each tile a later tile-part of which restates a coding value: its
+    // first tile-part's coding, read again once, and what
+    // [`check_restatement`] has found so far, as the tile record holds them.
+    let mut restating: HashMap<usize, (Overrides, Option<Restated>)> = HashMap::new();
     // Whether the walk ended where the input did, with `strict` off: where
     // `walk_tiles` records `ReportEntry::MissingEoc`.
     let mut ended_early = false;
@@ -228,15 +242,25 @@ fn walk(
                 }
             } else {
                 if tile_header.overrides.codes_or_quantizes() {
-                    // The first tile-part's header read again: it read the
-                    // same when the walk passed it.
-                    let own = if tile.flags & CODES != 0 {
-                        let mut at = Cursor::at(bytes, firsts.get(index));
-                        read_tile_part_header(&mut at, main, true)?.0.overrides
-                    } else {
-                        Overrides::default()
+                    let (own, restated) = match restating.entry(index) {
+                        Entry::Occupied(entry) => entry.into_mut(),
+                        Entry::Vacant(entry) => {
+                            // The first tile-part's header read again, once
+                            // for the tile: it read the same when the walk
+                            // passed it.
+                            let own = if tile.flags & CODES != 0 {
+                                #[cfg(test)]
+                                super::tests::FIRST_REREADS
+                                    .with(|reads| reads.set(reads.get() + 1));
+                                let mut at = Cursor::at(bytes, firsts.get(index));
+                                read_tile_part_header(&mut at, main, true)?.0.overrides
+                            } else {
+                                Overrides::default()
+                            };
+                            entry.insert((own, None))
+                        }
                     };
-                    check_restatement(main, &uniform, &own, &mut None, &tile_header, index)?;
+                    check_restatement(main, &uniform, own, restated, &tile_header, index)?;
                 }
                 let volumes = usize::from(tile.poc) + tile_header.poc.len();
                 check_poc_budget(volumes)?;
@@ -377,19 +401,32 @@ fn walk(
 /// for again, to gather its header as the tile record holds it, and checked
 /// in full, so that the fault is reported in the full check's words. Like
 /// that check, it numbers a tile by its place among the tiles found.
-fn check_headers(bytes: &[u8], parsed: &ParsedHeader, strict: bool, seen: &[Seen]) -> Result<()> {
+fn check_headers(bytes: &[u8], parsed: &ParsedHeader, strict: bool, seen: Vec<Seen>) -> Result<()> {
     let main = &parsed.header;
-    let found = seen.iter().enumerate().filter(|(_, tile)| tile.parts != 0);
-    for (position, (index, tile)) in found.enumerate() {
-        let poc = usize::from(tile.poc);
-        let volumes = if tile.flags & POC_FIRST != 0 {
-            poc
-        } else {
-            main.poc.len() + poc
+    let mut seen = Some(seen);
+    // The tiles found before `after`, by position, passed.
+    let mut after = 0;
+    loop {
+        let tiles = match seen.take() {
+            Some(tiles) => tiles,
+            None => walk(bytes, parsed, strict, None)?.0,
         };
-        if tile.flags & INVALID == 0 && volumes <= MAX_POC_VOLUMES {
-            continue;
-        }
+        let found = tiles.iter().enumerate().filter(|(_, tile)| tile.parts != 0);
+        let flagged = found.enumerate().skip(after).find(|(_, (_, tile))| {
+            let poc = usize::from(tile.poc);
+            let volumes = if tile.flags & POC_FIRST != 0 {
+                poc
+            } else {
+                main.poc.len() + poc
+            };
+            tile.flags & INVALID != 0 || volumes > MAX_POC_VOLUMES
+        });
+        let Some((position, (index, _))) = flagged else {
+            return Ok(());
+        };
+        // The walk for the tile's header holds its own record of each tile,
+        // so this one is let go first.
+        drop(tiles);
         let header = walk(bytes, parsed, strict, Some(index))?
             .1
             .ok_or_else(|| Error::inconsistent(format!("tile {index} was not found again")))?;
@@ -399,6 +436,8 @@ fn check_headers(bytes: &[u8], parsed: &ParsedHeader, strict: bool, seen: &[Seen
             "tile {index}: the quick check refused a valid tile"
         );
         full?;
+        // Not reached while the quick check is exact: the record is walked
+        // again to go on past the tile.
+        after = position + 1;
     }
-    Ok(())
 }

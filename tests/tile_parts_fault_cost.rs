@@ -107,7 +107,59 @@ fn a_refusal_on_the_235_mb_file_walks_the_tile_parts_once() {
             over.push(name);
         }
     }
+    // A first tile-part header of 2^18 empty `COM`s that each of 254 later
+    // tile-parts restates a `COD` over: the walk reads that header again
+    // once a tile, so the refusal costs about what the decode's parse does.
+    for tiles in [1, 4] {
+        let bytes = restated_over_long_firsts(tiles);
+        let options = DecodeOptions::default().with_region(Region::Tile(0));
+        let (spent, peak, error) = refusal(&bytes, &options);
+        let name = format!("{tiles} tiles of long first headers restated");
+        eprintln!(
+            "{name} ({} MB): {spent:?}, {} KiB at the peak: {error:?}",
+            bytes.len() / 1_000_000,
+            peak >> 10
+        );
+        if spent >= Duration::from_millis(50) {
+            over.push("long first headers restated");
+        }
+    }
     // Times are kept to a release build.
     #[cfg(not(debug_assertions))]
-    assert!(over.is_empty(), "over 300 ms or 1 MiB: {over:?}");
+    assert!(over.is_empty(), "over its time or 1 MiB: {over:?}");
+}
+
+/// `tiles` tiles of 1024 x 1024 in a row, over the precinct cap under the
+/// main `COD` and under their own, each in 255 tile-parts: the first's
+/// header is that `COD` and 2^18 empty `COM`s, and each later one's
+/// restates the `COD`.
+fn restated_over_long_firsts(tiles: u16) -> Vec<u8> {
+    let side = 1024;
+    let mut cod = synth::cod_body(1, 0, 4, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let siz = synth::siz_body(
+        [side * u32::from(tiles), side, 0, 0, side, side, 0, 0],
+        &[[7, 1, 1]],
+    );
+    let cod = synth::seg(0xFF52, &cod);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        cod.clone(),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+    ]
+    .concat();
+    let mut first = cod.clone();
+    for _ in 0..1 << 18 {
+        first.extend_from_slice(&[0xFF, 0x64, 0, 2]);
+    }
+    for tile in 0..tiles {
+        bytes.extend(synth::tile_part(tile, 0, PARTS, &first, &[0]));
+        for part in 1..PARTS {
+            bytes.extend(synth::tile_part(tile, part, PARTS, &cod, &[]));
+        }
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
 }

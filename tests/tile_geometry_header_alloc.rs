@@ -158,7 +158,7 @@ fn the_header_read_holds_no_tile_data() {
 
     // The last tile refused, as it has no tile-part `COD`, and read alone:
     // the read then walks every tile-part for the fault the decode would
-    // give first, with 6 bytes a tile, and 4 more for each tile whose first
+    // give first, with 6 bytes a tile, and 4 more a tile once a tile's first
     // tile-part has its own `COD`. With `00 00` where the `EOC` should be,
     // that fault is the read's error.
     for (end, strict) in [

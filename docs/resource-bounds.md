@@ -322,10 +322,13 @@ that error too, with a walk of its own (`codestream::tile_parts_fault`).
 It follows the parse step for step, reading every `SOT` and every
 tile-part header that holds more than `SOD`, but keeps 6 bytes a tile in
 place of the decode's tile records (up to about 52 times the input plus
-128 KiB, above), and 4 more for each tile whose first tile-part has its
-own coding. Where a later tile-part restates a coding value, it reads the
-first tile-part's header again to compare, and it reads the tile's
-headers again for the one tile whose joined header is at fault. It reads
+128 KiB, above), and, once any tile's first tile-part has its own coding,
+4 more for every tile (8 on an input of 4 GiB or more). Where a later
+tile-part restates a coding value, it reads the tile's first tile-part
+header again, once for the tile, and keeps the coding it gives for the
+tile's later restatements, so that heap is bounded by those first headers.
+For the one tile whose joined header is at fault it walks again, after
+letting go of the first walk's record. It reads
 the main header in place, so it copies no `PPM` data. Where the read
 refuses no tile, a tile-part header the decode finds at fault is left to
 the decode. A differential test over every committed codestream, cut and
@@ -342,8 +345,13 @@ tile-parts at most plus the budgets, and the heap one tile's header, a byte
 a tile for the tiles the selection reads, and 8 bytes a tile for the
 offsets, except where the count refuses a tile, stops at a budget, or with
 `strict` on finds a tile with no tile-part: that costs the walk for the
-decode's error too, one more pass over the tile-parts and up to 10 bytes
-a tile. Measured in release on
+decode's error too: one more pass over the tile-parts (two where a tile's
+joined header is at fault), each restated tile's first header read once
+more, and up to 10 bytes a tile (14 on an input of 4 GiB or more) plus
+the coding kept for the restated tiles. Where each of 254 later tile-parts
+restates a `COD` over a first tile-part header of 2^18 empty `COM`s, a
+refusal takes 3.4 ms on a 1 MB file of one such tile and 10 ms on 4 MB of
+four. Measured in release on
 65535 tiles of 1024 x 1024, each over the
 precinct cap under the main header and brought within by its first
 tile-part's `COD`, with 255 tile-parts a tile (16.7 million tile-parts,

@@ -17,6 +17,9 @@ thread_local! {
     /// The `SOT` marker segments [`visit_first_parts`] and [`first_part_at`]
     /// have read on this thread.
     pub(crate) static SOT_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The first tile-part headers the fault walk has read again, for a
+    /// later tile-part that restates a coding value, on this thread.
+    pub(crate) static FIRST_REREADS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 fn be16(v: u16) -> [u8; 2] {
@@ -5027,6 +5030,27 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
             "Unsupported(\"tile 1 codes component 0 with the Irreversible97 wavelet",
         ),
         (
+            "the first tile's header at fault",
+            true,
+            grid_of_four(
+                &[],
+                &[
+                    part(
+                        0,
+                        0,
+                        1,
+                        &[wavelet_97.clone(), seg(0xFF5C, &[0x42, 0x48, 0x00])].concat(),
+                        &[],
+                    ),
+                    all(1),
+                    all(2),
+                    all(3),
+                ],
+                &eoc,
+            ),
+            "Unsupported(\"tile 0 codes component 0 with the Irreversible97 wavelet",
+        ),
+        (
             "PPT under a PPM",
             true,
             grid_of_four(
@@ -5127,4 +5151,41 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
             );
         }
     }
+}
+
+/// The fault walk reads a tile's first tile-part header again once, at the
+/// tile's first later tile-part that restates a coding value, however many
+/// restate it and in whatever order the tiles' tile-parts come: here tiles 0
+/// and 1, each with its own `COD` and `QCD` and 200 more tile-parts that
+/// restate them, interleaved 0, 1, 0, 1, and a tile whose later tile-parts
+/// restate the main header's, which is not read again. A tile with no
+/// restatement is not read again either.
+#[test]
+fn the_fault_walk_reads_a_first_header_again_once_a_tile() {
+    use synth::tile_part as part;
+    let own = [
+        seg(0xFF52, &synth::cod_body(1, 0, 0, 0)),
+        seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+    ]
+    .concat();
+    let parts = 201u8;
+    let mut tile_parts = vec![
+        part(0, 0, parts, &own, &[]),
+        part(1, 0, parts, &own, &[]),
+        part(2, 0, parts, &[], &[]),
+        part(3, 0, 1, &own, &[]),
+    ];
+    for at in 1..parts {
+        for tile in 0..3 {
+            tile_parts.push(part(tile, at, parts, &own, &[]));
+        }
+    }
+    let bytes = grid_of_four(&[], &tile_parts, &[0xFF, 0xD9]);
+    let parsed = parse_header(&bytes).expect("the main header");
+    for strict in [true, false] {
+        FIRST_REREADS.with(|reads| reads.set(0));
+        assert!(fault::tile_parts_fault(&bytes, &parsed, strict).is_none());
+        assert_eq!(FIRST_REREADS.with(std::cell::Cell::get), 2, "{strict}");
+    }
+    crate::fuzz::tile_parts_walks_agree(&bytes);
 }
