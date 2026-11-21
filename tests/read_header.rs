@@ -211,16 +211,29 @@ const TILE_FAULTS: &[(&str, &str)] = &[
 
 /// Files where `read_header` refuses a tile, over a cap or under a reduction
 /// its own header cannot take, while `decode` first refuses the file for a
-/// fault in a lower tile's data, which `read_header` never reads, and why.
-const LOWER_TILE_FAULTS: &[(&str, &str)] = &[
+/// fault in a lower tile's data, which `read_header` never reads. Each entry
+/// gives why, the resolution reduction at which the header refuses, and the
+/// refused tile, which
+/// `the_tile_a_header_refuses_is_refused_alone_by_the_decode` pins for every
+/// file listed.
+const LOWER_TILE_FAULTS: &[(&str, &str, u8, u32)] = &[
     (
         "header/lower_tile_data_long.j2k",
         "a byte after tile 0's last packet",
+        0,
+        2,
     ),
-    ("header/lower_tile_data_short.j2k", "no data in tile 0"),
+    (
+        "header/lower_tile_data_short.j2k",
+        "no data in tile 0",
+        0,
+        2,
+    ),
     (
         "header/own_reduction_after_lower_data_fault.j2k",
         "tile 0's data ends before its last packet",
+        1,
+        1,
     ),
 ];
 
@@ -230,28 +243,8 @@ const LOWER_TILE_FAULTS: &[(&str, &str)] = &[
 /// the options where the header refuses.
 #[test]
 fn the_tile_a_header_refuses_is_refused_alone_by_the_decode() {
-    let reduced = DecodeOptions::default().with_resolution_reduction(1);
-    for (name, options, tile) in [
-        (
-            "header/lower_tile_data_long.j2k",
-            DecodeOptions::default(),
-            2,
-        ),
-        (
-            "header/lower_tile_data_short.j2k",
-            DecodeOptions::default(),
-            2,
-        ),
-        (
-            "header/own_reduction_after_lower_data_fault.j2k",
-            reduced,
-            1,
-        ),
-    ] {
-        assert!(
-            LOWER_TILE_FAULTS.iter().any(|(listed, _)| *listed == name),
-            "{name} is excused"
-        );
+    for &(name, _, reduction, tile) in LOWER_TILE_FAULTS {
+        let options = DecodeOptions::default().with_resolution_reduction(reduction);
         let bytes = std::fs::read(fixtures().join(name)).unwrap();
         let header = read_header_with(&bytes, &options).unwrap_err();
         let alone = decode_with(&bytes, &options.with_region(Region::Tile(tile)));
@@ -394,7 +387,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                     compared[reduction as usize] += 1;
                 }
                 (Err(Error::Limit(_) | Error::InvalidOptions(_)), Err(Error::Codestream(_)))
-                    if LOWER_TILE_FAULTS.iter().any(|(listed, _)| *listed == name) =>
+                    if LOWER_TILE_FAULTS.iter().any(|(listed, ..)| *listed == name) =>
                 {
                     if lower_first.last() != Some(&name) {
                         lower_first.push(name.clone());
@@ -431,7 +424,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     assert_eq!(differing, listed);
     let listed: Vec<String> = LOWER_TILE_FAULTS
         .iter()
-        .map(|(n, _)| n.to_string())
+        .map(|(n, ..)| n.to_string())
         .collect();
     assert_eq!(lower_first, listed);
     // Files whose `cdef` reorders the channels are in the sweep. Their
