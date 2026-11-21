@@ -257,6 +257,13 @@ fn the_tile_over_the_cap_is_named_alike() {
 
     let tile0 = DecodeOptions::default().with_region(rust_j2k::Region::Tile(0));
     decodes(&bytes, &tile0, side / 2, height);
+
+    // Under `AtMost` it is tile 1 too, with the same amount.
+    let blocks = blocks_of(side, height);
+    let at_most = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(blocks * 512 - 1));
+    let limit = refusal(&bytes, &at_most);
+    assert_eq!(limit.retry_with(), None, "{limit}");
+    assert_eq!(refused_at(&limit), (1, blocks), "{limit}");
 }
 
 /// A tile is counted under its own header, as the decode counts it: a
@@ -1043,6 +1050,8 @@ fn a_tile_past_the_address_space_is_not_adjustable() {
         assert!(!limit.kind().is_adjustable(), "{noun}: {limit}");
         assert_eq!(limit.retry_with(), None, "{noun}: {limit}");
         assert!(limit.message().starts_with("tile 0 holds "), "{limit}");
+        // This pins today's behavior, not a promise: a later release may
+        // set `refused_at` for this kind.
         assert_eq!(limit.refused_at(), None, "{noun}: {limit}");
     }
 }

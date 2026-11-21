@@ -44,8 +44,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the work bound, code-blocks for `TileCodeBlocks` and precincts for
   `TilePrecincts`. The refusal `decode_with` and `read_header_with` give
   carries it, and so do `Waiting::WorkLimit` and a `Waiting::BoundSpent`
-  where the whole bound refuses a tile. Other refusals give `None`, a
-  `BoundSpent` that the earlier refines alone refused included (#493, #513).
+  where the whole bound refuses a tile. For other kinds it is `None` today
+  and a later release may set it; so is it for a `BoundSpent` that the
+  earlier refines alone refused (#493, #513).
 
 ### Changed
 

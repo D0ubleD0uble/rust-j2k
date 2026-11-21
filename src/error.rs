@@ -331,7 +331,13 @@ impl Error {
                         format!("tile {tile} holds {amount} code-blocks, ")
                     }
                     LimitKind::TilePrecincts => format!("tile {tile} holds {amount} precincts, "),
-                    _ => return Error::Limit(limit),
+                    kind => {
+                        debug_assert!(
+                            matches!(kind, LimitKind::AddressSpace),
+                            "{kind:?} carries no refused_at"
+                        );
+                        return Error::Limit(limit);
+                    }
                 };
                 debug_assert!(limit.message.starts_with(&named), "{}", limit.message);
                 limit.refused_at = Some(RefusedAt { tile, amount });
@@ -498,17 +504,25 @@ impl LimitDetail {
     ///   bound refuses a tile it counted. The amount is in sample-passes.
     /// - [`TileCodeBlocks`](LimitKind::TileCodeBlocks): the tile that holds
     ///   more code-blocks than a tile may. The amount is its code-blocks.
+    ///   It counts the whole tile: every component and resolution, whatever
+    ///   the reduction, region or components of this decode, so reducing
+    ///   the resolution does not get the tile past the cap.
     /// - [`TilePrecincts`](LimitKind::TilePrecincts): the tile that holds
-    ///   more precincts than a tile may. The amount is its precincts.
+    ///   more precincts than a tile may. The amount is its precincts, counted
+    ///   the same way.
     ///
-    /// Other refusals give `None`, a `BoundSpent` whose count ended within
-    /// the whole bound included.
+    /// For other kinds it is `None` today, and a later release may set it.
+    /// So is it for a `BoundSpent` whose count ended within the whole bound.
+    /// On a target that cannot address the tile's samples, a tile cap
+    /// refusal is [`AddressSpace`](LimitKind::AddressSpace) and gives `None`.
     ///
     /// The tile pairs with [`TileGrid::tile`](crate::TileGrid::tile) and
     /// [`Region::Tile`](crate::Region::Tile), so a caller can decode around
-    /// the tile refused:
+    /// the tile refused. It names the first tile refused; later tiles may be
+    /// refused too, so a caller that decodes the others may get another
+    /// refusal. The example only shows the calls (it does not run):
     ///
-    /// ```
+    /// ```no_run
     /// use rust_j2k::{DecodeOptions, Error, Region, decode_with};
     ///
     /// fn decode_tiles_but_the_refused(
@@ -567,7 +581,9 @@ impl RefusedAt {
     /// code-blocks this decode reads under its options, the reduction,
     /// region and components, not of the whole tile), code-blocks for
     /// [`TileCodeBlocks`](LimitKind::TileCodeBlocks) and precincts for
-    /// [`TilePrecincts`](LimitKind::TilePrecincts).
+    /// [`TilePrecincts`](LimitKind::TilePrecincts). The last two count the
+    /// whole tile, every component and resolution, whatever the reduction,
+    /// region or components.
     pub fn amount(&self) -> u64 {
         self.amount
     }
