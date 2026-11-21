@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Write tests/fixtures/work_bound/pocmulti_64tiles_4096_2.j2k.
+"""Write tests/fixtures/work_bound/pocmulti_64tiles_4096_2.j2k or
+pocmulti_16tiles_4096_2.j2k.
 
 A codestream of TILES tiles (one column, each WIDTH x HEIGHT, one component,
 no wavelet levels, 2 x 2 precincts, LAYERS LRCP layers) with VOLUMES
@@ -10,7 +11,8 @@ that names only what the tiles seen so far need climbs one factor per tile.
 
     python3 scripts/gen-multipoc-fixture.py OUT TILES WIDTH HEIGHT LAYERS VOLUMES
 
-The committed file is made with `TILES WIDTH HEIGHT LAYERS VOLUMES` = `64 64 64 4096 2`. Add `--data` to give each
+The committed files are made with `TILES WIDTH HEIGHT LAYERS VOLUMES` =
+`64 64 64 4096 2` (64 tiles) and `16 64 64 4096 2` (16 tiles). Add `--data` to give each
 tile-part its packet bytes (not committed).
 """
 import struct
