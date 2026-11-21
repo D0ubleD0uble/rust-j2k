@@ -79,7 +79,7 @@ pub fn entry_bound(sots: usize, rows: usize) -> usize {
 /// decode reads it. If even that fails, the grid is unknown and the worst
 /// case, tiles one row high, bounds the rows by the window's height.
 fn window_rows(bytes: &[u8], options: &DecodeOptions) -> usize {
-    let rust_j2k::Region::Window(window) = &options.region else {
+    let rust_j2k::Region::Window(window) = options.region() else {
         return 0;
     };
     match super::inconsistent::checked(rust_j2k::read_header_with(

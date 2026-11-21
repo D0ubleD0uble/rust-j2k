@@ -45,11 +45,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `packet_work_limit` and `code_block_work_limit` stay a `WorkLimit`.
   `LimitDetail::retry_with` returns `Option<Raise>`: replace
   `Some(WorkLimit::Raised(n))` with `Some(Raise::Raised(n))`, and pass
-  `.into()` to the builder. `DecodeOptions::with_retry` is unchanged.
-  The `with_*_limit` builders store `Raised(1)` as `Default`, so a field
+  `.into()` to the builder.
+  The `with_*_limit` builders store `Raised(1)` as `Default`, so a limit
   set through one and compared to `Raised(1)` no longer matches. A refusal
   by the sample limit or a tile cap names `SampleLimit::` in its message
   (#611).
+- The `DecodeOptions` fields are private. Read a setting with the method of
+  the same name, such as `options.strict()`, and set it with its `with_*`
+  builder. `components()` gives `Option<&[u16]>`, and `region()`, `color()`
+  and the limits give a reference. `DecodeOptions` now implements `PartialEq`
+  and `Eq`. `DecodeOptions::with_retry` is now `raised_for`, with the same
+  signature (#612).
 
 ### Added
 

@@ -21,9 +21,9 @@ For the samples it is the smallest factor that admits the image. For the two
 work bounds, and for the code-blocks and precincts a tile holds, it is the
 larger of the smallest factor that admits what the decode has seen and twice
 the factor the bound ran under, and the file may need more, so a loop of
-`with_retry` calls takes about log2 of the factor the file needs. It is
+`raised_for` calls takes about log2 of the factor the file needs. It is
 `None` when the refusal shows no factor. A caller can retry from `kind()`
-and `retry_with()` without reading the message, and `DecodeOptions::with_retry`
+and `retry_with()` without reading the message, and `DecodeOptions::raised_for`
 sets the option. A retry can still fail with another error once past the cap.
 
 | Bound | Default | Option in `DecodeOptions` | Margin over encoder output | Tests |
@@ -46,7 +46,7 @@ file of up to 64 MiB has the caps of 2^20 and 2^18; past that they grow with
 the input as the sample limit does, and `SampleLimit::Raised(n)` and
 `SampleLimit::AtMost(n)` on `sample_limit` set them too. A tile past a cap is
 refused with `Limit` of kind `TileCodeBlocks` or `TilePrecincts`, which
-`with_retry` raises through `sample_limit`
+`raised_for` raises through `sample_limit`
 ([Code-blocks and precincts per tile](#code-blocks-and-precincts-per-tile)).
 Where the sample limit that would admit the tile is past what the target
 can address, the kind is `AddressSpace` instead. On a 32-bit target, where
@@ -284,7 +284,7 @@ set around a decode besides the ceiling (the input size, a timeout, memory for e
 
 A refusal under `AtMost(n)` has kind `Samples` (or `TileCodeBlocks` or
 `TilePrecincts`, for a tile's geometry) and names the ceiling and the count.
-It gives no retry (`retry_with` is `None`, so `with_retry` is `None`): the
+It gives no retry (`retry_with` is `None`, so `raised_for` is `None`): the
 caller set the ceiling. In an `IncrementalDecoder` it is an error, not a
 wait, as more bytes do not raise it, unless the refusal comes from a later
 tile while a refine counts the code-block work: that ends the count as

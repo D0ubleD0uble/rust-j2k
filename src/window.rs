@@ -46,7 +46,7 @@ pub struct Window {
 ///
 /// assert_eq!(Region::default(), Region::Whole);
 /// let options = DecodeOptions::default().with_region(Region::Window(Window::new(0, 0, 8, 8)));
-/// assert_eq!(options.region, Region::Window(Window::new(0, 0, 8, 8)));
+/// assert_eq!(options.region(), &Region::Window(Window::new(0, 0, 8, 8)));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
@@ -188,7 +188,7 @@ pub(crate) fn check_options(options: &DecodeOptions) -> Result<()> {
 }
 
 /// What a decode of a codestream of `siz` returns under `options`, at
-/// `options.resolution_reduction`. A window is cut to the image area; one
+/// `options.resolution_reduction()`. A window is cut to the image area; one
 /// with no part inside it, a tile index past the grid, a component past
 /// SIZ's, and an area that holds no sample of a returned component at the
 /// reduction are [`Error::InvalidOptions`], as OpenJPEG refuses them.

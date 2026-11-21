@@ -676,425 +676,32 @@ pub enum ColorOutput {
 /// [`DecodeOptions::default`].
 ///
 /// Start from [`DecodeOptions::default`] and set what differs with its
-/// `with_*` method, or the field directly. The struct is `#[non_exhaustive]`,
-/// so a new option is not a breaking change.
-#[derive(Clone)]
+/// `with_*` method. Read a setting with the method of the same name. The
+/// fields are private and the struct is `#[non_exhaustive]`, so a new option
+/// is not a breaking change.
+///
+/// Writing a field from outside the crate does not compile, so a limit cannot
+/// be set past the builder that keeps `Raised(1)` and `Default` the same:
+///
+/// ```compile_fail,E0616
+/// use rust_j2k::{DecodeOptions, SampleLimit};
+///
+/// let mut options = DecodeOptions::default();
+/// options.sample_limit = SampleLimit::Raised(1);
+/// ```
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DecodeOptions {
-    /// How many of the finest resolution levels to discard. Each level about
-    /// halves the output in both axes, so `1` decodes a half-size image, `2`
-    /// a quarter-size, and so on: the wavelet pyramid's own lower
-    /// resolutions, not a resample. The exact size depends on the image
-    /// origin; [`Image`] and [`ComponentInfo::width`] give the formula. Every
-    /// component must keep at least one resolution: a reduction that consumes
-    /// some component's whole pyramid is rejected as
-    /// [`Error::InvalidOptions`]. [`Header::max_reduction`] gives the largest
-    /// the main header allows.
-    pub resolution_reduction: u8,
-    /// How many of the leading quality layers to decode: `Some(n)` decodes
-    /// layers `0..n` of each tile, `None` (the default) every layer. A
-    /// codestream builds its image up in layers, each adding coding passes
-    /// to the code-blocks, so a cap gives a lower-fidelity image at full
-    /// size from fewer passes, and the block decoder does less work. It is
-    /// OpenJPEG's `opj_decompress -l n`.
-    ///
-    /// A cap at or above a tile's layer count decodes that tile whole, as
-    /// OpenJPEG does. `Some(0)` is [`Error::InvalidOptions`]. It combines
-    /// with [`resolution_reduction`](Self::resolution_reduction).
-    ///
-    /// The packets of the later layers are still read, since they frame the
-    /// packets after them, so a fault in one is still an error, and they
-    /// count against [`packet_work_limit`](Self::packet_work_limit) as
-    /// without a cap. Only their coding passes are left out. With
-    /// [`strict`](Self::strict) off, a packet of a layer past the cap that
-    /// the data does not reach is not reported missing.
-    ///
-    /// [`Header::quality_layers`](crate::Header::quality_layers) is the layer
-    /// count the main header declares.
-    ///
-    /// ```
-    /// use rust_j2k::{DecodeOptions, decode, decode_with};
-    ///
-    /// // For a 32x24 file in three quality layers, the last one lossless.
-    /// # let bytes = include_bytes!(concat!(
-    /// #     env!("CARGO_MANIFEST_DIR"),
-    /// #     "/tests/fixtures/multilayer_lossless.j2k"
-    /// # )).to_vec();
-    /// # /*
-    /// let bytes = std::fs::read("image.j2k")?;
-    /// # */
-    /// let whole = decode(&bytes).expect("decodes");
-    /// let first = decode_with(&bytes, &DecodeOptions::default().with_max_quality_layers(Some(1)))
-    ///     .expect("decodes");
-    /// // The same size, from fewer coding passes.
-    /// assert_eq!((first.width, first.height), (whole.width, whole.height));
-    /// assert_ne!(first.components[0].samples, whole.components[0].samples);
-    /// // A cap at or past the layer count is the whole decode.
-    /// let all = decode_with(&bytes, &DecodeOptions::default().with_max_quality_layers(Some(3)))
-    ///     .expect("decodes");
-    /// assert_eq!(all.components[0].samples, whole.components[0].samples);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    #[doc(alias = "layers")]
-    #[doc(alias = "cp_layer")]
-    pub max_quality_layers: Option<u16>,
-    /// The area to decode: [`Region::Whole`] (the default) the whole image,
-    /// [`Region::Window`] a rectangle of the reference grid, and
-    /// [`Region::Tile`] one tile. One field holds all three, so a window and a
-    /// tile cannot be asked for together. A window is OpenJPEG's
-    /// `opj_set_decode_area` (`opj_decompress -d x0,y0,x1,y1`); a tile is its
-    /// `opj_get_decoded_tile` (`opj_decompress -t index`).
-    ///
-    /// # Window
-    ///
-    /// A [`Region::Window`] returns the part of the image inside it. It is in
-    /// reference-grid coordinates, as SIZ declares them, whatever the
-    /// [`resolution_reduction`](Self::resolution_reduction).
-    /// [`Header::image_area`] gives the image area in those coordinates,
-    /// and [`TileGrid::tile`] each tile's rectangle.
-    /// The part of it outside the image area is left out, as OpenJPEG clips
-    /// it. The returned [`Image`] covers what is left, `x0..x1` by `y0..y1`:
-    /// its [`width`](Image::width) is `x1 - x0` at full resolution and
-    /// `ceil(x1 / 2^r) - ceil(x0 / 2^r)` at a reduction of `r`, and each
-    /// component's is the same of `ceil(x0 / dx)` and `ceil(x1 / dx)` for its
-    /// sub-sampling `dx` ([`ComponentInfo::width`] gives the formula for the
-    /// whole image). The samples are those of a whole decode at the same
-    /// position. [`ColorOutput::Srgb`] from sYCC with sub-sampled chroma is
-    /// [`Error::Unsupported`] when the window, cut to the image area, does not
-    /// cover all of it, as the chroma replication depends on where the
-    /// decoded area starts.
-    ///
-    /// Only the tiles the window reaches are decoded, so a small window of a
-    /// large tiled image costs a few tiles. The packets of the other tiles
-    /// are not read, so damage in them is not found, as in OpenJPEG. With
-    /// [`strict`](Self::strict) off, a codestream cut short after the tiles
-    /// the window reaches still gives the window's samples.
-    /// `opj_decompress -allow-partial -d` 2.5.0 refuses such a file, while
-    /// `-t` decodes each tile, the cut one included, as this decoder does. In
-    /// the
-    /// tiles it reaches, only the code-blocks whose wavelet support reaches
-    /// the window are decoded, so damage in the others is not found either.
-    /// Nor is a code-block it skips checked against the bit-plane limit, so
-    /// a window can decode where the whole image is refused as
-    /// [`Error::Limit`].
-    ///
-    /// An empty window, one with no part inside the image area, and one that
-    /// holds no sample of a returned component at the reduction are
-    /// [`Error::InvalidOptions`].
-    ///
-    /// ```
-    /// use rust_j2k::{DecodeOptions, Region, Window, decode, decode_with};
-    ///
-    /// // For a 32x24 file with its image area at the grid's origin.
-    /// # let bytes = include_bytes!(concat!(
-    /// #     env!("CARGO_MANIFEST_DIR"),
-    /// #     "/tests/fixtures/multilayer_lossless.j2k"
-    /// # )).to_vec();
-    /// # /*
-    /// let bytes = std::fs::read("image.j2k")?;
-    /// # */
-    /// let whole = decode(&bytes).expect("decodes");
-    /// let options = DecodeOptions::default().with_region(Region::Window(Window::new(8, 4, 20, 30)));
-    /// let part = decode_with(&bytes, &options).expect("decodes");
-    /// // The window is cut to the image: rows 4 to 23.
-    /// assert_eq!((part.width, part.height), (12, 20));
-    /// assert_eq!(part.components[0].sample(0, 0), whole.components[0].sample(8, 4));
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Tile
-    ///
-    /// [`Region::Tile`] returns tile `index`'s area of the image. Tiles are
-    /// numbered in raster order from 0, as the codestream's `Isot` numbers
-    /// them. The result is the decode of a [`Region::Window`] set to the
-    /// tile's rectangle on the reference grid: its size, its samples and its
-    /// failures, the refusal of sRGB output from sub-sampled sYCC included
-    /// (unless the image is one tile). [`Header::tiles`] gives the tile grid
-    /// and [`TileGrid::count`] the number of tiles; an index at or past the
-    /// count is [`Error::InvalidOptions`].
-    #[doc(alias = "decode_area")]
-    #[doc(alias = "window")]
-    #[doc(alias = "tile")]
-    pub region: Region,
-    /// Decode only these components, in this order: `Some(list)` returns one
-    /// [`Component`] per entry of `list`, each the component of that SIZ
-    /// index, and `None` (the default) every component. It is OpenJPEG's
-    /// `opj_set_decoded_components` (`opj_decompress -c`), which takes them
-    /// in the given order too.
-    ///
-    /// Each returned component has the samples of a whole decode. The other
-    /// components' packets are still read, as they frame the packets after
-    /// them, but their code-blocks are not decoded. Under the codestream's
-    /// color transform (RCT or ICT), components 0, 1 and 2 are decoded
-    /// together whenever one of them is asked for, since each of them needs
-    /// all three. OpenJPEG skips the color transform instead when the
-    /// components are chosen, so its `-c` returns other samples for those
-    /// three.
-    ///
-    /// On a JP2 file the list names codestream components, which come out
-    /// as coded: the palette and channel definitions are not applied, as
-    /// with [`raw_channels`](Self::raw_channels), and as OpenJPEG has it.
-    /// [`Jp2Metadata::channels`] describes the components returned.
-    ///
-    /// An empty list, an index named twice, an index past SIZ's component
-    /// count, and a list with [`ColorOutput::Srgb`] are
-    /// [`Error::InvalidOptions`]. The last holds even on a gray codestream,
-    /// where sRGB output would pass the samples through, as it does for
-    /// [`raw_channels`](Self::raw_channels).
-    ///
-    /// ```
-    /// use rust_j2k::{DecodeOptions, decode, decode_with};
-    ///
-    /// // For a file of three components under the irreversible color transform.
-    /// # let bytes = include_bytes!(concat!(
-    /// #     env!("CARGO_MANIFEST_DIR"),
-    /// #     "/tests/fixtures/layers/cprl_irreversible.j2k"
-    /// # )).to_vec();
-    /// # /*
-    /// let bytes = std::fs::read("image.j2k")?;
-    /// # */
-    /// let whole = decode(&bytes).expect("decodes");
-    /// let options = DecodeOptions::default().with_components(Some(vec![2, 0]));
-    /// let some = decode_with(&bytes, &options).expect("decodes");
-    /// assert_eq!(some.components.len(), 2);
-    /// assert_eq!(some.components[0], whole.components[2]);
-    /// assert_eq!(some.components[1], whole.components[0]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    #[doc(alias = "opj_set_decoded_components")]
-    pub components: Option<Vec<u16>>,
-    /// Return a JP2 file's codestream components as coded, without applying
-    /// the file's palette (`pclr` + `cmap`) or channel definitions (`cdef`):
-    /// the file decodes exactly as its codestream does on its own, in SIZ
-    /// order, and [`Jp2Metadata::palette_applied`] is `false`. It means no
-    /// color conversion either, so it cannot be combined with
-    /// [`ColorOutput::Srgb`] ([`Error::InvalidOptions`]). Each index
-    /// plane is reported on [`Jp2Metadata::channels`] as
-    /// [`ChannelType::Unspecified`] with [`Association::None`], since it is
-    /// not a color until it goes through the palette; every other channel
-    /// is labeled as a file without a `cdef` is (see
-    /// [`Jp2Metadata::channels`]), whatever the `cdef` box says. The
-    /// boxes' layout is still checked, so a malformed `pclr`, `cmap` or
-    /// `cdef` is still [`Error::FileFormat`]; the palette mapping and column
-    /// depths, and the channel definitions' entries, are not.
-    ///
-    /// The metadata carries what the decode left out, so a caller can rebuild
-    /// the default decode, in order, from the raw one:
-    ///
-    /// 1. Expand the index planes. For each entry of
-    ///    [`Jp2Metadata::channel_mapping`], in order, take the raw channel
-    ///    `component`; a [`MappingKind::Direct`] entry is used as it is, and a
-    ///    [`MappingKind::Palette`] entry looks each sample up as an index into
-    ///    that column of [`Jp2Metadata::palette`] (an index past the table
-    ///    reads its last entry, a negative one its first). Each channel
-    ///    takes its bit depth and sign from its palette column: column
-    ///    `column` for a palette entry, and column `i` for a direct entry at
-    ///    position `i`, as OpenJPEG has it. Without a palette the raw
-    ///    channels are used as they are.
-    /// 2. Put the channels in color order with
-    ///    [`Jp2Metadata::channel_definitions`], by the rule documented there
-    ///    (each swap looks up where the entry's channel has moved to, not its
-    ///    original position). Without a `cdef` the order from step 1 stands.
-    ///
-    /// The result is the channels of the default decode. No effect on a raw
-    /// codestream. Default `false`.
-    pub raw_channels: bool,
-    /// What color space the color channels come out in. Default
-    /// [`ColorOutput::AsCoded`].
-    pub color: ColorOutput,
-    /// How much work reading the packet headers may take, against the bound
-    /// described on [`decode`]. Default [`WorkLimit::Default`].
-    ///
-    /// This also bounds the walk of a `Psot = 0` tile that [`read_header_with`]
-    /// describes, so [`read_header_with`] takes the same option.
-    ///
-    /// That walk, in a JP2 file whose last tile-part has `Psot = 0`, decides
-    /// where the tile ends: at the end of the `jp2c` box if the packets end
-    /// exactly there, otherwise at the end of the file. A walk that stops at
-    /// the default bound reads to the end of the file, so the box's trailing
-    /// bytes count as left after the last packet. Raising the limit can let
-    /// the walk finish. The same file can then decode in full where the
-    /// default gives [`Error::Codestream`] (or, with
-    /// [`strict`](Self::strict) off, a report with a
-    /// [`ReportEntry::LeftoverBytes`]), and no [`Error::Limit`] ever
-    /// suggested the change.
-    pub packet_work_limit: WorkLimit,
-    /// How much work decoding the code-blocks may take, against the bound
-    /// described on [`decode`]. Default [`WorkLimit::Default`].
-    pub code_block_work_limit: WorkLimit,
-    /// How many samples the decoded image may hold, against the limit
-    /// described on [`decode`], summed over the output channels at
-    /// [`resolution_reduction`](Self::resolution_reduction). Default
-    /// [`SampleLimit::Default`].
-    ///
-    /// The default limit is 2^29 samples (2 GiB as `i32`), or 8 samples per
-    /// byte of input when that is more: past 64 MiB of input, it grows with
-    /// the file. The input is every byte passed in, a JP2 file's boxes
-    /// included; for an [`IncrementalDecoder`] it is the bytes fed so far.
-    /// Past 64 MiB, a file may ask for 32 bytes of output per byte of
-    /// input, and a decode whose peak is its samples peaks at about 43 bytes
-    /// per byte for a square tile and up to about 102 for a tile one sample
-    /// wide: about 4.1 GiB and 9.6 GiB for a file of 100 MB, input included.
-    /// A file that spends its bytes on code-block segments can peak past 43
-    /// with square tiles; about 102 bytes per byte is the bound for any
-    /// file.
-    ///
-    /// Under a window or a tile ([`region`](Self::region)), the count
-    /// is the samples of the tiles the decode reads, in every component, as
-    /// each of those tiles is reconstructed whole; a palette's expanded
-    /// channels and sRGB output count only the returned area. A small window
-    /// of a large tiled image therefore fits the default, but a window of
-    /// one large tile counts the whole tile. A
-    /// [`components`](Self::components) subset does not lower the count, as
-    /// the packets of every component of a tile read are still walked.
-    ///
-    /// The limit also sets how many code-blocks and precincts one tile may
-    /// hold, counted at full resolution over its components: one code-block
-    /// for each 512 samples it allows and one precinct for each 2048, and at
-    /// least 2^20 and 2^18. A tile past either is refused with an
-    /// [`Error::Limit`] of [`LimitKind::TileCodeBlocks`] or
-    /// [`LimitKind::TilePrecincts`], whose `retry_with` raises this option.
-    /// Their bookkeeping is at most about a third of the output the same
-    /// limit allows past 2^29 (see [code-blocks and precincts per
-    /// tile](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#code-blocks-and-precincts-per-tile)).
-    ///
-    /// `Raised(n)` allows `n` times the default for the same input: `n` times
-    /// 2^29 samples up to 64 MiB, and `8 * n` samples per byte past it. So
-    /// a factor never allows less than the default, and the factor a refusal
-    /// names is the smallest that admits that file. `Unlimited` lifts the
-    /// limit: the decode allocates what the header declares, 4 bytes per
-    /// sample for the output, and about 1.35 to 3.2 times that in all at its
-    /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
-    /// for many gigabytes. If
-    /// the allocation fails the process aborts, as Rust's allocation
-    /// failures do. Only an image too large for this target to
-    /// address (`isize::MAX` bytes of samples) is still refused, with
-    /// [`Error::Limit`]. Use it only for files from a source you trust.
-    ///
-    /// [`read_header_with`] checks the sample count as the decode does. It
-    /// checks the tile caps below only where the main header shows them (see
-    /// the exceptions on [`read_header_with`]), so a header that reads is not
-    /// a promise that the decode passes the caps.
-    ///
-    /// Padding counts as input, so a file can raise its own limit with
-    /// `COM` segments, a JP2 `xml ` box or bytes after `EOC`. For a ceiling
-    /// that does not grow with the input, use
-    /// [`AtMost(n)`](SampleLimit::AtMost): the decode may hold at most `n`
-    /// samples, whatever the input's length, and `4 * n` bytes of output.
-    /// The palette expansion and sRGB output are checked against `n` too,
-    /// and so is every tile a region reads, in every component the
-    /// codestream codes. The code-blocks and precincts a tile may hold are
-    /// set from `n`. A refusal under it gives no retry. What else to bound
-    /// around a decode, with the memory and time figures, is in [Running a
-    /// decode service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service).
-    ///
-    /// ```
-    /// use rust_j2k::{DecodeOptions, Error, LimitKind, SampleLimit, decode_with};
-    ///
-    /// # let bytes = include_bytes!(concat!(
-    /// #     env!("CARGO_MANIFEST_DIR"),
-    /// #     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
-    /// # )).to_vec();
-    /// # /*
-    /// let bytes = std::fs::read("image.j2k")?;
-    /// # */
-    /// // At most 2^26 samples (256 MiB of output), however large the file.
-    /// let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(1 << 26));
-    /// let image = decode_with(&bytes, &options)?;
-    /// assert_eq!((image.width, image.height), (16, 31));
-    ///
-    /// // A ceiling below the image's 496 samples refuses it, with nothing to
-    /// // retry with.
-    /// let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(400));
-    /// let Err(Error::Limit(limit)) = decode_with(&bytes, &options) else {
-    ///     panic!("expected the sample limit to refuse the image");
-    /// };
-    /// assert_eq!(limit.kind(), LimitKind::Samples);
-    /// assert_eq!(limit.retry_with(), None);
-    /// assert!(options.with_retry(&limit).is_none());
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub sample_limit: SampleLimit,
-    /// Refuse missing data with an [`Error`] (`true`, the default), or decode
-    /// what is there and say what is missing on [`Image::report`] (`false`).
-    /// It is the same switch as OpenJPEG's strict mode
-    /// (`opj_decoder_set_strict_mode`, `opj_decompress -allow-partial`) and
-    /// GDAL's `STRICT` option.
-    ///
-    /// `false` relaxes these two things and no others; any other relaxation
-    /// is a separate option:
-    ///
-    /// - The input may end anywhere after the first `SOT` marker, which ends
-    ///   the main header: inside a tile-part, its header or its packets, with or without the `EOC`
-    ///   marker. Input that ends before the first `SOT` is
-    ///   [`Error::Incomplete`], as when strict. Tiles with no
-    ///   tile-part are filled with 0, and packets that were never read (cut
-    ///   off, or left out by the `POC` volumes) add nothing to their
-    ///   code-blocks. A tile-part count (`TNsot`) that
-    ///   disagrees with the tile-parts found is taken as advisory.
-    /// - Bytes left after a tile's last packet are skipped
-    ///   rather than refused, and the tile is reported as possibly wrong.
-    ///
-    /// Everything else is refused as a strict decode refuses it: a damaged
-    /// packet header, coded data that fails to decode, a marker fault, tile-parts
-    /// out of order or with a gap, and every [`Error::Limit`]. The work bounds
-    /// and the sample limit hold as they do when strict, counted on the data
-    /// that is there. A missing tile is not walked, but each of its
-    /// tile-components is charged against the packet work bound (under a
-    /// window or tile, those of the missing tiles it reads), as are the
-    /// packets after the end of the data, so a short input cannot ask for
-    /// unbounded work.
-    ///
-    /// Strict or not, only the data a decode reads is checked. With a
-    /// [`region`](Self::region) of a window or a tile, the tiles outside it
-    /// are not read, with a window the code-blocks of the tiles it reaches
-    /// that the window does not need are not decoded, and with
-    /// [`components`](Self::components) the code-blocks of the components
-    /// left out are not decoded, so damage there goes unseen, as with
-    /// `opj_decompress -t` and `-d`. Nor is a code-block a decode skips
-    /// checked against the bit-plane limit, so it can succeed where the
-    /// whole decode is refused as [`Error::Limit`].
-    ///
-    /// For a codestream as it streams in: a prefix that holds every packet of
-    /// the resolutions a reduction keeps decodes at that reduction to the same
-    /// samples as the whole codestream, and the report's
-    /// [`complete_reduction`](DecodeReport::complete_reduction) says which
-    /// reduction that is. [`IncrementalDecoder`] decodes such prefixes for
-    /// you: each refine goes on from where the last one stopped reading
-    /// packets. The packets it reads again are listed in
-    /// [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md).
-    ///
-    /// ```
-    /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
-    ///
-    /// # let bytes = include_bytes!(concat!(
-    /// #     env!("CARGO_MANIFEST_DIR"),
-    /// #     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
-    /// # )).to_vec();
-    /// # /*
-    /// let bytes = std::fs::read("image.j2k")?;
-    /// # */
-    /// let prefix = &bytes[..bytes.len() - 20];
-    /// // Strict, the default: a cut codestream is an error.
-    /// assert!(matches!(
-    ///     decode_with(prefix, &DecodeOptions::default()),
-    ///     Err(Error::Codestream(_))
-    /// ));
-    /// // Not strict: the image, and what it lacks.
-    /// let options = DecodeOptions::default().with_strict(false);
-    /// let image = decode_with(prefix, &options).expect("decodes");
-    /// assert!(!image.report.is_complete());
-    /// // The coarsest level a decode may ask for, and the finest the data holds.
-    /// let max = read_header(prefix).expect("the main header is there").max_reduction;
-    /// if let Some(r) = image.report.complete_reduction.filter(|&r| r <= max) {
-    ///     let coarse = decode_with(prefix, &options.with_resolution_reduction(r)).expect("decodes");
-    ///     assert!(coarse.report.is_complete());
-    /// }
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    #[doc(alias = "allow_partial")]
-    #[doc(alias = "allow-partial")]
-    pub strict: bool,
+    resolution_reduction: u8,
+    max_quality_layers: Option<u16>,
+    region: Region,
+    components: Option<Vec<u16>>,
+    raw_channels: bool,
+    color: ColorOutput,
+    packet_work_limit: WorkLimit,
+    code_block_work_limit: WorkLimit,
+    sample_limit: SampleLimit,
+    strict: bool,
     /// The fuzz targets' cap on the code-block work bound, set only by
     /// [`fuzz::with_code_block_work_cap`]; `None` everywhere else.
     pub(crate) code_block_work_cap: Option<u64>,
@@ -1186,7 +793,7 @@ impl Default for DecodeOptions {
 ///   choosing, the largest cost you will accept. It is a factor of the
 ///   default, which grows with the file. Read the factor from
 ///   [`LimitDetail::retry_with`] to size it, or let
-///   [`DecodeOptions::with_retry`] set it: a file that needs `Raised(3)` is
+///   [`DecodeOptions::raised_for`] set it: a file that needs `Raised(3)` is
 ///   refused under `Raised(2)`. Do not parse the message; it is a
 ///   diagnostic, not a stable format.
 ///
@@ -1274,7 +881,7 @@ pub enum WorkLimit {
 ///
 /// // At most 2^26 samples (256 MiB of output), however large the file.
 /// let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(1 << 26));
-/// assert_eq!(options.sample_limit, SampleLimit::AtMost(1 << 26));
+/// assert_eq!(options.sample_limit(), &SampleLimit::AtMost(1 << 26));
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1299,7 +906,7 @@ pub enum SampleLimit {
     /// than the default for a small file and less for a large one. An `n`
     /// past the samples the target can address is held to that count. A
     /// refusal under it gives no [`LimitDetail::retry_with`], so
-    /// [`DecodeOptions::with_retry`] gives `None`. `AtMost(0)` is
+    /// [`DecodeOptions::raised_for`] gives `None`. `AtMost(0)` is
     /// [`Error::InvalidOptions`].
     AtMost(u64),
 }
@@ -1309,7 +916,7 @@ pub enum SampleLimit {
 ///
 /// It converts into the type of the option [`LimitDetail::kind`] names: a
 /// [`SampleLimit`] for the sample limit and the tile caps it sets, a
-/// [`WorkLimit`] for a work bound. [`DecodeOptions::with_retry`] does that
+/// [`WorkLimit`] for a work bound. [`DecodeOptions::raised_for`] does that
 /// for you. Every variant converts into both [`WorkLimit`] and
 /// [`SampleLimit`].
 ///
@@ -1326,7 +933,7 @@ pub enum SampleLimit {
 ///   the last, and a file can need a factor of dozens, so a ladder that
 ///   doubles ends in about log2 of the factor the file needs, where one that
 ///   stepped up by one, or to each tile's need, would take a step for each
-///   tile. Following [`DecodeOptions::with_retry`] does that. If you pick the
+///   tile. Following [`DecodeOptions::raised_for`] does that. If you pick the
 ///   next factor yourself, double it too.
 ///
 /// ```
@@ -1404,6 +1011,556 @@ impl SampleLimit {
 }
 
 impl DecodeOptions {
+    /// How many of the finest resolution levels to discard. Each level about
+    /// halves the output in both axes, so `1` decodes a half-size image, `2`
+    /// a quarter-size, and so on: the wavelet pyramid's own lower
+    /// resolutions, not a resample. The exact size depends on the image
+    /// origin; [`Image`] and [`ComponentInfo::width`] give the formula. Every
+    /// component must keep at least one resolution: a reduction that consumes
+    /// some component's whole pyramid is rejected as
+    /// [`Error::InvalidOptions`]. [`Header::max_reduction`] gives the largest
+    /// the main header allows.
+    ///
+    /// Read back what was set:
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions};
+    ///
+    /// assert_eq!(DecodeOptions::default().resolution_reduction(), 0);
+    /// assert_eq!(DecodeOptions::default().with_resolution_reduction(2).resolution_reduction(), 2);
+    /// ```
+    #[must_use]
+    pub fn resolution_reduction(&self) -> u8 {
+        self.resolution_reduction
+    }
+
+    /// How many of the leading quality layers to decode: `Some(n)` decodes
+    /// layers `0..n` of each tile, `None` (the default) every layer. A
+    /// codestream builds its image up in layers, each adding coding passes
+    /// to the code-blocks, so a cap gives a lower-fidelity image at full
+    /// size from fewer passes, and the block decoder does less work. It is
+    /// OpenJPEG's `opj_decompress -l n`.
+    ///
+    /// A cap at or above a tile's layer count decodes that tile whole, as
+    /// OpenJPEG does. `Some(0)` is [`Error::InvalidOptions`]. It combines
+    /// with [`resolution_reduction`](Self::resolution_reduction).
+    ///
+    /// The packets of the later layers are still read, since they frame the
+    /// packets after them, so a fault in one is still an error, and they
+    /// count against [`packet_work_limit`](Self::packet_work_limit) as
+    /// without a cap. Only their coding passes are left out. With
+    /// [`strict`](Self::strict) off, a packet of a layer past the cap that
+    /// the data does not reach is not reported missing.
+    ///
+    /// [`Header::quality_layers`](crate::Header::quality_layers) is the layer
+    /// count the main header declares.
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, decode, decode_with};
+    ///
+    /// // For a 32x24 file in three quality layers, the last one lossless.
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/multilayer_lossless.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
+    /// let whole = decode(&bytes).expect("decodes");
+    /// let first = decode_with(&bytes, &DecodeOptions::default().with_max_quality_layers(Some(1)))
+    ///     .expect("decodes");
+    /// // The same size, from fewer coding passes.
+    /// assert_eq!((first.width, first.height), (whole.width, whole.height));
+    /// assert_ne!(first.components[0].samples, whole.components[0].samples);
+    /// // A cap at or past the layer count is the whole decode.
+    /// let all = decode_with(&bytes, &DecodeOptions::default().with_max_quality_layers(Some(3)))
+    ///     .expect("decodes");
+    /// assert_eq!(all.components[0].samples, whole.components[0].samples);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[doc(alias = "layers")]
+    #[doc(alias = "cp_layer")]
+    ///
+    /// Read back what was set:
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions};
+    ///
+    /// assert_eq!(DecodeOptions::default().max_quality_layers(), None);
+    /// assert_eq!(DecodeOptions::default().with_max_quality_layers(Some(2)).max_quality_layers(), Some(2));
+    /// ```
+    #[must_use]
+    pub fn max_quality_layers(&self) -> Option<u16> {
+        self.max_quality_layers
+    }
+
+    /// The area to decode: [`Region::Whole`] (the default) the whole image,
+    /// [`Region::Window`] a rectangle of the reference grid, and
+    /// [`Region::Tile`] one tile. One option holds all three, so a window and a
+    /// tile cannot be asked for together. A window is OpenJPEG's
+    /// `opj_set_decode_area` (`opj_decompress -d x0,y0,x1,y1`); a tile is its
+    /// `opj_get_decoded_tile` (`opj_decompress -t index`).
+    ///
+    /// # Window
+    ///
+    /// A [`Region::Window`] returns the part of the image inside it. It is in
+    /// reference-grid coordinates, as SIZ declares them, whatever the
+    /// [`resolution_reduction`](Self::resolution_reduction).
+    /// [`Header::image_area`] gives the image area in those coordinates,
+    /// and [`TileGrid::tile`] each tile's rectangle.
+    /// The part of it outside the image area is left out, as OpenJPEG clips
+    /// it. The returned [`Image`] covers what is left, `x0..x1` by `y0..y1`:
+    /// its [`width`](Image::width) is `x1 - x0` at full resolution and
+    /// `ceil(x1 / 2^r) - ceil(x0 / 2^r)` at a reduction of `r`, and each
+    /// component's is the same of `ceil(x0 / dx)` and `ceil(x1 / dx)` for its
+    /// sub-sampling `dx` ([`ComponentInfo::width`] gives the formula for the
+    /// whole image). The samples are those of a whole decode at the same
+    /// position. [`ColorOutput::Srgb`] from sYCC with sub-sampled chroma is
+    /// [`Error::Unsupported`] when the window, cut to the image area, does not
+    /// cover all of it, as the chroma replication depends on where the
+    /// decoded area starts.
+    ///
+    /// Only the tiles the window reaches are decoded, so a small window of a
+    /// large tiled image costs a few tiles. The packets of the other tiles
+    /// are not read, so damage in them is not found, as in OpenJPEG. With
+    /// [`strict`](Self::strict) off, a codestream cut short after the tiles
+    /// the window reaches still gives the window's samples.
+    /// `opj_decompress -allow-partial -d` 2.5.0 refuses such a file, while
+    /// `-t` decodes each tile, the cut one included, as this decoder does. In
+    /// the
+    /// tiles it reaches, only the code-blocks whose wavelet support reaches
+    /// the window are decoded, so damage in the others is not found either.
+    /// Nor is a code-block it skips checked against the bit-plane limit, so
+    /// a window can decode where the whole image is refused as
+    /// [`Error::Limit`].
+    ///
+    /// An empty window, one with no part inside the image area, and one that
+    /// holds no sample of a returned component at the reduction are
+    /// [`Error::InvalidOptions`].
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, Region, Window, decode, decode_with};
+    ///
+    /// // For a 32x24 file with its image area at the grid's origin.
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/multilayer_lossless.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
+    /// let whole = decode(&bytes).expect("decodes");
+    /// let options = DecodeOptions::default().with_region(Region::Window(Window::new(8, 4, 20, 30)));
+    /// let part = decode_with(&bytes, &options).expect("decodes");
+    /// // The window is cut to the image: rows 4 to 23.
+    /// assert_eq!((part.width, part.height), (12, 20));
+    /// assert_eq!(part.components[0].sample(0, 0), whole.components[0].sample(8, 4));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Tile
+    ///
+    /// [`Region::Tile`] returns tile `index`'s area of the image. Tiles are
+    /// numbered in raster order from 0, as the codestream's `Isot` numbers
+    /// them. The result is the decode of a [`Region::Window`] set to the
+    /// tile's rectangle on the reference grid: its size, its samples and its
+    /// failures, the refusal of sRGB output from sub-sampled sYCC included
+    /// (unless the image is one tile). [`Header::tiles`] gives the tile grid
+    /// and [`TileGrid::count`] the number of tiles; an index at or past the
+    /// count is [`Error::InvalidOptions`].
+    #[doc(alias = "decode_area")]
+    #[doc(alias = "window")]
+    #[doc(alias = "tile")]
+    ///
+    /// Read back what was set:
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, Region};
+    ///
+    /// assert_eq!(DecodeOptions::default().region(), &Region::Whole);
+    /// assert_eq!(DecodeOptions::default().with_region(Region::Tile(1)).region(), &Region::Tile(1));
+    /// ```
+    #[must_use]
+    pub fn region(&self) -> &Region {
+        &self.region
+    }
+
+    /// Decode only these components, in this order: `Some(list)` returns one
+    /// [`Component`] per entry of `list`, each the component of that SIZ
+    /// index, and `None` (the default) every component. It is OpenJPEG's
+    /// `opj_set_decoded_components` (`opj_decompress -c`), which takes them
+    /// in the given order too.
+    ///
+    /// Each returned component has the samples of a whole decode. The other
+    /// components' packets are still read, as they frame the packets after
+    /// them, but their code-blocks are not decoded. Under the codestream's
+    /// color transform (RCT or ICT), components 0, 1 and 2 are decoded
+    /// together whenever one of them is asked for, since each of them needs
+    /// all three. OpenJPEG skips the color transform instead when the
+    /// components are chosen, so its `-c` returns other samples for those
+    /// three.
+    ///
+    /// On a JP2 file the list names codestream components, which come out
+    /// as coded: the palette and channel definitions are not applied, as
+    /// with [`raw_channels`](Self::raw_channels), and as OpenJPEG has it.
+    /// [`Jp2Metadata::channels`] describes the components returned.
+    ///
+    /// An empty list, an index named twice, an index past SIZ's component
+    /// count, and a list with [`ColorOutput::Srgb`] are
+    /// [`Error::InvalidOptions`]. The last holds even on a gray codestream,
+    /// where sRGB output would pass the samples through, as it does for
+    /// [`raw_channels`](Self::raw_channels).
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, decode, decode_with};
+    ///
+    /// // For a file of three components under the irreversible color transform.
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/layers/cprl_irreversible.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
+    /// let whole = decode(&bytes).expect("decodes");
+    /// let options = DecodeOptions::default().with_components(Some(vec![2, 0]));
+    /// let some = decode_with(&bytes, &options).expect("decodes");
+    /// assert_eq!(some.components.len(), 2);
+    /// assert_eq!(some.components[0], whole.components[2]);
+    /// assert_eq!(some.components[1], whole.components[0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[doc(alias = "opj_set_decoded_components")]
+    ///
+    /// Read back what was set:
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions};
+    ///
+    /// assert_eq!(DecodeOptions::default().components(), None);
+    /// let options = DecodeOptions::default().with_components(Some(vec![2, 0]));
+    /// assert_eq!(options.components(), Some(&[2, 0][..]));
+    /// ```
+    #[must_use]
+    pub fn components(&self) -> Option<&[u16]> {
+        self.components.as_deref()
+    }
+
+    /// Return a JP2 file's codestream components as coded, without applying
+    /// the file's palette (`pclr` + `cmap`) or channel definitions (`cdef`):
+    /// the file decodes exactly as its codestream does on its own, in SIZ
+    /// order, and [`Jp2Metadata::palette_applied`] is `false`. It means no
+    /// color conversion either, so it cannot be combined with
+    /// [`ColorOutput::Srgb`] ([`Error::InvalidOptions`]). Each index
+    /// plane is reported on [`Jp2Metadata::channels`] as
+    /// [`ChannelType::Unspecified`] with [`Association::None`], since it is
+    /// not a color until it goes through the palette; every other channel
+    /// is labeled as a file without a `cdef` is (see
+    /// [`Jp2Metadata::channels`]), whatever the `cdef` box says. The
+    /// boxes' layout is still checked, so a malformed `pclr`, `cmap` or
+    /// `cdef` is still [`Error::FileFormat`]; the palette mapping and column
+    /// depths, and the channel definitions' entries, are not.
+    ///
+    /// The metadata carries what the decode left out, so a caller can rebuild
+    /// the default decode, in order, from the raw one:
+    ///
+    /// 1. Expand the index planes. For each entry of
+    ///    [`Jp2Metadata::channel_mapping`], in order, take the raw channel
+    ///    `component`; a [`MappingKind::Direct`] entry is used as it is, and a
+    ///    [`MappingKind::Palette`] entry looks each sample up as an index into
+    ///    that column of [`Jp2Metadata::palette`] (an index past the table
+    ///    reads its last entry, a negative one its first). Each channel
+    ///    takes its bit depth and sign from its palette column: column
+    ///    `column` for a palette entry, and column `i` for a direct entry at
+    ///    position `i`, as OpenJPEG has it. Without a palette the raw
+    ///    channels are used as they are.
+    /// 2. Put the channels in color order with
+    ///    [`Jp2Metadata::channel_definitions`], by the rule documented there
+    ///    (each swap looks up where the entry's channel has moved to, not its
+    ///    original position). Without a `cdef` the order from step 1 stands.
+    ///
+    /// The result is the channels of the default decode. No effect on a raw
+    /// codestream. Default `false`.
+    ///
+    /// Read back what was set:
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions};
+    ///
+    /// assert!(!DecodeOptions::default().raw_channels());
+    /// assert!(DecodeOptions::default().with_raw_channels(true).raw_channels());
+    /// ```
+    #[must_use]
+    pub fn raw_channels(&self) -> bool {
+        self.raw_channels
+    }
+
+    /// What color space the color channels come out in. Default
+    /// [`ColorOutput::AsCoded`].
+    ///
+    /// Read back what was set:
+    ///
+    /// ```
+    /// use rust_j2k::{ColorOutput, DecodeOptions};
+    ///
+    /// assert_eq!(DecodeOptions::default().color(), &ColorOutput::AsCoded);
+    /// assert_eq!(DecodeOptions::default().with_color(ColorOutput::Srgb).color(), &ColorOutput::Srgb);
+    /// ```
+    #[must_use]
+    pub fn color(&self) -> &ColorOutput {
+        &self.color
+    }
+
+    /// How much work reading the packet headers may take, against the bound
+    /// described on [`decode`]. Default [`WorkLimit::Default`].
+    ///
+    /// This also bounds the walk of a `Psot = 0` tile that [`read_header_with`]
+    /// describes, so [`read_header_with`] takes the same option.
+    ///
+    /// That walk, in a JP2 file whose last tile-part has `Psot = 0`, decides
+    /// where the tile ends: at the end of the `jp2c` box if the packets end
+    /// exactly there, otherwise at the end of the file. A walk that stops at
+    /// the default bound reads to the end of the file, so the box's trailing
+    /// bytes count as left after the last packet. Raising the limit can let
+    /// the walk finish. The same file can then decode in full where the
+    /// default gives [`Error::Codestream`] (or, with
+    /// [`strict`](Self::strict) off, a report with a
+    /// [`ReportEntry::LeftoverBytes`]), and no [`Error::Limit`] ever
+    /// suggested the change.
+    ///
+    /// Read back what was set:
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, WorkLimit};
+    ///
+    /// assert_eq!(DecodeOptions::default().packet_work_limit(), &WorkLimit::Default);
+    /// let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(4));
+    /// assert_eq!(options.packet_work_limit(), &WorkLimit::Raised(4));
+    /// ```
+    #[must_use]
+    pub fn packet_work_limit(&self) -> &WorkLimit {
+        &self.packet_work_limit
+    }
+
+    /// How much work decoding the code-blocks may take, against the bound
+    /// described on [`decode`]. Default [`WorkLimit::Default`].
+    ///
+    /// Read back what was set:
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, WorkLimit};
+    ///
+    /// assert_eq!(DecodeOptions::default().code_block_work_limit(), &WorkLimit::Default);
+    /// let options = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Unlimited);
+    /// assert_eq!(options.code_block_work_limit(), &WorkLimit::Unlimited);
+    /// ```
+    #[must_use]
+    pub fn code_block_work_limit(&self) -> &WorkLimit {
+        &self.code_block_work_limit
+    }
+
+    /// How many samples the decoded image may hold, against the limit
+    /// described on [`decode`], summed over the output channels at
+    /// [`resolution_reduction`](Self::resolution_reduction). Default
+    /// [`SampleLimit::Default`].
+    ///
+    /// The default limit is 2^29 samples (2 GiB as `i32`), or 8 samples per
+    /// byte of input when that is more: past 64 MiB of input, it grows with
+    /// the file. The input is every byte passed in, a JP2 file's boxes
+    /// included; for an [`IncrementalDecoder`] it is the bytes fed so far.
+    /// Past 64 MiB, a file may ask for 32 bytes of output per byte of
+    /// input, and a decode whose peak is its samples peaks at about 43 bytes
+    /// per byte for a square tile and up to about 102 for a tile one sample
+    /// wide: about 4.1 GiB and 9.6 GiB for a file of 100 MB, input included.
+    /// A file that spends its bytes on code-block segments can peak past 43
+    /// with square tiles; about 102 bytes per byte is the bound for any
+    /// file.
+    ///
+    /// Under a window or a tile ([`region`](Self::region)), the count
+    /// is the samples of the tiles the decode reads, in every component, as
+    /// each of those tiles is reconstructed whole; a palette's expanded
+    /// channels and sRGB output count only the returned area. A small window
+    /// of a large tiled image therefore fits the default, but a window of
+    /// one large tile counts the whole tile. A
+    /// [`components`](Self::components) subset does not lower the count, as
+    /// the packets of every component of a tile read are still walked.
+    ///
+    /// The limit also sets how many code-blocks and precincts one tile may
+    /// hold, counted at full resolution over its components: one code-block
+    /// for each 512 samples it allows and one precinct for each 2048, and at
+    /// least 2^20 and 2^18. A tile past either is refused with an
+    /// [`Error::Limit`] of [`LimitKind::TileCodeBlocks`] or
+    /// [`LimitKind::TilePrecincts`], whose `retry_with` raises this option.
+    /// Their bookkeeping is at most about a third of the output the same
+    /// limit allows past 2^29 (see [code-blocks and precincts per
+    /// tile](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#code-blocks-and-precincts-per-tile)).
+    ///
+    /// `Raised(n)` allows `n` times the default for the same input: `n` times
+    /// 2^29 samples up to 64 MiB, and `8 * n` samples per byte past it. So
+    /// a factor never allows less than the default, and the factor a refusal
+    /// names is the smallest that admits that file. `Unlimited` lifts the
+    /// limit: the decode allocates what the header declares, 4 bytes per
+    /// sample for the output, and about 1.35 to 3.2 times that in all at its
+    /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
+    /// for many gigabytes. If
+    /// the allocation fails the process aborts, as Rust's allocation
+    /// failures do. Only an image too large for this target to
+    /// address (`isize::MAX` bytes of samples) is still refused, with
+    /// [`Error::Limit`]. Use it only for files from a source you trust.
+    ///
+    /// [`read_header_with`] checks the sample count as the decode does. It
+    /// checks the tile caps below only where the main header shows them (see
+    /// the exceptions on [`read_header_with`]), so a header that reads is not
+    /// a promise that the decode passes the caps.
+    ///
+    /// Padding counts as input, so a file can raise its own limit with
+    /// `COM` segments, a JP2 `xml ` box or bytes after `EOC`. For a ceiling
+    /// that does not grow with the input, use
+    /// [`AtMost(n)`](SampleLimit::AtMost): the decode may hold at most `n`
+    /// samples, whatever the input's length, and `4 * n` bytes of output.
+    /// The palette expansion and sRGB output are checked against `n` too,
+    /// and so is every tile a region reads, in every component the
+    /// codestream codes. The code-blocks and precincts a tile may hold are
+    /// set from `n`. A refusal under it gives no retry. What else to bound
+    /// around a decode, with the memory and time figures, is in [Running a
+    /// decode service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service).
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, Error, LimitKind, SampleLimit, decode_with};
+    ///
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
+    /// // At most 2^26 samples (256 MiB of output), however large the file.
+    /// let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(1 << 26));
+    /// let image = decode_with(&bytes, &options)?;
+    /// assert_eq!((image.width, image.height), (16, 31));
+    ///
+    /// // A ceiling below the image's 496 samples refuses it, with nothing to
+    /// // retry with.
+    /// let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(400));
+    /// let Err(Error::Limit(limit)) = decode_with(&bytes, &options) else {
+    ///     panic!("expected the sample limit to refuse the image");
+    /// };
+    /// assert_eq!(limit.kind(), LimitKind::Samples);
+    /// assert_eq!(limit.retry_with(), None);
+    /// assert!(options.raised_for(&limit).is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// Read back what was set:
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, SampleLimit};
+    ///
+    /// assert_eq!(DecodeOptions::default().sample_limit(), &SampleLimit::Default);
+    /// let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(1 << 20));
+    /// assert_eq!(options.sample_limit(), &SampleLimit::AtMost(1 << 20));
+    /// ```
+    #[must_use]
+    pub fn sample_limit(&self) -> &SampleLimit {
+        &self.sample_limit
+    }
+
+    /// Refuse missing data with an [`Error`] (`true`, the default), or decode
+    /// what is there and say what is missing on [`Image::report`] (`false`).
+    /// It is the same switch as OpenJPEG's strict mode
+    /// (`opj_decoder_set_strict_mode`, `opj_decompress -allow-partial`) and
+    /// GDAL's `STRICT` option.
+    ///
+    /// `false` relaxes these two things and no others; any other relaxation
+    /// is a separate option:
+    ///
+    /// - The input may end anywhere after the first `SOT` marker, which ends
+    ///   the main header: inside a tile-part, its header or its packets, with or without the `EOC`
+    ///   marker. Input that ends before the first `SOT` is
+    ///   [`Error::Incomplete`], as when strict. Tiles with no
+    ///   tile-part are filled with 0, and packets that were never read (cut
+    ///   off, or left out by the `POC` volumes) add nothing to their
+    ///   code-blocks. A tile-part count (`TNsot`) that
+    ///   disagrees with the tile-parts found is taken as advisory.
+    /// - Bytes left after a tile's last packet are skipped
+    ///   rather than refused, and the tile is reported as possibly wrong.
+    ///
+    /// Everything else is refused as a strict decode refuses it: a damaged
+    /// packet header, coded data that fails to decode, a marker fault, tile-parts
+    /// out of order or with a gap, and every [`Error::Limit`]. The work bounds
+    /// and the sample limit hold as they do when strict, counted on the data
+    /// that is there. A missing tile is not walked, but each of its
+    /// tile-components is charged against the packet work bound (under a
+    /// window or tile, those of the missing tiles it reads), as are the
+    /// packets after the end of the data, so a short input cannot ask for
+    /// unbounded work.
+    ///
+    /// Strict or not, only the data a decode reads is checked. With a
+    /// [`region`](Self::region) of a window or a tile, the tiles outside it
+    /// are not read, with a window the code-blocks of the tiles it reaches
+    /// that the window does not need are not decoded, and with
+    /// [`components`](Self::components) the code-blocks of the components
+    /// left out are not decoded, so damage there goes unseen, as with
+    /// `opj_decompress -t` and `-d`. Nor is a code-block a decode skips
+    /// checked against the bit-plane limit, so it can succeed where the
+    /// whole decode is refused as [`Error::Limit`].
+    ///
+    /// For a codestream as it streams in: a prefix that holds every packet of
+    /// the resolutions a reduction keeps decodes at that reduction to the same
+    /// samples as the whole codestream, and the report's
+    /// [`complete_reduction`](DecodeReport::complete_reduction) says which
+    /// reduction that is. [`IncrementalDecoder`] decodes such prefixes for
+    /// you: each refine goes on from where the last one stopped reading
+    /// packets. The packets it reads again are listed in
+    /// [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md).
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
+    ///
+    /// # let bytes = include_bytes!(concat!(
+    /// #     env!("CARGO_MANIFEST_DIR"),
+    /// #     "/tests/fixtures/jpeg2000_regular_latlon.j2k"
+    /// # )).to_vec();
+    /// # /*
+    /// let bytes = std::fs::read("image.j2k")?;
+    /// # */
+    /// let prefix = &bytes[..bytes.len() - 20];
+    /// // Strict, the default: a cut codestream is an error.
+    /// assert!(matches!(
+    ///     decode_with(prefix, &DecodeOptions::default()),
+    ///     Err(Error::Codestream(_))
+    /// ));
+    /// // Not strict: the image, and what it lacks.
+    /// let options = DecodeOptions::default().with_strict(false);
+    /// let image = decode_with(prefix, &options).expect("decodes");
+    /// assert!(!image.report.is_complete());
+    /// // The coarsest level a decode may ask for, and the finest the data holds.
+    /// let max = read_header(prefix).expect("the main header is there").max_reduction;
+    /// if let Some(r) = image.report.complete_reduction.filter(|&r| r <= max) {
+    ///     let coarse = decode_with(prefix, &options.with_resolution_reduction(r)).expect("decodes");
+    ///     assert!(coarse.report.is_complete());
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[doc(alias = "allow_partial")]
+    #[doc(alias = "allow-partial")]
+    ///
+    /// Read back what was set:
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions};
+    ///
+    /// assert!(DecodeOptions::default().strict());
+    /// assert!(!DecodeOptions::default().with_strict(false).strict());
+    /// ```
+    #[must_use]
+    pub fn strict(&self) -> bool {
+        self.strict
+    }
+}
+
+impl DecodeOptions {
     /// These options with
     /// [`resolution_reduction`](Self::resolution_reduction) set to `levels`.
     ///
@@ -1411,7 +1568,7 @@ impl DecodeOptions {
     /// use rust_j2k::DecodeOptions;
     ///
     /// let options = DecodeOptions::default().with_resolution_reduction(1);
-    /// assert_eq!(options.resolution_reduction, 1);
+    /// assert_eq!(options.resolution_reduction(), 1);
     /// ```
     #[must_use]
     pub fn with_resolution_reduction(mut self, levels: u8) -> Self {
@@ -1428,7 +1585,7 @@ impl DecodeOptions {
     /// use rust_j2k::DecodeOptions;
     ///
     /// let options = DecodeOptions::default().with_max_quality_layers(Some(2));
-    /// assert_eq!(options.max_quality_layers, Some(2));
+    /// assert_eq!(options.max_quality_layers(), Some(2));
     /// ```
     #[must_use]
     pub fn with_max_quality_layers(mut self, layers: Option<u16>) -> Self {
@@ -1442,9 +1599,9 @@ impl DecodeOptions {
     /// use rust_j2k::{DecodeOptions, Region, Window};
     ///
     /// let options = DecodeOptions::default().with_region(Region::Tile(3));
-    /// assert_eq!(options.region, Region::Tile(3));
+    /// assert_eq!(options.region(), &Region::Tile(3));
     /// let window = Region::Window(Window::new(0, 0, 64, 64));
-    /// assert_eq!(DecodeOptions::default().with_region(window.clone()).region, window);
+    /// assert_eq!(DecodeOptions::default().with_region(window.clone()).region(), &window);
     /// ```
     #[must_use]
     pub fn with_region(mut self, region: Region) -> Self {
@@ -1459,7 +1616,7 @@ impl DecodeOptions {
     /// use rust_j2k::DecodeOptions;
     ///
     /// let options = DecodeOptions::default().with_components(Some(vec![0]));
-    /// assert_eq!(options.components, Some(vec![0]));
+    /// assert_eq!(options.components(), Some(&[0][..]));
     /// ```
     #[must_use]
     pub fn with_components(mut self, components: Option<Vec<u16>>) -> Self {
@@ -1473,7 +1630,7 @@ impl DecodeOptions {
     /// use rust_j2k::DecodeOptions;
     ///
     /// let options = DecodeOptions::default().with_raw_channels(true);
-    /// assert!(options.raw_channels);
+    /// assert!(options.raw_channels());
     /// ```
     #[must_use]
     pub fn with_raw_channels(mut self, raw: bool) -> Self {
@@ -1487,7 +1644,7 @@ impl DecodeOptions {
     /// use rust_j2k::{ColorOutput, DecodeOptions};
     ///
     /// let options = DecodeOptions::default().with_color(ColorOutput::Srgb);
-    /// assert_eq!(options.color, ColorOutput::Srgb);
+    /// assert_eq!(options.color(), &ColorOutput::Srgb);
     /// ```
     #[must_use]
     #[doc(alias = "with_colour")]
@@ -1503,7 +1660,7 @@ impl DecodeOptions {
     /// use rust_j2k::{DecodeOptions, WorkLimit};
     ///
     /// let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(4));
-    /// assert_eq!(options.packet_work_limit, WorkLimit::Raised(4));
+    /// assert_eq!(options.packet_work_limit(), &WorkLimit::Raised(4));
     /// ```
     ///
     /// `Raised(1)` is stored as `Default`, which sets the same bound.
@@ -1520,7 +1677,7 @@ impl DecodeOptions {
     /// use rust_j2k::{DecodeOptions, WorkLimit};
     ///
     /// let options = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Unlimited);
-    /// assert_eq!(options.code_block_work_limit, WorkLimit::Unlimited);
+    /// assert_eq!(options.code_block_work_limit(), &WorkLimit::Unlimited);
     /// ```
     ///
     /// `Raised(1)` is stored as `Default`, which sets the same bound.
@@ -1539,7 +1696,7 @@ impl DecodeOptions {
     /// // 3 times the default: 3 x 2^29 samples for a small file, enough for a
     /// // 20000 x 20000 RGB image, and more past 64 MiB of input.
     /// let options = DecodeOptions::default().with_sample_limit(SampleLimit::Raised(3));
-    /// assert_eq!(options.sample_limit, SampleLimit::Raised(3));
+    /// assert_eq!(options.sample_limit(), &SampleLimit::Raised(3));
     /// ```
     ///
     /// `Raised(1)` is stored as `Default`, which sets the same limit.
@@ -1574,19 +1731,19 @@ impl DecodeOptions {
     /// let bytes = std::fs::read("image.j2k")?;
     /// # */
     /// let Err(Error::Limit(limit)) = decode(&bytes) else { panic!() };
-    /// let options = DecodeOptions::default().with_retry(&limit).unwrap();
-    /// assert_eq!(options.code_block_work_limit, WorkLimit::Raised(2));
+    /// let options = DecodeOptions::default().raised_for(&limit).unwrap();
+    /// assert_eq!(options.code_block_work_limit(), &WorkLimit::Raised(2));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
-    pub fn with_retry(&self, limit: &LimitDetail) -> Option<Self> {
+    pub fn raised_for(&self, limit: &LimitDetail) -> Option<Self> {
         if !limit.kind().is_adjustable() {
             return None;
         }
         let retry = limit.retry_with()?;
         let options = self.clone();
         // Every kind is named, so a new one must be given its option here,
-        // or `None`; `with_retry_is_some_exactly_for_the_adjustable_kinds`
+        // or `None`; `raised_for_is_some_exactly_for_the_adjustable_kinds`
         // holds this to `is_adjustable`.
         match limit.kind() {
             LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
@@ -1603,9 +1760,9 @@ impl DecodeOptions {
     /// ```
     /// use rust_j2k::DecodeOptions;
     ///
-    /// assert!(DecodeOptions::default().strict);
+    /// assert!(DecodeOptions::default().strict());
     /// let options = DecodeOptions::default().with_strict(false);
-    /// assert!(!options.strict);
+    /// assert!(!options.strict());
     /// ```
     #[must_use]
     #[doc(alias = "allow_partial")]
@@ -1618,7 +1775,7 @@ impl DecodeOptions {
 /// Decode a JPEG 2000 codestream or JP2 file like [`decode`], governed by
 /// `options`.
 ///
-/// Every [`DecodeOptions`] field is set with a `with_*` method. This reads
+/// Every [`DecodeOptions`] option is set with a `with_*` method. This reads
 /// a JP2 file at half size and converts it to sRGB:
 ///
 /// ```

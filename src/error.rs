@@ -485,8 +485,8 @@ impl fmt::Display for ErrorDetail {
 ///     panic!("expected the code-block work bound to refuse this file");
 /// };
 /// assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
-/// # assert!(DecodeOptions::default().with_retry(&limit).is_some());
-/// match DecodeOptions::default().with_retry(&limit) {
+/// # assert!(DecodeOptions::default().raised_for(&limit).is_some());
+/// match DecodeOptions::default().raised_for(&limit) {
 ///     // An option raises this limit: retry with it raised.
 ///     Some(options) => {
 ///         let image = decode_with(&bytes, &options)?;
@@ -534,7 +534,7 @@ impl LimitDetail {
     /// reading the header, and for a sample limit refusal under
     /// [`AtMost`](crate::SampleLimit::AtMost), a ceiling the caller set.
     ///
-    /// [`DecodeOptions::with_retry`](crate::DecodeOptions::with_retry)
+    /// [`DecodeOptions::raised_for`](crate::DecodeOptions::raised_for)
     /// applies it to the option `kind` names. For
     /// [`TileCodeBlocks`](LimitKind::TileCodeBlocks) and
     /// [`TilePrecincts`](LimitKind::TilePrecincts) that option is the sample

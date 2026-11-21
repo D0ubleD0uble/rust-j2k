@@ -125,9 +125,9 @@ impl Jp2Entry {
 /// `needs_srgb` entries, whose references are display output, and the default
 /// (as coded) for the rest.
 pub fn options_for(entry: &Jp2Entry) -> DecodeOptions {
-    let mut options = DecodeOptions::default();
+    let options = DecodeOptions::default();
     if entry.needs_srgb {
-        options.color = ColorOutput::Srgb;
+        return options.with_color(ColorOutput::Srgb);
     }
     options
 }

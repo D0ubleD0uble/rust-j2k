@@ -261,7 +261,7 @@ fn refusal_of(
             let tile = refused_tile(limit.message())?;
             Some((
                 tile,
-                options.with_retry(limit).unwrap_or_else(|| options.clone()),
+                options.raised_for(limit).unwrap_or_else(|| options.clone()),
             ))
         }
         Error::InvalidOptions(detail) => {

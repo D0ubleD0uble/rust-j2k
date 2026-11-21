@@ -75,7 +75,7 @@ fn srgb_and_gray_files_pass_through() {
 /// default decode differs from the `Srgb` one.
 #[test]
 fn the_default_is_as_coded() {
-    assert_eq!(DecodeOptions::default().color, ColorOutput::AsCoded);
+    assert_eq!(DecodeOptions::default().color(), &ColorOutput::AsCoded);
     for n in [2, 3, 5, 7, 8] {
         let bytes = conformance(n);
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
@@ -101,17 +101,17 @@ fn raw_channels_with_srgb_is_invalid_options() {
 fn the_builders_set_one_field_each() {
     let base = DecodeOptions::default();
     let raw = base.clone().with_raw_channels(true);
-    assert!(raw.raw_channels);
-    assert_eq!(raw.color, ColorOutput::AsCoded);
-    assert_eq!(raw.resolution_reduction, 0);
-    assert!(!raw.clone().with_raw_channels(false).raw_channels);
+    assert!(raw.raw_channels());
+    assert_eq!(raw.color(), &ColorOutput::AsCoded);
+    assert_eq!(raw.resolution_reduction(), 0);
+    assert!(!raw.clone().with_raw_channels(false).raw_channels());
 
     let both = base
         .with_color(ColorOutput::Srgb)
         .with_resolution_reduction(2);
-    assert_eq!(both.color, ColorOutput::Srgb);
-    assert_eq!(both.resolution_reduction, 2);
-    assert!(!both.raw_channels);
+    assert_eq!(both.color(), &ColorOutput::Srgb);
+    assert_eq!(both.resolution_reduction(), 2);
+    assert!(!both.raw_channels());
 }
 
 /// The header describes the converted output: sYCC chroma is already on the

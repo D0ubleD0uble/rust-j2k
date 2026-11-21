@@ -118,7 +118,7 @@ fn over_the_default_limit_is_refused_and_the_message_names_the_option() {
     }
 }
 
-/// The typed hint from a sample-limit refusal sets the option: `with_retry`
+/// The typed hint from a sample-limit refusal sets the option: `raised_for`
 /// gives `Raised(2)` for the flat file, and the retried decode gets past the
 /// limit. It runs on the header-only file, so it fails only on the missing
 /// tile data, as `raised_and_unlimited_admit...` does.
@@ -131,9 +131,9 @@ fn a_retry_with_the_typed_hint_admits_the_flat_file() {
     };
     assert_eq!(detail.kind(), LimitKind::Samples);
     let options = DecodeOptions::default()
-        .with_retry(&detail)
+        .raised_for(&detail)
         .expect("a retry for the sample limit");
-    assert_eq!(options.sample_limit, SampleLimit::Raised(2));
+    assert_eq!(options.sample_limit(), &SampleLimit::Raised(2));
     let header = read_header_with(&bytes, &options).expect("the header reads under the retry");
     assert_eq!((header.width, header.height), (32769, 16385));
     assert!(matches!(
@@ -285,10 +285,13 @@ fn a_sample_limit_raised_by_zero_is_invalid_options() {
 /// The default is `SampleLimit::Default`, and the setter sets the field.
 #[test]
 fn the_sample_limit_defaults_to_the_default_bound() {
-    assert_eq!(DecodeOptions::default().sample_limit, SampleLimit::Default);
     assert_eq!(
-        with_limit(SampleLimit::Unlimited).sample_limit,
-        SampleLimit::Unlimited
+        DecodeOptions::default().sample_limit(),
+        &SampleLimit::Default
+    );
+    assert_eq!(
+        with_limit(SampleLimit::Unlimited).sample_limit(),
+        &SampleLimit::Unlimited
     );
 }
 
@@ -742,7 +745,7 @@ fn past_64_mib_the_default_limit_grows_with_the_input() {
 
 /// `Raised(n)` is n times the default for the file's size, so the factor a
 /// refusal names admits the file at that size: the two tiles of a file that
-/// fits one need `Raised(2)`, and `with_retry` gives it.
+/// fits one need `Raised(2)`, and `raised_for` gives it.
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn a_factor_multiplies_the_default_for_the_input() {
@@ -758,7 +761,7 @@ fn a_factor_multiplies_the_default_for_the_input() {
         "{detail}"
     );
     assert_eq!(detail.retry_with(), Some(Raise::Raised(2)));
-    let retry = DecodeOptions::default().with_retry(&detail).unwrap();
+    let retry = DecodeOptions::default().raised_for(&detail).unwrap();
     let header = read_header_with(&bytes, &retry).expect("the factor named admits the file");
     assert_eq!((header.width, header.height), (46342, 23171));
     // At the floor, 2^29 samples, the same image needs `Raised(3)`.
@@ -883,7 +886,7 @@ fn refused_at_most<T: std::fmt::Debug>(result: Result<T, Error>, n: u64) -> Stri
     };
     assert_eq!(detail.kind(), LimitKind::Samples, "{detail}");
     assert_eq!(detail.retry_with(), None, "{detail}");
-    assert!(at_most(n).with_retry(&detail).is_none(), "{detail}");
+    assert!(at_most(n).raised_for(&detail).is_none(), "{detail}");
     let m = detail.message().to_owned();
     assert!(
         m.contains(&format!(

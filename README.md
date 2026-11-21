@@ -316,7 +316,7 @@ in the header can declare an absurd size, so don't lift the limits on that
 evidence alone. The error says which limit refused the file and what to
 raise it to, as data: `LimitDetail::kind` and `LimitDetail::retry_with`.
 A code-block work or tile cap refusal also gives the tile and the amount it
-needs (`LimitDetail::refused_at`). `DecodeOptions::with_retry` sets that limit
+needs (`LimitDetail::refused_at`). `DecodeOptions::raised_for` sets that limit
 for you:
 
 ```rust
@@ -344,33 +344,23 @@ fn decode_raising_limits(bytes: &[u8]) -> Result<Image, Error> {
             return Err(Error::Limit(limit));
         };
         if factor <= MAX_FACTOR {
-            options = options.with_retry(&limit).expect("it gave a factor");
+            options = options.raised_for(&limit).expect("it gave a factor");
         } else {
             // Past the maximum: one last try at the maximum, for the limit
             // that refused.
             let most = WorkLimit::Raised(MAX_FACTOR);
-            let (at_most, raised) = match limit.kind() {
-                LimitKind::PacketWork => (
-                    options.packet_work_limit == most,
-                    options.clone().with_packet_work_limit(most),
-                ),
-                LimitKind::CodeBlockWork => (
-                    options.code_block_work_limit == most,
-                    options.clone().with_code_block_work_limit(most),
-                ),
+            let raised = match limit.kind() {
+                LimitKind::PacketWork => options.clone().with_packet_work_limit(most),
+                LimitKind::CodeBlockWork => options.clone().with_code_block_work_limit(most),
                 // The samples, and the caps on a tile's code-blocks and
                 // precincts, which the sample limit sets.
                 LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
-                    let most = SampleLimit::Raised(MAX_FACTOR);
-                    (
-                        options.sample_limit == most,
-                        options.clone().with_sample_limit(most),
-                    )
+                    options.clone().with_sample_limit(SampleLimit::Raised(MAX_FACTOR))
                 }
                 _ => return Err(Error::Limit(limit)),
             };
             // Already at the maximum: the same options would refuse again.
-            if at_most {
+            if raised == options {
                 return Err(Error::Limit(limit));
             }
             options = raised;
