@@ -1448,11 +1448,20 @@ step too. On a raw codestream, they come right after the selection.
 When an input has more than one fault, which one is reported can change in
 any release. What holds is that when `read_header_with` returns an error,
 `decode_with` returns the same one, and a codestream and its JP2 wrapper
-report the same one. The exceptions are sRGB output, whose step comes in a
-different place on the two paths (above), and, for a file the decode refuses
-in its tile data, a `Limit` or `InvalidOptions` for another tile (with
-`strict` off or in a lower tile). Separately, `read_header_with` can return
-`Ok` for a fault only decoding finds. A JP2 file's box faults have no
+report the same one. The exceptions are:
+
+- sRGB output, whose step comes in a different place on the two paths
+  (above).
+- The sample limit and the tile caps, which count a JP2 file's own bytes
+  (`resource-bounds.md`). Past 64 MiB the wrapper can admit what the bare
+  codestream refuses, or name a smaller factor to retry with.
+- A file the decode refuses for a fault in its tile data, where the header
+  read reports a `Limit` or `InvalidOptions` for a tile that the decode does
+  not reach first. The decode refuses the file for a fault in a tile-part
+  (with `strict` off) or in the data of a lower tile.
+
+Separately, `read_header_with` can return `Ok` for a fault only decoding
+finds. A JP2 file's box faults have no
 codestream counterpart.
 
 This order is what lets `read_header` return the same error as `decode` for

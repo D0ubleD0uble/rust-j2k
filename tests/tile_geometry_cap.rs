@@ -1105,7 +1105,10 @@ fn a_refine_waits_on_a_tile_past_the_caps() {
 /// padded to 210,000,000 bytes, so the default limit of 1.68 x 10^9 samples
 /// admits its 1.6 x 10^9 and 3,281,250 code-blocks. It decodes at the
 /// defaults, at full resolution and at reduction 3. Under 2^20 code-blocks
-/// it was refused at every option.
+/// it was refused at every option. Gated to 64-bit: on a 32-bit target the
+/// caps never rise above their floor, so the tile is `AddressSpace`, already
+/// at reduction 3.
+#[cfg(target_pointer_width = "64")]
 #[test]
 #[ignore = "decodes 1.6 x 10^9 samples; about 9 GB and a minute in release"]
 fn forty_thousand_square_in_32x32_blocks_decodes_at_the_defaults() {
