@@ -178,8 +178,9 @@ two, plus one for each row of tiles a window reads), a tile with leftover bytes 
 and a complete report must hold no missing tiles. `tile_body` makes the same
 check on each of its inputs, so the steered shapes (POC, packed headers,
 tile-parts) reach the strict-off walk too. Seed `decode_partial` as
-`decode`, but copy only the conformance codestreams of 300000 bytes or less: the
-larger ones are cut to 1 MiB, and mutating those costs about a second a run.
+`decode`, plus the conformance codestreams of 300000 bytes or less (the
+larger ones are cut to 1 MiB, and mutating those costs about a second a run)
+and `tests/fixtures/partial/*.j2k`; the recipe is below.
 
 `incremental_decode` feeds each input to an `IncrementalDecoder` in pieces
 whose sizes a hash of the file picks, and refines after each piece. The first
@@ -387,11 +388,19 @@ real codestreams to mutate, which reaches far more of the pipeline than random
 bytes:
 
 ```sh
-# Seed the corpus once. The conformance codestreams carry the widened Phase 2
-# geometry — multi-tile, multi-component, multi-layer, precinct-partitioned —
-# so they reach far more of tier-2 than the synthetic single-tile fixtures.
+# Seed the corpus once, as the CI smoke does (67 files): the fixtures, the
+# OpenJPH codestreams, and the HT conformance codestreams of 6144 bytes or
+# less. Size tests here are in bytes (`-size -6145c`): the older `-size -6k`
+# rounds up to 6 KiB units and meant 5 KiB or less. The HT files reach the HT
+# paths; `tile_body` needs no seed (its header is pinned, bit 7 of its first
+# byte makes the body's code-blocks HT, and bit 6 with it makes them MIXED).
 mkdir -p fuzz/corpus/decode
-cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus/decode/
+cp tests/fixtures/*.j2k tests/fixtures/openjph/files/*.j2c fuzz/corpus/decode/
+find tests/fixtures/conformance/ht/codestreams -size -6145c -name '*.j2k' -exec cp {} fuzz/corpus/decode/ \;
+# Optional, not in the CI smoke: the ISO/IEC 15444-4 codestreams carry
+# multi-tile, multi-component, multi-layer, precinct-partitioned geometry that
+# reaches far more of tier-2 than the synthetic single-tile fixtures.
+cp tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus/decode/
 
 # Time-boxed run (CI-friendly: no panics, no OOM, no hangs). An input under
 # 64 MiB, as every fuzz input is, may declare an image at the 2^29-sample
@@ -408,9 +417,14 @@ cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus
 # the 4 GiB and the 30 s timeout CI gives.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=4096
 
-# The same with strict off, against the strict decode.
+# The same with strict off, against the strict decode. Seeded as the CI smoke
+# does (93 files): not from the `decode` corpus, which a run grows.
 mkdir -p fuzz/corpus/decode_partial
-cp fuzz/corpus/decode/* fuzz/corpus/decode_partial/
+cp tests/fixtures/*.j2k fuzz/corpus/decode_partial/
+find tests/fixtures/conformance/codestreams -name '*.j2k' -size -300001c -exec cp {} fuzz/corpus/decode_partial/ \;
+cp tests/fixtures/openjph/files/*.j2c tests/fixtures/partial/*.j2k fuzz/corpus/decode_partial/
+find tests/fixtures/conformance/ht/codestreams -size -6145c -name '*.j2k' -exec cp {} fuzz/corpus/decode_partial/ \;
+cp tests/fixtures/conformance/ht/codestreams/ds0_hm_15_b8.j2k fuzz/corpus/decode_partial/
 cargo +nightly fuzz run decode_partial -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=4096
 
 # The JP2 box target, seeded from the ISO/IEC 15444-4 JP2 reader files and
@@ -435,27 +449,23 @@ cargo +nightly fuzz run icc_srgb -- -dict=fuzz/icc.dict -max_total_time=300
 RUST_J2K_HT_SEED_DIR=fuzz/corpus/ht_block cargo test --lib ht_block_seeds
 cargo +nightly fuzz run ht_block -- -max_total_time=60 -max_len=8192 -rss_limit_mb=4096
 
-# `decode` and `decode_partial` seeded with small HT files: the OpenJPH
-# codestreams and the HT conformance codestreams under 6 KB, and the smallest
-# MIXED file (`ds0_hm_15_b8.j2k`, 17 KB; the other two are larger). `tile_body`
-# needs no seed: its header is pinned, bit 7 of its first byte makes the body's
-# code-blocks HT, and bit 6 with it makes them MIXED.
-for t in decode decode_partial; do
-  mkdir -p fuzz/corpus/$t
-  cp tests/fixtures/*.j2k tests/fixtures/openjph/files/*.j2c fuzz/corpus/$t/
-  find tests/fixtures/conformance/ht/codestreams -size -6145c -name '*.j2k' -exec cp {} fuzz/corpus/$t/ \;
-  cp tests/fixtures/conformance/ht/codestreams/ds0_hm_15_b8.j2k fuzz/corpus/$t/
-done
+# The smallest MIXED file, `ds0_hm_15_b8.j2k` (17 KB; the other two are larger),
+# is in the `decode_partial` seeding above. Add it to `decode` the same way:
+cp tests/fixtures/conformance/ht/codestreams/ds0_hm_15_b8.j2k fuzz/corpus/decode/
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096
 
-# The incremental target, seeded with the fixtures under 3 KB, and the same
-# behind control bytes that change the options between refines.
+# The incremental target (116 files), seeded with the fixtures of 3072 bytes or
+# less, the same behind control bytes that change the options between refines,
+# and the files of `tests/fixtures/incremental` of 4096 bytes or less (the
+# target runs with `-max_len=4096`, which would truncate larger ones). The
+# old `-size -3k` meant 2 KiB or less.
 mkdir -p fuzz/corpus/incremental_decode
 find tests/fixtures -maxdepth 1 -size -3073c \( -name '*.j2k' -o -name '*.jp2' \) \
   -exec cp {} fuzz/corpus/incremental_decode/ \;
 for f in $(find tests/fixtures -maxdepth 1 -size -3073c \( -name '*.j2k' -o -name '*.jp2' \)); do
   { printf '\100\0\0\0\0\0'; cat "$f"; } > "fuzz/corpus/incremental_decode/set_$(basename "$f")"
 done
+find tests/fixtures/incremental -type f -size -4097c -exec cp {} fuzz/corpus/incremental_decode/ \;
 cargo +nightly fuzz run incremental_decode -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=300 -rss_limit_mb=4096
 
 # The incremental target on an input that reaches the bound on the walks read
@@ -465,18 +475,19 @@ RUST_J2K_INCREMENTAL_SEED_DIR=fuzz/corpus/incremental_decode_large \
 cargo +nightly fuzz run incremental_decode fuzz/corpus/incremental_decode_large -- \
   -dict=fuzz/j2k.dict -max_len=32768 -max_total_time=300 -rss_limit_mb=4096
 
-# The window target, seeded as decode plus the window, JPH and small JP2 files.
+# The window target, seeded as decode plus the window, JPH and small JP2 files
+# (as the CI smoke does; it copies the `decode` corpus as it stands).
 mkdir -p fuzz/corpus/window_crop
-cp fuzz/corpus/decode/* tests/fixtures/window/*.j2k tests/fixtures/openjph/files/*.jph \
-  fuzz/corpus/window_crop/
+cp fuzz/corpus/decode/* fuzz/corpus/window_crop/
+cp tests/fixtures/window/*.j2k tests/fixtures/openjph/files/*.jph fuzz/corpus/window_crop/
+find tests/fixtures/conformance tests/fixtures/jp2_real -name '*.jp2' -size -200k -exec cp {} fuzz/corpus/window_crop/ \;
 find tests/fixtures -maxdepth 1 -name '*.jp2' -size -200k -exec cp {} fuzz/corpus/window_crop/ \;
-find tests/fixtures/jp2_real tests/fixtures/conformance/jp2/files -name '*.jp2' -size -200k \
-  -exec cp {} fuzz/corpus/window_crop/ \;
 cargo +nightly fuzz run window_crop -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
 
-# The retry target, seeded as decode plus limit fixtures behind a control byte.
+# The retry target (79 files), seeded as the CI smoke does: the fixtures, its own
+# `tests/fixtures/retry_ladder` files, and limit fixtures behind a control byte.
 mkdir -p fuzz/corpus/retry_ladder
-cp fuzz/corpus/decode/* fuzz/corpus/retry_ladder/
+cp tests/fixtures/*.j2k tests/fixtures/retry_ladder/*.j2k fuzz/corpus/retry_ladder/
 seed() { { printf "\\x$1"; cat "tests/fixtures/$2"; } > "fuzz/corpus/retry_ladder/$1-${2##*/}"; }
 for c in 0f 30; do
   for f in tier1_work_bound/htbomb_1024_64_3.j2k tier1_work_bound/opj_specks2048_16bit.j2k \
@@ -540,9 +551,6 @@ cargo +nightly fuzz tmin decode fuzz/artifacts/decode/crash-<hash>
 `corpus/`, `artifacts/`, `coverage/`, and `target/` are git-ignored; only the
 target and its manifest are tracked, so the corpus stays reproducible from the
 committed fixtures. No seed corpus is committed: the commands above, and the CI
-smoke, build each one. The CI smoke (`.github/workflows/ci.yml`) seeds `decode`
-with the fixtures and small HT files, `decode_partial` and `incremental_decode`
-from the `decode` corpus, `ht_block` with the HT corpus's code-blocks, and the
-JP2, header and ICC targets as above. It builds every target and runs ten
-of them for 15 to 60 s each, with `-timeout=30` and `-rss_limit_mb=4096`;
-it does not run `window_crop` or `retry_ladder`.
+smoke, build each one. The CI smoke (`.github/workflows/ci.yml`) seeds each
+target as the recipes above do, builds every target, and runs them for 15 to
+60 s each, with `-timeout=30` and `-rss_limit_mb=4096`.

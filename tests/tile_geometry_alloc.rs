@@ -17,6 +17,12 @@
 //! `tests/support/alloc.rs` forwards every call to `System` unchanged, which
 //! the project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
+//!
+//! On a 32-bit target the sample limit tops out at 2^29 - 1 samples, so the
+//! caps stay at their floors of 2^20 code-blocks and 2^18 precincts, and the
+//! test measures tiles at the floors under `AtMost(2^24)` instead of caps
+//! scaled past them (`tests/tile_geometry_cap.rs` checks what it refuses
+//! there).
 
 #[path = "support/alloc.rs"]
 mod alloc;
@@ -53,11 +59,17 @@ fn peak_over_output(bytes: &[u8], n: u64, samples: usize) -> usize {
 
 #[test]
 fn a_tile_at_the_scaled_caps_peaks_within_the_documented_bytes() {
-    // 2^21 code-blocks of 4x4, the cap under `AtMost(2^30)`.
-    let n = 1 << 30;
-    let (width, height) = (4096, 8192);
+    // 2^21 code-blocks of 4x4, the cap under `AtMost(2^30)`. On a 32-bit
+    // target 2^20 of them, the floor, in a 4096 x 4096 tile under 2^24.
+    let (n, width, height): (u64, u32, u32) = if cfg!(target_pointer_width = "64") {
+        (1 << 30, 4096, 8192)
+    } else {
+        (1 << 24, 4096, 4096)
+    };
     let blocks = (width / 4) * (height / 4);
-    assert_eq!(blocks as u64, n / 512);
+    if cfg!(target_pointer_width = "64") {
+        assert_eq!(u64::from(blocks), n / 512);
+    }
     let bytes = synth::empty_tiles(
         [width, height, 0, 0, width, height, 0, 0],
         0,
@@ -75,11 +87,17 @@ fn a_tile_at_the_scaled_caps_peaks_within_the_documented_bytes() {
     );
 
     // 2^21 precincts of 1x1, each with its code-block, the cap under
-    // `AtMost(2^32)`.
-    let n = 1 << 32;
-    let (width, height) = (1024u32, 2048u32);
+    // `AtMost(2^32)`. On a 32-bit target 2^18 of them, the floor, in a
+    // 512 x 512 tile under 2^24.
+    let (n, width, height): (u64, u32, u32) = if cfg!(target_pointer_width = "64") {
+        (1 << 32, 1024, 2048)
+    } else {
+        (1 << 24, 512, 512)
+    };
     let precincts = (width * height) as usize;
-    assert_eq!(precincts as u64, n / 2048);
+    if cfg!(target_pointer_width = "64") {
+        assert_eq!(precincts as u64, n / 2048);
+    }
     let bytes = synth::empty_tiles(
         [width, height, 0, 0, width, height, 0, 0],
         0,

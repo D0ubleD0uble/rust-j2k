@@ -1748,11 +1748,23 @@ pub(crate) mod tests {
     /// tile-part before it. The tiles of `refused` have no tile-part `COD`,
     /// so they are over the cap, and the tiles of `missing` no tile-part.
     fn rescued_tiles(tiles: u32, parts: u8, refused: &[u32], missing: &[u32]) -> Vec<u8> {
+        rescued_tiles_of_width(520, tiles, parts, refused, missing)
+    }
+
+    /// The same with tiles `width` x 512: 512 gives 2^18 precincts a tile,
+    /// which is within the cap, where 520 is over it.
+    fn rescued_tiles_of_width(
+        width: u32,
+        tiles: u32,
+        parts: u8,
+        refused: &[u32],
+        missing: &[u32],
+    ) -> Vec<u8> {
         use crate::synth;
         let mut cod = synth::cod_body(1, 0, 4, 0);
         cod[0] = 1;
         cod.push(0x00);
-        let siz = synth::siz_body([520 * tiles, 512, 0, 0, 520, 512, 0, 0], &[[7, 1, 1]]);
+        let siz = synth::siz_body([width * tiles, 512, 0, 0, width, 512, 0, 0], &[[7, 1, 1]]);
         let mut bytes = [
             vec![0xFF, 0x4F],
             synth::seg(0xFF51, &siz),
@@ -1812,10 +1824,15 @@ pub(crate) mod tests {
             assert!(reads * 2 <= 3 * 64 * 16, "{reads}");
         }
         // Not where nothing is over a cap: a tile the size admits is not
-        // counted, so nothing past the first `SOT` is read. On a 32-bit
-        // target `Raised(4)` cannot lift the precinct cap past the address
-        // space (see `ADDRESSABLE_SAMPLES`), so the tiles are still over it
-        // and the rescue walk runs as under the default.
+        // counted, so nothing past the first `SOT` is read. Tiles of 512 x
+        // 512 hold 2^18 precincts, the cap's floor on every target, so none
+        // is over it under the default.
+        let within = rescued_tiles_of_width(512, 64, 16, &[], &[]);
+        assert_eq!(sot_reads(&within, &DecodeOptions::default()), 0);
+        // The same where a larger limit lifts the cap past 520 x 512. On a
+        // 32-bit target `Raised(4)` cannot lift the precinct cap past the
+        // address space (see `ADDRESSABLE_SAMPLES`), so the 520-wide tiles
+        // are still over it and the rescue walk runs as under the default.
         let raised = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(4));
         #[cfg(target_pointer_width = "64")]
         let expected = 0;
