@@ -203,6 +203,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   walks it keeps from the walks built under the new cap, as a decoder made
   with it does. It used the largest walk of the old cap, so the room, and
   which walks fit, could differ from a fresh decoder's (#519).
+- A JP2 file checks the resolution reduction right after it holds `ihdr` to
+  SIZ, before the selection, the channel plans and the sRGB step, as a raw
+  codestream checks it before the selection. A file with a refused
+  reduction and another fault in those steps (a window outside the image,
+  a palette over the sample limit, a color space the sRGB step does not
+  convert, a `cdef` that names a missing channel) gave that fault, while
+  its codestream gave the reduction's `InvalidOptions`. OpenJPEG refuses
+  the reduction at the same point, as it reads `COD` (#419).
 
 ## [0.5.0] - 2026-11-17
 

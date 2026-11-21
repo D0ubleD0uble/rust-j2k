@@ -1444,15 +1444,21 @@ impl DecodeOptions {
     /// ```
     #[must_use]
     pub fn with_retry(&self, limit: &LimitDetail) -> Option<Self> {
+        if !limit.kind().is_adjustable() {
+            return None;
+        }
         let retry = limit.retry_with()?;
         let options = self.clone();
+        // Every kind is named, so a new one must be given its option here,
+        // or `None`; `with_retry_is_some_exactly_for_the_adjustable_kinds`
+        // holds this to `is_adjustable`.
         match limit.kind() {
             LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
                 Some(options.with_sample_limit(retry))
             }
             LimitKind::PacketWork => Some(options.with_packet_work_limit(retry)),
             LimitKind::CodeBlockWork => Some(options.with_code_block_work_limit(retry)),
-            _ => None,
+            LimitKind::AddressSpace | LimitKind::PocVolumes | LimitKind::BitPlanes => None,
         }
     }
 
