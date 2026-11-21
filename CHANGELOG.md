@@ -128,6 +128,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in full, or of a last tile-part whose `Psot` is 0, is still read again
   on each call. Each call still gives what `read_header_with` gives with
   `strict` off on the bytes fed (#502).
+- A marker fault gets the same error variant in the main header and in a
+  tile-part header, and a file the standard forbids is no longer reported
+  as a feature not decoded. Each of these files is still refused; only the
+  variant changes (#563):
+  - A Part 2 marker (`MCT`, `MCC`, `NLT`, `MCO`, `CBD`) or an unrecognized
+    marker in a tile-part header is `Error::Unsupported`, as in the main
+    header. It was `Error::Codestream`.
+  - A reserved marker 0xFF30 to 0xFF3F in a tile-part header is
+    `Error::Unsupported`. It was `Error::Codestream`. The main header still
+    skips one.
+  - `PPT`, `SOP` or `EPH` in the main header is `Error::Codestream`, as
+    `PLT` there is. It was `Error::Unsupported`.
+  - A `PPT` marker in a codestream that has a `PPM` is `Error::Codestream`.
+    It was `Error::Unsupported`.
+  - A color transform over components 0 to 2 that do not share a wavelet is
+    `Error::Marker`. It was `Error::Unsupported`.
+  - Bytes that are not a marker where a tile-part header needs one stay
+    `Error::Codestream`, with a message that says so.
 
 ### Fixed
 
