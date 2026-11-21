@@ -569,16 +569,12 @@ pub(crate) fn split_tiles(bytes: &[u8], parsed: ParsedHeader) -> Result<Codestre
 /// returning [`ControlFlow::Break`].
 ///
 /// The walk follows the `SOT` chain by `Psot` and reads only the `SOT`
-/// markers, the header markers of a tile-part whose header `visit` reads,
-/// and, stepping over them by their lengths, the header markers of each
-/// tile-part within its `Psot`. The tile-parts' extents do not overlap, so
-/// a walk reads each byte of `bytes` at most once, but for a header that
-/// runs past its `Psot`, which it reads to the end of the input. It stops
-/// where the chain does not go on: at an `EOC`, a `Psot` of 0, a fault, the
-/// end of `bytes`, or a tile-part whose header runs past its `Psot` and
-/// that the tile walk with `strict` off reads as cut short
-/// ([`fault_may_be_cut`]), where it ends the codestream. A tile that has
-/// two first tile-parts, which the tile walk refuses, is visited twice.
+/// markers, and the header markers of a tile-part whose header `visit`
+/// reads, within its `Psot`. The tile-parts' extents do not overlap, so a
+/// walk reads each byte of `bytes` at most once. It stops where the chain
+/// does not go on: at an `EOC`, a `Psot` of 0, a fault, or the end of
+/// `bytes`. A tile that has two first tile-parts, which the tile walk
+/// refuses, is visited twice.
 pub(crate) fn visit_first_parts<'m>(
     bytes: &[u8],
     parsed: &'m ParsedHeader,
@@ -595,24 +591,6 @@ pub(crate) struct FirstParts {
     /// Where the chain ended for want of bytes: at a `SOT` that would run
     /// past the end of the input, which more input may complete.
     cut: Option<usize>,
-    /// The tile-part the walk read last.
-    last: Option<Visited>,
-    /// Whether the chain ended at the last tile-part, whose header runs
-    /// past its `Psot` and that the input ends inside ([`header_is_cut`]):
-    /// the length of the input that was found in, or 0 where the walk has
-    /// yet to look, in a longer input than the one it read that tile-part
-    /// in. The walk goes on past it once a longer input holds what its
-    /// header's fault depends on.
-    held: Option<usize>,
-}
-
-/// A tile-part [`FirstParts`] has read: where its `SOT` starts and its
-/// header markers start, and its `SOT`.
-#[derive(Clone, Copy)]
-struct Visited {
-    offset: usize,
-    pos: usize,
-    sot: Sot,
 }
 
 impl FirstParts {
@@ -621,8 +599,6 @@ impl FirstParts {
         FirstParts {
             next: Some(parsed.sot_offset),
             cut: None,
-            last: None,
-            held: None,
         }
     }
 
@@ -633,10 +609,6 @@ impl FirstParts {
     pub(crate) fn resume(&mut self) {
         if let Some(at) = self.cut.take() {
             self.next = Some(at);
-            // The tile-part before the cut ran to the end of the input, so
-            // in a longer input its header may run past its `Psot` and be
-            // cut there.
-            self.held = self.last.map(|_| 0);
         }
     }
 
@@ -649,15 +621,6 @@ impl FirstParts {
         parsed: &'m ParsedHeader,
         mut visit: impl FnMut(u32, FirstPart<'_, 'm>) -> ControlFlow<()>,
     ) {
-        if let (Some(len), Some(last)) = (self.held, self.last) {
-            if len == bytes.len() || header_is_cut(bytes, &parsed.header, last) {
-                self.next = None;
-                self.held = Some(bytes.len());
-                return;
-            }
-            self.held = None;
-            self.next = Some(last.offset + last.sot.psot as usize);
-        }
         while let Some(offset) = self.next {
             let Some((sot, pos)) = sot_at(bytes, offset) else {
                 self.next = None;
@@ -670,12 +633,6 @@ impl FirstParts {
             self.next = offset
                 .checked_add(sot.psot as usize)
                 .filter(|_| sot.psot != 0);
-            let visited = Visited { offset, pos, sot };
-            self.last = Some(visited);
-            if header_is_cut(bytes, &parsed.header, visited) {
-                self.next = None;
-                self.held = Some(bytes.len());
-            }
             if sot.tile_part_index == 0 {
                 let part = FirstPart::new(bytes, &parsed.header, offset, &sot, pos);
                 if visit(u32::from(sot.tile_index), part).is_break() {
@@ -716,34 +673,6 @@ fn sot_at(bytes: &[u8], offset: usize) -> Option<(Sot, usize)> {
         num_tile_parts: tnsot,
     };
     Some((sot, end))
-}
-
-/// Whether the header of the tile-part `visited` runs past its `Psot`, whole
-/// in `bytes`, and the tile walk with `strict` off reads a fault in it as
-/// the input cut short ([`fault_may_be_cut`]), so that the codestream ends
-/// there. A header whose markers reach `SOD` within the `Psot`, as they do
-/// in a codestream that is not at fault, is stepped through by the
-/// segments' lengths alone; another is read as the walk reads it.
-fn header_is_cut(bytes: &[u8], main: &MainHeader, visited: Visited) -> bool {
-    let Visited { offset, pos, sot } = visited;
-    if sot.psot == 0 || runs_to_the_end(bytes.len(), offset, sot.psot) {
-        return false;
-    }
-    let end = offset + sot.psot as usize;
-    if header_chain(bytes, pos, end) == Chain::Sod {
-        return false;
-    }
-    let mut site = FaultSite::default();
-    let first_part = sot.tile_part_index == 0;
-    read_tile_part_header_at(
-        &mut Cursor::at(bytes, pos),
-        end,
-        main,
-        first_part,
-        &mut site,
-    )
-    .is_err()
-        && fault_may_be_cut(bytes, offset, sot.psot, site)
 }
 
 /// A tile's first tile-part, as [`visit_first_parts`] finds it.
@@ -830,7 +759,8 @@ impl<'b, 'm> FirstPart<'b, 'm> {
                 self.tile, self.psot
             )));
         };
-        read_tile_part_header(&mut Cursor::at(part, self.pos), part.len(), self.main, true)
+        let mut site = FaultSite::default();
+        self.read(part, &mut site)
             .and_then(|(tile, _)| resolve_tile_header(self.main, &tile, usize::from(self.tile)))
     }
 
@@ -838,24 +768,26 @@ impl<'b, 'm> FirstPart<'b, 'm> {
     /// short, which the tile walk with `strict` off reads as the end of the
     /// codestream ([`fault_may_be_cut`]). False for a header it reads
     /// without a fault where the tile walk reads the markers, and for a
-    /// tile-part whole in the input: [`header`](Self::header) reads no
-    /// further than its `Psot`, where the tile walk reads a header that runs
-    /// past it on to the end of the input, so the walk's own result stands
-    /// for it. It reads the header's markers again.
+    /// tile-part whole in the input. It reads the header's markers again.
     pub(crate) fn header_fault_may_be_cut(&self) -> bool {
-        let Some(part) = self.part.filter(|_| !self.is_whole()) else {
+        let Some(part) = self.part else {
             return false;
         };
         let mut site = FaultSite::default();
-        read_tile_part_header_at(
-            &mut Cursor::at(part, self.pos),
-            part.len(),
-            self.main,
-            true,
-            &mut site,
-        )
-        .is_err()
-            && fault_may_be_cut(part, self.offset, self.psot, site)
+        self.read(part, &mut site).is_err() && fault_may_be_cut(part, self.offset, self.psot, site)
+    }
+
+    /// The tile-part's header, read from `part` as the tile walk reads it
+    /// ([`read_part_header`]).
+    fn read(&self, part: &[u8], site: &mut FaultSite) -> Result<(TileHeader, Option<Vec<u8>>)> {
+        let sot = Sot {
+            tile_index: self.tile,
+            psot: self.psot,
+            tile_part_index: 0,
+            num_tile_parts: 0,
+        };
+        let mut cur = Cursor::at(part, self.pos);
+        read_part_header(part, &mut cur, self.offset, &sot, self.main, site)
     }
 }
 
@@ -1300,9 +1232,8 @@ fn walk_tiles<'a>(
         }
 
         let first_part = sot.tile_part_index == 0;
-        let end = part_end(bytes.len(), part_offset, sot.psot);
         let mut site = FaultSite::default();
-        let read = read_tile_part_header_at(&mut cur, end, main, first_part, &mut site);
+        let read = read_part_header(bytes, &mut cur, part_offset, &sot, main, &mut site);
         let (tile_header, packed) = match read {
             Ok(read) => read,
             // Not strict, a tile-part the input ends inside may end inside
@@ -1433,15 +1364,8 @@ fn walk_tiles<'a>(
                     )));
                 }
             };
-            if end < data_start {
-                return Err(Error::codestream(format!(
-                    "tile {} tile-part {} declares `Psot` {}, shorter than its {}-byte header",
-                    sot.tile_index,
-                    sot.tile_part_index,
-                    sot.psot,
-                    data_start - part_offset
-                )));
-            }
+            // `read_part_header` read the header within `end`.
+            debug_assert!(data_start <= end);
             end
         };
         let tile = &mut tiles[position];
@@ -1772,23 +1696,19 @@ pub(super) fn part_end(len: usize, offset: usize, psot: u32) -> usize {
 
 /// Whether a fault in the header of the tile-part at `offset`, at `site`,
 /// may be the input cut short, which a walk with `strict` off reads as the
-/// end of the codestream. The input must end inside what the error depends
-/// on. For most markers that is the marker segment the read failed at,
-/// whatever the tile-part's `Psot`: the segments are read before their end
-/// is checked against it, so a segment that runs past `Psot` and past the
-/// end of the input may yet hold a bad field. For a code judged by the
-/// markers after it ([`reaches_sod`]), it is the chain of marker segments
-/// from there, which is followed no further than the tile-part's end, so
-/// the tile-part must also run to the end of the input (its `Psot` is 0 or
-/// runs past it). Otherwise every longer input fails at the same marker
-/// with the same error, so it is refused now.
+/// end of the codestream. The tile-part must run to the end of the input
+/// (its `Psot` is 0 or runs past it), and the input must end inside what
+/// the error depends on: the marker segment it failed at, or, for a code
+/// judged by the markers after it ([`reaches_sod`]), the chain of marker
+/// segments from there. Otherwise every longer input fails at the same
+/// marker with the same error, so it is refused now.
 fn fault_may_be_cut(bytes: &[u8], offset: usize, psot: u32, site: FaultSite) -> bool {
-    if site.chain {
-        runs_to_the_end(bytes.len(), offset, psot)
-            && header_chain(bytes, site.at, bytes.len()) == Chain::Ends
-    } else {
-        segment_runs_out(bytes, site.at)
-    }
+    runs_to_the_end(bytes.len(), offset, psot)
+        && if site.chain {
+            header_chain(bytes, site.at, bytes.len()) == Chain::Ends
+        } else {
+            segment_runs_out(bytes, site.at)
+        }
 }
 
 /// Whether the tile-part that starts at `offset` runs to the end of an
@@ -1841,6 +1761,56 @@ fn read_tile_part_header(
     first_part: bool,
 ) -> Result<(TileHeader, Option<Vec<u8>>)> {
     read_tile_part_header_at(cur, end, main, first_part, &mut FaultSite::default())
+}
+
+/// Read the header of the tile-part whose `SOT`, `sot`, starts at `offset`,
+/// from `cur`, which is on the first byte after the `SOT`, as each tile
+/// walk and [`FirstPart::header`] read it. Where the tile-part ends inside
+/// the input, by its `Psot`, the header is read no further than that end: a
+/// marker or segment that runs past it is refused at once as a `Psot`
+/// shorter than its header, whatever its fields hold (A.4.2: `Psot` counts
+/// the header). A code judged by the markers after it ([`reaches_sod`])
+/// keeps its own refusal, which says they do not reach `SOD` within the
+/// tile-part. Where `Psot` is 0 or runs past the input, the read goes on
+/// to the end of the input, which a walk with `strict` off may read as a
+/// cut ([`fault_may_be_cut`]).
+fn read_part_header(
+    bytes: &[u8],
+    cur: &mut Cursor<'_>,
+    offset: usize,
+    sot: &Sot,
+    main: &MainHeader,
+    site: &mut FaultSite,
+) -> Result<(TileHeader, Option<Vec<u8>>)> {
+    let first_part = sot.tile_part_index == 0;
+    let end = part_end(bytes.len(), offset, sot.psot);
+    if runs_to_the_end(bytes.len(), offset, sot.psot) {
+        return read_tile_part_header_at(cur, end, main, first_part, site);
+    }
+    if cur.pos > end {
+        return Err(header_past_psot(sot, true));
+    }
+    let part = &bytes[..end];
+    let mut within = Cursor::at(part, cur.pos);
+    let read = read_tile_part_header_at(&mut within, end, main, first_part, site);
+    cur.pos = within.pos;
+    read.map_err(|error| {
+        if !site.chain && segment_runs_out(part, site.at) {
+            header_past_psot(sot, false)
+        } else {
+            error
+        }
+    })
+}
+
+/// The refusal of a tile-part whose `Psot` ends inside its `SOT`, when
+/// `in_sot`, or inside the rest of its header.
+fn header_past_psot(sot: &Sot, in_sot: bool) -> Error {
+    let what = if in_sot { "`SOT`" } else { "header" };
+    Error::codestream(format!(
+        "tile {} tile-part {} declares `Psot` {}, shorter than its {what}",
+        sot.tile_index, sot.tile_part_index, sot.psot
+    ))
 }
 
 /// Where a tile-part header read failed, for [`fault_may_be_cut`].
@@ -2148,7 +2118,6 @@ fn resolve_tile_header<'m>(
 
 /// SOT fields (A.4.2): the tile index, tile-part length, part index, and part
 /// count. The packet-data extent is derived from `psot` by the caller.
-#[derive(Clone, Copy)]
 struct Sot {
     tile_index: u16,
     psot: u32,

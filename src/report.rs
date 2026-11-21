@@ -197,10 +197,9 @@ pub enum ReportEntry {
         complete_reduction: Option<u8>,
     },
     /// The input ends inside this tile-part: its `Psot` declares more bytes
-    /// than remain, or the input ends inside the tile-part's header, where
-    /// `Psot` is 0 or the header runs past it (then `present` is at least
-    /// `declared`). The bytes that are there are read; of a header the
-    /// input ends inside, none are.
+    /// than remain, or it is 0 and the input ends inside the tile-part's
+    /// header. The bytes that are there are read; of a header the input
+    /// ends inside, none are.
     #[non_exhaustive]
     TruncatedTilePart {
         /// The tile.
@@ -293,16 +292,6 @@ impl fmt::Display for ReportEntry {
                 f,
                 "tile {tile} tile-part {tile_part} is cut short in its header: {present} bytes \
                  of it are there, and its `Psot` is 0"
-            ),
-            ReportEntry::TruncatedTilePart {
-                tile,
-                tile_part,
-                declared,
-                present,
-            } if present >= declared => write!(
-                f,
-                "tile {tile} tile-part {tile_part} is cut short in its header, which runs past \
-                 its `Psot` of {declared} bytes: {present} bytes of it are there"
             ),
             ReportEntry::TruncatedTilePart {
                 tile,

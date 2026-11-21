@@ -25,6 +25,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - an `RGN`, or a MIXED code-block style, that `CAP` rules out.
 - A `PPT` or `PPM` of length 3 (only its `Zppt` or `Zppm`) is refused as
   `Error::Marker`, where some such files decoded before.
+- A tile-part header that runs past its `Psot` is refused as
+  `Error::Codestream` ("tile T tile-part P declares `Psot` N, shorter than
+  its header", or "shorter than its `SOT`"), whatever the segment past the
+  `Psot` holds. A bad field in that segment gave `Error::Marker` before,
+  and the message named the header's length.
 - A `SIZ` whose image holds no sample of a component is refused as
   `Error::Marker` ("component C holds no sample in the image"), by
   `read_header` too. The decode refused it at the first tile as
@@ -211,6 +216,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A tile-part header is read no further than its `Psot`, where the
+  tile-part ends inside the input. With `strict` off, input cut inside a
+  header that runs past its `Psot` was refused as "truncated marker
+  segment", and a longer prefix then gave another error, so one error
+  turned into another as the input grew. Such a header is now refused once
+  the input holds the tile-part's `Psot` bytes, with `strict` on or off,
+  without reading the header on past it (#597).
 - A tile narrower than a component's `XRsiz` or shorter than its `YRsiz`,
   which holds no sample of that component, decodes as the standard
   defines it: the tile-component has no precinct and no packet, and adds
