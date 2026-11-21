@@ -1052,7 +1052,7 @@ impl<'s> OverrideReader<'s> {
 /// The refusal of an `RGN` for component `index` in a codestream whose
 /// `Ccap15` bit 12 says it holds none (ISO/IEC 15444-15 A.3.4).
 fn rgn_without_cap_bit(index: usize) -> Error {
-    Error::codestream(format!(
+    Error::marker(format!(
         "`RGN` marker for component {index}, but `CAP` says the codestream has none \
          (`Ccap15` bit 12 is 0)"
     ))
@@ -1146,12 +1146,16 @@ fn walk_tiles<'a>(
     // worked out on first use.
     let summary = OnceCell::new();
 
+    // Whether, with `strict` off, the walk ended where the input did, so a
+    // `PPM` may carry chunks for tile-parts the input ends before.
+    let mut ended_early = false;
     let mut part_offset = sot_offset;
     loop {
         // Not strict: input that ends inside the `SOT` marker segment ends the
         // codestream there. `SOT` is always 12 bytes (Lsot = 10).
         if !strict && bytes.len().saturating_sub(part_offset) < 12 {
             entries.push(ReportEntry::MissingEoc);
+            ended_early = true;
             break;
         }
         let mut cur = Cursor::at(bytes, part_offset);
@@ -1244,6 +1248,7 @@ fn walk_tiles<'a>(
                 if sot.psot != 0 || !bytes.ends_with(&marker::EOC.to_be_bytes()) {
                     entries.push(ReportEntry::MissingEoc);
                 }
+                ended_early = true;
                 break;
             }
             Err(error) => return Err(error),
@@ -1385,13 +1390,21 @@ fn walk_tiles<'a>(
         }
 
         // A Psot = 0 tile-part is the last one: the walk ends there, whatever
-        // the two bytes after its data are.
+        // the two bytes after its data are. Not strict, input that does not
+        // end in an `EOC` is reported as without one, as when the input ends
+        // inside the tile-part's header.
         if sot.psot == 0 {
+            if !strict && !bytes.ends_with(&marker::EOC.to_be_bytes()) {
+                entries.push(ReportEntry::MissingEoc);
+            }
+            // The tile-part is the last one, so chunks of `PPM` left over
+            // are not for tile-parts the input ends before.
             break;
         }
         // Not strict, a tile-part cut short ends the codestream.
         if data_end == bytes.len() && !strict {
             entries.push(ReportEntry::MissingEoc);
+            ended_early = true;
             break;
         }
 
@@ -1408,6 +1421,7 @@ fn walk_tiles<'a>(
             // Not strict, the input may end after any tile-part.
             None if !strict => {
                 entries.push(ReportEntry::MissingEoc);
+                ended_early = true;
                 break;
             }
             None => {
@@ -1419,7 +1433,6 @@ fn walk_tiles<'a>(
     // Every PPM chunk maps to one tile-part; leftover chunks mean the main header
     // packed headers for tile-parts the codestream never carried. Not strict,
     // a codestream that ends early may not reach the last of them.
-    let ended_early = entries.last() == Some(&ReportEntry::MissingEoc);
     if ppm_seq != ppm.len() && !(ended_early && ppm_seq < ppm.len()) {
         return Err(Error::codestream(format!(
             "`PPM` carries {} packet-header chunk(s) but the codestream has {ppm_seq} tile-part(s)",
@@ -1822,6 +1835,13 @@ fn read_tile_part_header_at(
                         "duplicate `PPT` index `Zppt` {zppt} in one tile-part header"
                     )));
                 }
+                // `Lppt` is at least 4: `Zppt` and one byte of `Ippt`, as
+                // OpenJPEG's `opj_j2k_read_ppt` holds it.
+                if body.remaining() == 0 {
+                    return Err(Error::marker(format!(
+                        "`PPT` with `Zppt` {zppt} carries no `Ippt` byte; `Lppt` must be at least 4"
+                    )));
+                }
                 let ippt = body.take(body.remaining())?;
                 ppt.push((zppt, ippt.to_vec()));
             }
@@ -2117,10 +2137,10 @@ const MAX_MAIN_HEADER_SEGMENTS: usize = 1 << 16;
 /// before it reports the cut: the walk reads only marker codes and lengths
 /// here, so running out of input means the input was cut short (or a length
 /// was damaged to reach past it, which looks the same). A non-marker where a
-/// marker must be, a length below 2, and `SOD`/`EOC` before any tile-part are
-/// [`Error::Codestream`].
+/// marker must be and `SOD`/`EOC` before any tile-part are
+/// [`Error::Codestream`]; a length below 2 is [`Error::Marker`].
 fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
-    let mut cur = Cursor::new(bytes);
+    let mut cur = Cursor::at(bytes, 0);
 
     // 0 bytes, or `FF` alone, may still become `SOC`.
     if bytes.len() < 2 && marker::SOC.to_be_bytes().starts_with(bytes) {
@@ -2195,7 +2215,7 @@ fn main_header_segment<'a>(cur: &mut Cursor<'a>) -> Result<Option<&'a [u8]>> {
         return Ok(None);
     };
     if len < 2 {
-        return Err(Error::codestream("marker segment length below 2"));
+        return Err(Error::marker("marker segment length below 2"));
     }
     Ok(cur.take(usize::from(len) - 2).ok())
 }
@@ -2406,7 +2426,7 @@ fn validate_resolved(header: &MainHeader, tile: Option<usize>) -> Result<()> {
             .iter()
             .position(|p| p.coding.code_block_style & HT_MIXED != 0)
         {
-            return Err(Error::codestream(format!(
+            return Err(Error::marker(format!(
                 "component {index} has a MIXED code-block style, but `CAP` says each \
                  tile-component holds one kind of code-block (`Ccap15` bits 15-14 are 10)"
             )));
@@ -2603,7 +2623,7 @@ fn decode_siz(mut b: Cursor<'_>) -> Result<Siz> {
     // Each component record is 3 bytes. Check the segment can actually hold them
     // before reserving, so a lying `Csiz` cannot steer the allocation.
     if b.remaining() != 3 * csiz as usize {
-        return Err(Error::codestream(format!(
+        return Err(Error::marker(format!(
             "`SIZ` has {} bytes for {csiz} component records, expected {}",
             b.remaining(),
             3 * csiz as usize,
@@ -2996,7 +3016,7 @@ fn decode_tlm(
 
     let entry_size = usize::from(st) + 2 * (usize::from(sp) + 1);
     if !b.remaining().is_multiple_of(entry_size) {
-        return Err(Error::codestream(format!(
+        return Err(Error::marker(format!(
             "`TLM` carries {} entry bytes, not a multiple of its {entry_size}-byte entries",
             b.remaining()
         )));
@@ -3177,7 +3197,7 @@ fn decode_plt(mut b: Cursor<'_>) -> Result<()> {
     // byte must not claim a continuation.
     let chains = b.take(b.remaining())?;
     if chains.last().is_some_and(|&last| last & 0x80 != 0) {
-        return Err(Error::codestream(
+        return Err(Error::marker(
             "`PLT` ends in the middle of a packet-length entry",
         ));
     }
@@ -3190,10 +3210,18 @@ fn decode_plt(mut b: Cursor<'_>) -> Result<()> {
 /// Each `PPM` marker carries `Zppm` (its position) and `Ippm` (payload). Joined
 /// across every marker in `Zppm` order, the payload is a run of `(Nppm, bytes)`
 /// records — `Nppm` a 4-byte length, `bytes` that tile-part's packet headers —
-/// one record per tile-part. `Nppm` may straddle a marker boundary, so the
-/// payloads are concatenated before the records are read, matching OpenJPEG's
-/// `opj_j2k_merge_ppm`. Each returned chunk feeds a tile-part's packet-header
-/// stream in [`walk_tiles`], the same role `PPT` plays for a single tile-part.
+/// one record per tile-part. The payloads are concatenated before the
+/// records are read, so an `Nppm` field may be split across segments, as
+/// may a chunk's bytes. OpenJPEG's `opj_j2k_merge_ppm` carries chunk bytes
+/// across segments too, but refuses an `Nppm` field split across segments,
+/// and a `PPM` whose `Nppm`s are all 0. Each returned chunk feeds a
+/// tile-part's packet-header stream in [`walk_tiles`], the same role `PPT`
+/// plays for a single tile-part.
+///
+/// A `PPM` that carries only `Zppm` (`Lppm` 3) is refused, as OpenJPEG's
+/// `opj_j2k_read_ppm` refuses it, so a `PPM` present gives at least one chunk
+/// or an error. The walks key their `PPT` check on the chunks being there,
+/// which is then the same as a `PPM` being present.
 fn decode_ppm_chunks(mut markers: Vec<(u8, Vec<u8>)>) -> Result<Vec<Vec<u8>>> {
     if markers.is_empty() {
         return Ok(Vec::new());
@@ -3205,14 +3233,30 @@ fn decode_ppm_chunks(mut markers: Vec<(u8, Vec<u8>)>) -> Result<Vec<Vec<u8>>> {
             "duplicate `PPM` index `Zppm` in the main header",
         ));
     }
+    // `Lppm` is at least 4: `Zppm` and one byte of `Nppm` or `Ippm`. Judged
+    // after the records below, so a fault in them is still the one reported.
+    let short = markers
+        .iter()
+        .find(|(_, bytes)| bytes.is_empty())
+        .map(|&(zppm, _)| zppm);
     let joined: Vec<u8> = markers.into_iter().flat_map(|(_, bytes)| bytes).collect();
 
-    let mut cur = Cursor::new(&joined);
+    let mut cur = Cursor::at(&joined, 0);
     let mut chunks = Vec::new();
     while cur.remaining() > 0 {
         // Nppm: the byte count of this tile-part's packet headers (may be 0).
-        let nppm = cur.u32()? as usize;
-        chunks.push(cur.take(nppm)?.to_vec());
+        let chunk = cur
+            .u32()
+            .and_then(|nppm| cur.take(nppm as usize))
+            .map_err(|_| {
+                Error::codestream("a `PPM` packet-header chunk runs past the `PPM` payload")
+            })?;
+        chunks.push(chunk.to_vec());
+    }
+    if let Some(zppm) = short {
+        return Err(Error::marker(format!(
+            "`PPM` with `Zppm` {zppm} carries no `Nppm` or `Ippm` byte; `Lppm` must be at least 4"
+        )));
     }
     Ok(chunks)
 }
@@ -3251,9 +3295,7 @@ fn decode_quant(mut b: Cursor<'_>, origin: &str) -> Result<Qcd> {
         // the exponent, mantissa is 0.
         QuantStyle::None => {
             if b.remaining() == 0 {
-                return Err(Error::codestream(format!(
-                    "{origin} carries no step entries"
-                )));
+                return Err(Error::marker(format!("{origin} carries no step entries")));
             }
             while b.remaining() > 0 {
                 let v = b.u8()?;
@@ -3266,12 +3308,10 @@ fn decode_quant(mut b: Cursor<'_>, origin: &str) -> Result<Qcd> {
         // Derived signals one entry (LL); expounded one per subband.
         QuantStyle::ScalarDerived | QuantStyle::ScalarExpounded => {
             if b.remaining() == 0 || !b.remaining().is_multiple_of(2) {
-                return Err(Error::codestream(format!(
-                    "{origin} step table is truncated"
-                )));
+                return Err(Error::marker(format!("{origin} step table is truncated")));
             }
             if style == QuantStyle::ScalarDerived && b.remaining() != 2 {
-                return Err(Error::codestream(format!(
+                return Err(Error::marker(format!(
                     "derived {origin} must carry exactly one step entry"
                 )));
             }
@@ -3299,28 +3339,43 @@ fn decode_quant(mut b: Cursor<'_>, origin: &str) -> Result<Qcd> {
 fn segment<'a>(cur: &mut Cursor<'a>) -> Result<Cursor<'a>> {
     let len = cur.u16()? as usize;
     if len < 2 {
-        return Err(Error::codestream("marker segment length below 2"));
+        return Err(Error::marker("marker segment length below 2"));
     }
     let body = cur.take(len - 2)?;
     Ok(Cursor::new(body))
 }
 
-/// Bounds-checked big-endian byte cursor. Every read maps an overrun to
-/// [`Error::Codestream`] so truncation is a typed error, never a panic.
+/// Bounds-checked big-endian byte cursor, so an overrun is a typed error,
+/// never a panic. Over one marker segment's body ([`Cursor::new`]) an overrun
+/// is [`Error::Marker`]: the segment's length is too short for its fields.
+/// Over the input or the joined `PPM` payload ([`Cursor::at`]) it is
+/// [`Error::Codestream`]: the data runs out.
 struct Cursor<'a> {
     buf: &'a [u8],
     pos: usize,
+    /// Whether `buf` is one marker segment's body.
+    body: bool,
 }
 
 impl<'a> Cursor<'a> {
+    /// A cursor over the body of one marker segment.
     fn new(buf: &'a [u8]) -> Self {
-        Self { buf, pos: 0 }
+        Self {
+            buf,
+            pos: 0,
+            body: true,
+        }
     }
 
-    /// A cursor over `buf` starting at an absolute offset, for resuming a walk
-    /// (e.g. tile-parts) from a position the main-header pass returned.
+    /// A cursor over the input (or the joined `PPM` payload) starting at an
+    /// absolute offset, for walking the main header or resuming a walk (e.g.
+    /// tile-parts) from a position the main-header pass returned.
     fn at(buf: &'a [u8], pos: usize) -> Self {
-        Self { buf, pos }
+        Self {
+            buf,
+            pos,
+            body: false,
+        }
     }
 
     fn remaining(&self) -> usize {
@@ -3329,7 +3384,11 @@ impl<'a> Cursor<'a> {
 
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         if self.remaining() < n {
-            return Err(Error::codestream("truncated marker segment"));
+            return Err(if self.body {
+                Error::marker("truncated marker segment")
+            } else {
+                Error::codestream("truncated marker segment")
+            });
         }
         let slice = &self.buf[self.pos..self.pos + n];
         self.pos += n;
@@ -3354,7 +3413,7 @@ impl<'a> Cursor<'a> {
     /// the declared length and the field layout disagree.
     fn expect_consumed(&self, marker: &str) -> Result<()> {
         if self.remaining() != 0 {
-            return Err(Error::codestream(format!(
+            return Err(Error::marker(format!(
                 "{marker} segment has {} unexpected trailing byte(s)",
                 self.remaining()
             )));
