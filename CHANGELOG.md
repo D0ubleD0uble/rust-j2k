@@ -143,7 +143,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WorkLimit::Raised` factor that admits its code-blocks too, and the
   message says the code-blocks are over. It named the factor for the
   precincts alone, so a tile whose code-blocks need more took a second
-  refusal and retry. `read_header_with`, `decode_with` and
+  refusal and retry. Where the code-blocks need a sample limit past what
+  the target can address, the tile is refused as `LimitKind::AddressSpace`
+  at once. A tile refusal that needs more than `Raised(u32::MAX)` allows
+  names `WorkLimit::Unlimited`, where it named `Raised(u32::MAX)`, which
+  did not admit the tile. `read_header_with`, `decode_with` and
   `IncrementalDecoder` name the same factor (#575).
 - The `LimitKind::PocVolumes` docs no longer name a case no caller sees
   (more packets than the decoder tracks): the kind is for more than 32
