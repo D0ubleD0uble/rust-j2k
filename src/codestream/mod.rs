@@ -1218,15 +1218,13 @@ fn walk_tiles<'a>(
         // Packed packet headers append across the tile's parts in TPsot order
         // (which is arrival order, enforced above), matching the body order.
         // They come from `PPT` (this tile-part's own markers) or `PPM` (the main
-        // header, one chunk per tile-part in codestream order) — never both for
-        // the same packets, so a codestream carrying each is out of subset.
+        // header, one chunk per tile-part in codestream order). A.7.4 disallows
+        // `PPT` once `PPM` is present, so a codestream carrying both is malformed.
         if ppm.is_empty() {
             tile.packed_headers.extend(packed);
         } else {
             if !packed.is_empty() {
-                return Err(Error::unsupported(
-                    "a codestream carrying both `PPM` and `PPT` packed headers is not decoded",
-                ));
+                return Err(both_packed_headers());
             }
             let chunk = ppm.get(ppm_seq).ok_or_else(|| {
                 Error::codestream(
@@ -1614,6 +1612,12 @@ fn check_restatement(
     Ok(())
 }
 
+/// A codestream carrying `PPT` beside a `PPM`, which A.7.4 and A.7.5
+/// disallow. The fault walk gives it too, so it is built in one place.
+pub(super) fn both_packed_headers() -> Error {
+    Error::codestream("a codestream carrying both `PPM` and `PPT` packed headers is malformed")
+}
+
 /// Read one tile-part header: the markers between its `SOT` segment and its
 /// `SOD` (A.4.2). The cursor is left on the first byte of the packet data.
 ///
@@ -1681,13 +1685,24 @@ fn read_tile_part_header(
                 let ippt = body.take(body.remaining())?;
                 ppt.push((zppt, ippt.to_vec()));
             }
-            // These are legal markers, but not here: TLM and PLM are
-            // main-header-only (A.7.1, A.7.2), and SOP/EPH delimit packets
-            // after SOD. In a tile-part header they are a malformed
+            // These are legal markers, but not here (Table A.2): SIZ, TLM,
+            // PLM, PPM and CRG are main-header-only, SOP and EPH delimit
+            // packets after SOD, and SOC, SOT and EOC delimit the codestream
+            // and its tile-parts. In a tile-part header they are a malformed
             // codestream, not a missing feature.
-            marker::TLM | marker::PLM | marker::SOP | marker::EPH => {
+            marker::SIZ
+            | marker::TLM
+            | marker::PLM
+            | marker::PPM
+            | marker::CRG
+            | marker::SOP
+            | marker::EPH
+            | marker::SOC
+            | marker::SOT
+            | marker::EOC => {
                 return Err(Error::codestream(format!(
-                    "marker {m:#06X} is not permitted in a tile-part header"
+                    "marker {} is not permitted in a tile-part header",
+                    marker::describe(m)
                 )));
             }
             // CAP and CPF describe the whole codestream, so they belong in the
@@ -1700,9 +1715,33 @@ fn read_tile_part_header(
                     marker::describe(m)
                 )));
             }
+            // The rest map as in the main header (`parse_main_header`): a
+            // Part 2 marker and an unrecognized one are valid syntax this
+            // decoder does not read.
+            code if marker::PART2.contains(&code) => {
+                return Err(Error::unsupported(format!(
+                    "{} is a JPEG 2000 Part 2 marker, outside the Part 1 subset",
+                    marker::describe(code)
+                )));
+            }
+            // A.1.3 says a decoder skips the reserved segment-less markers,
+            // and the main header does. OpenJPEG 2.5.0 refuses one in a
+            // tile-part header (it reads a length after it), so it is refused
+            // here too: as valid syntax not decoded, not as damage.
+            code if marker::RESERVED_NO_SEGMENT.contains(&code) => {
+                return Err(Error::unsupported(format!(
+                    "reserved marker {code:#06X} in a tile-part header is not decoded"
+                )));
+            }
+            code if marker::is_marker(code) => {
+                return Err(Error::unsupported(format!(
+                    "unrecognized marker {code:#06X} in a tile-part header"
+                )));
+            }
+            // Not a marker at all: the header lost sync.
             other => {
                 return Err(Error::codestream(format!(
-                    "unexpected marker {other:#06X} in tile-part header"
+                    "expected a marker in a tile-part header, found {other:#06X}"
                 )));
             }
         }
@@ -2066,14 +2105,13 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
                 }
             }
 
-            // Valid markers the decoded subset does not yet cover. Rejected
-            // rather than skipped: each one changes how the codestream is
-            // interpreted, so ignoring it would silently decode the wrong
-            // image. PPT/SOP/EPH belong after SOD or in a tile-part header,
-            // not the main one.
+            // PPT belongs in a tile-part header, and SOP and EPH in the
+            // packet data or the packed headers (Table A.2). Like PLT, in the
+            // main header they are a malformed codestream, not a missing
+            // feature.
             marker::PPT | marker::SOP | marker::EPH => {
-                return Err(Error::unsupported(format!(
-                    "marker {} is outside the decoded subset",
+                return Err(Error::codestream(format!(
+                    "{} is not permitted in the main header",
                     marker::describe(seg.code)
                 )));
             }
@@ -2202,11 +2240,14 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
         // wavelet is per component once COC is in play: 5/3 is RCT (integers),
         // 9/7 is ICT (floats). The three components must share it — a mix
         // reconstructs some as integers and some as floats and describes a
-        // transform that does not exist. OpenJPEG reads the type off component 0.
+        // transform that does not exist: G.2 allows RCT only with the 5/3
+        // and G.3 ICT only with the 9/7, so a mix is an illegal `COD`/`COC`
+        // pairing, as `mct::check_geometry`'s faults are. OpenJPEG reads the
+        // type off component 0.
         let transform = header.components[0].coding.transform;
         for (index, params) in header.components.iter().take(3).enumerate() {
             if params.coding.transform != transform {
-                return Err(Error::unsupported(format!(
+                return Err(Error::marker(format!(
                     "`COD` signals the color transform but component {index} uses a different \
                      wavelet than component 0; the transform is undefined over a mix"
                 )));

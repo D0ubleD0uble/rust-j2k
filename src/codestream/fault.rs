@@ -25,8 +25,9 @@ use std::collections::hash_map::Entry;
 
 use super::{
     Cursor, Error, MAX_POC_VOLUMES, Overrides, ParsedHeader, Restated, Result, TileHeader,
-    check_poc_budget, check_restatement, check_tile_in_full, count_is_one_short, decode_sot,
-    marker, read_tile_part_header, read_u16, segment, sot_at, tile_overrides_are_valid,
+    both_packed_headers, check_poc_budget, check_restatement, check_tile_in_full,
+    count_is_one_short, decode_sot, marker, read_tile_part_header, read_u16, segment, sot_at,
+    tile_overrides_are_valid,
 };
 
 /// What the walk keeps of one tile, 6 bytes.
@@ -302,9 +303,7 @@ fn walk(
         // passed the budget, so the budget is not checked again.
         if !ppm.is_empty() {
             if packed_headers {
-                return Err(Error::unsupported(
-                    "a codestream carrying both `PPM` and `PPT` packed headers is not decoded",
-                ));
+                return Err(both_packed_headers());
             }
             if ppm_seq >= ppm.len() {
                 return Err(Error::codestream(
