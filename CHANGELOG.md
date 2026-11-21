@@ -273,7 +273,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   while `decode_with` refuses the file for the tile-parts before it counts
   any tile. To find the error it walks the tile-parts as the decode's
   parse does, keeping up to 10 bytes a tile (14 on an input of 4 GiB or
-  more) in place of the decode's tile records, plus 8 more a tile (16) once
+  more) in place of the decode's tile records, plus 4 more a tile (8) once
   a later tile-part restates a tile's own coding, and the coding of each
   tile that later tile-parts restate with headers that differ, up to about
   14 times those tiles' bytes: on a 235 MB file of

@@ -125,7 +125,7 @@ impl Offsets {
 /// gives none. It reads `parsed` in place and keeps no tile record: its
 /// heap is 6 bytes a tile of the grid, 4 more a tile (8 on an input of
 /// 4 GiB or more) once any tile's first tile-part carries a `COD`, `QCD`,
-/// `COC` or `QCC`, and 8 more a tile (16) once a later tile-part restates
+/// `COC` or `QCC`, and 4 more a tile (8) once a later tile-part restates
 /// one of those, plus one tile-part header at a time, plus, for each tile
 /// whose later tile-parts restate them with headers that differ, the coding
 /// its first tile-part gives ([`Walk::restating`]). A tile's header is
@@ -199,12 +199,14 @@ struct Walk {
     /// tiles flagged [`CODES`].
     firsts: Offsets,
     /// For each tile flagged [`CODES`], where the header of its first later
-    /// tile-part that restates a coding value starts and where it ends, in
-    /// two slots. That header was found to restate the first tile-part's
-    /// values, and [`check_restatement`] reads nothing of a later header but
-    /// the values it carries, so a later header of the same bytes restates
-    /// them too and is not checked again. Like [`firsts`](Self::firsts), it
-    /// notes bytes the walk has passed, which a longer input holds the same.
+    /// tile-part that restates a coding value starts. That header was found
+    /// to restate the first tile-part's values, and [`check_restatement`]
+    /// reads nothing of a later header but the values it carries, so a later
+    /// header whose bytes the input holds from there too restates them and
+    /// is not checked again. A header is read from its start to the first
+    /// `SOD` its markers reach, so those bytes are that header whole. Like
+    /// [`firsts`](Self::firsts), it notes bytes the walk has passed, which a
+    /// longer input holds the same.
     restates: Offsets,
     /// For each tile flagged [`CODES`] a later tile-part of which restates a
     /// coding value with a header of other bytes than the one
@@ -437,7 +439,8 @@ impl Walk {
                                 index,
                             )?;
                         } else {
-                            let (from, to) = (restates.get(2 * index), restates.get(2 * index + 1));
+                            let from = restates.get(index);
+                            let header = &bytes[header_at..cur.pos];
                             if from == 0 {
                                 let own = first_again()?;
                                 check_restatement(
@@ -448,9 +451,8 @@ impl Walk {
                                     &tile_header,
                                     index,
                                 )?;
-                                restates.set(2 * index, 2 * tile_count, header_at);
-                                restates.set(2 * index + 1, 2 * tile_count, cur.pos);
-                            } else if bytes[from..to] != bytes[header_at..cur.pos] {
+                                restates.set(index, tile_count, header_at);
+                            } else if !bytes[from..].starts_with(header) {
                                 let (own, restated) = match restating.entry(index) {
                                     Entry::Occupied(entry) => entry.into_mut(),
                                     Entry::Vacant(entry) => {

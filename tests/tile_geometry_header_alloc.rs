@@ -8,7 +8,8 @@
 //! components has a tile-part `COD` that brings it within, the peak is one
 //! tile's coding parameters, however many tiles there are. Where a tile is
 //! refused, the read walks every tile-part for the fault the decode gives
-//! first, and holds about 10 bytes a tile for that walk.
+//! first, and holds about 10 bytes a tile for that walk, 14 where later
+//! tile-parts restate the tiles' own coding.
 //!
 //! The peak is measured with a counting global allocator, so this file holds a
 //! single test: a second one running in parallel would count into the same
@@ -181,8 +182,9 @@ fn the_header_read_holds_no_tile_data() {
         assert_eq!(matches!(error, Error::Limit(_)), !fault, "{error:?}");
     }
     // The same with a second tile-part for each tile that restates its
-    // `COD`: each restatement reads the tile's short first header again
-    // rather than keep its coding, so the peak is as above.
+    // `COD`: the walk notes where each restating header starts, 4 more
+    // bytes a tile, and keeps no tile's coding, as no tile restates it with
+    // two headers that differ.
     for strict in [true, false] {
         let options = last.clone().with_strict(strict);
         let bytes = most_tiles_with(u16::MAX - 1, true, EOC);
@@ -190,7 +192,7 @@ fn the_header_read_holds_no_tile_data() {
         eprintln!(
             "{tiles} tiles restated, the last refused, strict {strict}: {peak} bytes at the peak"
         );
-        assert!(peak < PEAK_BYTES + 11 * tiles, "{peak} bytes");
+        assert!(peak < PEAK_BYTES + 15 * tiles, "{peak} bytes");
         assert!(matches!(error, Error::Limit(_)), "{error:?}");
     }
 }

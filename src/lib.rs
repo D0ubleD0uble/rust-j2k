@@ -459,7 +459,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// tile-parts, under a millisecond with no tile over a cap, and 63 ms for
 /// 1000 tiles of 4096 components, each with a tile-part `COD`. A refusal
 /// or a stop at the budget costs that walk of the tile-parts on top, with
-/// up to 18 bytes of heap a tile (30 on an input of 4 GiB or more), and,
+/// up to 14 bytes of heap a tile (22 on an input of 4 GiB or more), and,
 /// for each tile whose later tile-parts restate the coding of its first
 /// with headers that differ, that coding, up to about 14 times the bytes
 /// of those tiles' tile-parts: 240 ms and 640 KiB in release on that

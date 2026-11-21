@@ -504,7 +504,7 @@ place of the decode's tile records (up to about 52 times the input plus
 4 more for every tile (8 on an input of 4 GiB or more). Where a later
 tile-part restates a coding value of the tile's first tile-part, it reads
 that header again, at most twice a tile. The first time, it notes where
-the restating header lies, 8 more bytes for every tile (16 on an input of
+the restating header lies, 4 more bytes for every tile (8 on an input of
 4 GiB or more), and a later header of the same bytes is not checked
 again. The second time, at a restating header of other bytes, the coding
 it reads is kept for the tile's later restatements: about a kilobyte of
@@ -535,8 +535,8 @@ a tile for the tiles the selection reads, and 8 bytes a tile for the
 offsets, except where the count refuses a tile, stops at a budget, or with
 `strict` on finds a tile with no tile-part: that costs the walk for the
 decode's error too: one more pass over the tile-parts, each restated
-tile's first header read at most twice more, and up to 18 bytes a tile
-(30 on an input of 4 GiB or more) plus the coding kept for the tiles
+tile's first header read at most twice more, and up to 14 bytes a tile
+(22 on an input of 4 GiB or more) plus the coding kept for the tiles
 restated with headers that differ. Where each of
 254 later tile-parts
 restates a `COD` over a first tile-part header of 2^18 empty `COM`s, a
