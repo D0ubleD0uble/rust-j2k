@@ -320,27 +320,36 @@ needs (`LimitDetail::refused_at`). `DecodeOptions::with_retry` sets that limit
 for you:
 
 ```rust
-use rust_j2k::{DecodeOptions, Error, Image, decode_with};
+use rust_j2k::{DecodeOptions, Error, Image, WorkLimit, decode_with};
 
+/// For files you trust: each retry decodes again and can ask for more, and a
+/// 100-byte file can name a factor of 8 or more. This loop stops at
+/// `MAX_FACTOR` times the default, here 4 x 2^29 samples (8 GiB of output)
+/// for a small file. Pick the factor you can afford.
 fn decode_raising_limits(bytes: &[u8]) -> Result<Image, Error> {
+    const MAX_FACTOR: u32 = 4;
     let mut options = DecodeOptions::default();
     // A few retries; each one can ask for more.
     for _ in 0..4 {
-        match decode_with(bytes, &options) {
-            Err(Error::Limit(limit)) => match options.with_retry(&limit) {
-                Some(raised) => options = raised,
-                // No option raises this limit, or it gave no factor.
-                None => return Err(Error::Limit(limit)),
-            },
+        let limit = match decode_with(bytes, &options) {
+            Err(Error::Limit(limit)) => limit,
             result => return result,
-        }
+        };
+        options = match (limit.retry_with(), options.with_retry(&limit)) {
+            (Some(WorkLimit::Raised(factor)), Some(raised)) if factor <= MAX_FACTOR => raised,
+            // No option raises this limit, it gave no factor, or the factor
+            // is past the maximum.
+            _ => return Err(Error::Limit(limit)),
+        };
     }
     decode_with(bytes, &options)
 }
 ```
 
-A retry can be refused again, by the same limit or another, so the loop stops
-after a few. The [`WorkLimit`
+For files from outside, don't retry: set `sample_limit` to `WorkLimit::AtMost(n)`
+and run each decode under a timeout (see [Running a decode
+service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service)). A retry can be refused again,
+by the same limit or another, so the loop stops after a few. The [`WorkLimit`
 docs](https://docs.rs/rust-j2k/latest/rust_j2k/enum.WorkLimit.html) say how
 far to trust the factor.
 

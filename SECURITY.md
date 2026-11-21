@@ -67,19 +67,10 @@ one for each 512 and each 2048 samples it allows, and at least 2^20 and 2^18.
 Their bookkeeping comes to at most about a third of the output the same limit
 allows past the 2^29 floor, the same share at every size (see "Code-blocks
 and precincts per tile" in [`docs/resource-bounds.md`](docs/resource-bounds.md)).
-For a ceiling that does not grow with the input, set `DecodeOptions::sample_limit` to
-`WorkLimit::AtMost(n)`: the decode then holds at most `n` samples, `4·n` bytes
-of output, whatever the input's length or padding. The sample buffers peak at
-no more than about 3.2 times that (a square tile measured 1.35, resident).
-Other memory is on top: the input itself, and the parse of the tile-parts,
-which keeps a record of under 1 KiB for each tile the input carries, at most
-about 52 times the input plus 128 KiB (see "The sample limit" in
-[`docs/resource-bounds.md`](docs/resource-bounds.md)). Bound the input's size
-too, as the decode holds it. It counts what the default limit counts: every
-tile a region reads, in every component, a palette's expanded channels and sRGB
-output. `read_header_with` with the same options refuses the file before any
-tile is read. A file past a limit is refused with `Error::Limit`, which is the
-guard working, not a bug. These figures cover the one-shot decode functions. An
+For a ceiling that does not grow with the input, and the other limits to put
+around a decode, see [Running a decode service](#running-a-decode-service). A
+file past a limit is refused with `Error::Limit`, which is the guard working,
+not a bug. These figures cover the one-shot decode functions. An
 `IncrementalDecoder` keeps per-tile state between calls and can hold up to
 about three times one decode's peak, plus the bytes fed and a table of 24 bytes
 per tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see "Work
@@ -98,3 +89,75 @@ dependencies, Rust or C, so no third-party codec brings its own memory-safety
 bugs. And it is fuzzed: cargo-fuzz targets feed arbitrary bytes to the public
 functions and to each decoding stage, and CI runs a short fuzz session on
 every pull request. [fuzz/README.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/fuzz/README.md) lists the targets.
+
+## Running a decode service
+
+The limits above bound each decode on its own, and none of them is a clock.
+To decode files from outside, put these around the decode. Each figure is
+labeled measured or estimated.
+
+1. **Cap the input.** Bound the size of the input you accept, measured in
+   memory after any decompression. The decode holds it, padding counts as
+   input and raises the default sample limit, and the tile-part parse keeps a
+   record of under 1 KiB for each tile the input carries, at most about 52
+   times the input plus 128 KiB (see "The sample limit" in
+   [`docs/resource-bounds.md`](docs/resource-bounds.md)).
+2. **Set a fixed sample ceiling.** Set `DecodeOptions::sample_limit` to
+   `WorkLimit::AtMost(n)`. The decode then holds at most `n` samples, `4·n`
+   bytes of output, whatever the input's length or padding. The sample
+   buffers peak at no more than about 3.2 times that (a square tile
+   measured 1.35, resident), plus the input and the tile records above.
+   `AtMost(2^26)` is 256 MiB of output and sample buffers of at most about
+   820 MiB. A refusal under it is an `Error::Limit` with no retry, since you
+   set the ceiling. The code-blocks and precincts a tile may hold are set
+   from `n` too.
+   - The count is the decode's own: every component the codestream codes, in
+     every tile a region reads, a palette's expanded channels and sRGB
+     output. So you need no region arithmetic, and no
+     `with_raw_channels(true)`.
+   - Do not count from `Header::components`. It lists the output channels,
+     and a palettized JP2 file can map one of many codestream components.
+     Measured (method below): a 15,069-byte JP2 file of 31 components of
+     4096 x 4096 in 64 tiles of 512, whose `cmap` maps one of them, reads as
+     one channel of 16.7 M samples. The decode at the defaults peaks at
+     2.03 GiB. `AtMost(2^28)` refuses it from the `SIZ`, which counts
+     520 M samples, in under a millisecond, in `read_header_with` and in
+     `decode_with` alike. `tests/sample_limit.rs`
+     (`at_most_holds_the_codestream_and_the_palette_expansion`) builds that
+     shape and asserts both refusals.
+   - `read_header_with` under the same options is a cheap pre-check, not a
+     gate. It counts the samples as the decode does, and the tile caps where
+     the main header shows them. A tile-part header, and tiles past its step
+     budget, can take a tile over a cap that it admits, so keep the limits on
+     the decode (the exceptions are listed on `read_header_with`).
+3. **Run each decode under a wall-clock timeout,** in its own process, or
+   in a thread you can afford to leave running. The library has no deadline
+   or cancel call, and a thread cannot be stopped from outside. The work
+   bounds make the time finite and let it grow with the input. Measured: a
+   228,378-byte codestream built to spend 97% of the code-block work bound
+   (one 16384 x 16384 tile, 27 passes in every code-block, from
+   `t1bomb(16384, 6, 27)` in `scripts/gen-tier1-work-bound-fixtures.py`)
+   decodes at the defaults in 27 s on one core, in a release build, on a
+   machine at a load of about 9. Estimated from the sample-pass rates in
+   `docs/resource-bounds.md` (2^15 passes a byte of tile data at 3 to 8 ns):
+   about 0.5 s plus up to 0.25 ms for each byte of tile data, so about 115 s
+   for a 456 KB file on the slowest data. Padding adds about 175 ns a byte,
+   measured. `Raised(n)` on a work bound multiplies the time by up to `n`.
+   Pick the timeout from your largest legitimate file, not from this
+   figure.
+4. **Size memory as concurrency times peak.** The bounds hold for each
+   decode: nothing is shared between decodes, threads or decoders. So
+   reserve one decode's peak (with its input) for each decode you run at
+   once, and for each live `IncrementalDecoder`, up to about three times one
+   decode's peak plus the bytes fed it, held between calls (see "Work and
+   memory" in
+   [`docs/incremental-decoding.md`](docs/incremental-decoding.md), which also
+   says when a streaming preview gets its first image).
+
+To retry a refused file with higher limits, only do it for input you trust,
+and cap the factor (the README shows a loop that does).
+
+Method for the palette figures: `many_tiles_of_empty_packets(8, 512, 31)` from
+`tests/sample_limit.rs`, wrapped by its `palette_jp2` with one `cmap` entry,
+decoded by a release build of a ten-line program that calls `decode_with`,
+under `/usr/bin/time -f %M` (peak resident set).

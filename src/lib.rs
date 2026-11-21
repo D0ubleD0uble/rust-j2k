@@ -361,11 +361,16 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// Use [`read_header_with`] to read the header for other options.
 ///
 /// A readable header does not mean [`decode`] will succeed. The tile data is
-/// not read (except the tile-part headers of a tile over a cap on its
-/// code-blocks or precincts under the main header, and the packet headers of
-/// the last tile of a JP2 file whose tile-part has `Psot = 0`, both described
-/// on [`read_header_with`]), so it can still be damaged, unsupported, or past
-/// a work bound ([`Error::Limit`]).
+/// not read, so it can still be damaged, unsupported, or past a work bound
+/// ([`Error::Limit`]). The tile-part headers are read only in some cases.
+/// At the defaults (`strict` on) these are a tile over a cap on its
+/// code-blocks or precincts under the main header, and a refusal, a stop at
+/// the read's budget or a tile with no tile-part, where it walks every
+/// tile-part header as the decode's parse does. That walk keeps no tile
+/// record: its heap is about 10 bytes for each tile, plus the coding of
+/// restated long headers. The packet headers of the last tile of a JP2 file
+/// whose tile-part has `Psot = 0` are read too. All of it is described on
+/// [`read_header_with`].
 ///
 /// ```
 /// use rust_j2k::{read_header, Error};
@@ -955,26 +960,22 @@ pub struct DecodeOptions {
     /// address (`isize::MAX` bytes of samples) is still refused, with
     /// [`Error::Limit`]. Use it only for files from a source you trust.
     ///
-    /// [`read_header_with`] checks the same limit, so it refuses what the
-    /// decode would.
+    /// [`read_header_with`] checks the sample count as the decode does. It
+    /// checks the tile caps below only where the main header shows them (see
+    /// the exceptions on [`read_header_with`]), so run the decode under the
+    /// limits too.
     ///
     /// Padding counts as input, so a file can raise its own limit with
     /// `COM` segments, a JP2 `xml ` box or bytes after `EOC`. For a ceiling
     /// that does not grow with the input, use
     /// [`AtMost(n)`](WorkLimit::AtMost): the decode may hold at most `n`
-    /// samples, whatever the input's length. The output is then at most
-    /// `4 * n` bytes, and the sample buffers peak at no more than about 3.2
-    /// times that (a square tile measured 1.35, resident). Other memory is on
-    /// top: the input itself, and the parse of the tile-parts, which keeps a
-    /// record of under 1 KiB for each tile the input carries, at most about 52
-    /// times the input plus 128 KiB (see [the sample
-    /// limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)).
+    /// samples, whatever the input's length, and `4 * n` bytes of output.
     /// The palette expansion and sRGB output are checked against `n` too,
-    /// and so is every tile a region reads, and the code-blocks and
-    /// precincts a tile may hold are set from `n`. A refusal under it gives
-    /// no retry. [`read_header_with`] with the same options refuses the file
-    /// as the decode would, before any tile is read, so a server can check
-    /// a file with it first.
+    /// and so is every tile a region reads, in every component the
+    /// codestream codes. The code-blocks and precincts a tile may hold are
+    /// set from `n`. A refusal under it gives no retry. What else to bound
+    /// around a decode, with the memory and time figures, is in [Running a
+    /// decode service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service).
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with};
@@ -1182,8 +1183,8 @@ impl Default for DecodeOptions {
 ///   [`AtMost(n)`](WorkLimit::AtMost): at most `n` samples, `4 * n` bytes of
 ///   output, whatever the file's size or padding (see
 ///   [`DecodeOptions::sample_limit`]). A refusal under it gives no factor.
-///   Cap the input's size as well, as the decode holds it; the tile-part
-///   parse adds at most about 52 times the input plus 128 KiB.
+///   [Running a decode service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service) says what to
+///   bound besides.
 /// - For a higher work bound, use `Raised(n)` with an `n` of your own
 ///   choosing, the largest cost you will accept. It is a factor of the
 ///   default, which grows with the file. Read the factor from
@@ -1216,7 +1217,8 @@ impl Default for DecodeOptions {
 ///     Err(Error::Limit(limit)) => {
 ///         println!("refused: {limit}");
 ///         // The file is trusted here, so lift all three limits. To keep a
-///         // ceiling, use `WorkLimit::Raised(n)` for the one named instead.
+///         // bound, use `WorkLimit::Raised(n)`, a factor of the default, for
+///         // the one named instead.
 ///         let options = DecodeOptions::default()
 ///             .with_sample_limit(WorkLimit::Unlimited)
 ///             .with_code_block_work_limit(WorkLimit::Unlimited)
@@ -1401,7 +1403,8 @@ impl DecodeOptions {
     /// ```
     /// use rust_j2k::{DecodeOptions, WorkLimit};
     ///
-    /// // Up to 3 x 2^29 samples, enough for a 20000 x 20000 RGB image.
+    /// // 3 times the default: 3 x 2^29 samples for a small file, enough for a
+    /// // 20000 x 20000 RGB image, and more past 64 MiB of input.
     /// let options = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(3));
     /// assert_eq!(options.sample_limit, WorkLimit::Raised(3));
     /// ```
