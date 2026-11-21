@@ -14,7 +14,10 @@ use rust_j2k::{DecodeOptions, Image, ReportEntry, Result};
 ///   two, plus a piece for each row of tiles a window reads. Every tile-part
 ///   starts with the bytes `FF 90`, so their count bounds the first part.
 pub fn check(bytes: &[u8], options: &DecodeOptions, strict: &Result<Image>) {
-    let lenient = rust_j2k::decode_with(bytes, &options.clone().with_strict(false));
+    let lenient = super::inconsistent::checked(rust_j2k::decode_with(
+        bytes,
+        &options.clone().with_strict(false),
+    ));
     if let Ok(image) = strict {
         assert_eq!(image.report, rust_j2k::DecodeReport::default());
         let partial = lenient.as_ref().expect("strict decodes, so partial does");
@@ -79,7 +82,10 @@ fn window_rows(bytes: &[u8], options: &DecodeOptions) -> usize {
     let rust_j2k::Region::Window(window) = &options.region else {
         return 0;
     };
-    match rust_j2k::read_header_with(bytes, &options.clone().with_strict(false)) {
+    match super::inconsistent::checked(rust_j2k::read_header_with(
+        bytes,
+        &options.clone().with_strict(false),
+    )) {
         Ok(header) => {
             let grid = header.tiles;
             rows_read(window, grid.tile_height, grid.y_offset, grid.rows)

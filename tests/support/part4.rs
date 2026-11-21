@@ -396,7 +396,7 @@ pub fn grade_decode(
     // bad entry reports as a failure instead of aborting the whole harness.
     let options = rust_j2k::DecodeOptions::default().with_resolution_reduction(reduction);
     let decoded = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        rust_j2k::decode_with(bytes, &options)
+        super::inconsistent::checked(rust_j2k::decode_with(bytes, &options))
     }));
     let image = match decoded {
         Err(_) => return Grade::Failed("panicked (decode must return a typed error)".into()),

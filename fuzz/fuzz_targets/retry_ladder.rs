@@ -33,6 +33,10 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../../tests/support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
+
 #[path = "../common/budget.rs"]
 mod budget;
 
@@ -225,7 +229,7 @@ fuzz_target!(|input: &[u8]| {
         .with_strict(control >> 7 == 0);
     // `result` is held while the default decode runs.
     if budget::over(data, 2) {
-        if let Err(Error::Limit(limit)) = read_header_with(data, &options) {
+        if let Err(Error::Limit(limit)) = checked(read_header_with(data, &options)) {
             step(&options, &limit);
         }
         return;
@@ -236,7 +240,7 @@ fuzz_target!(|input: &[u8]| {
     let at_defaults = KINDS
         .into_iter()
         .all(|kind| *field(&options, kind) == WorkLimit::Default);
-    let mut result = decode_with(data, &options);
+    let mut result = checked(decode_with(data, &options));
     if matches!(options.sample_limit, WorkLimit::AtMost(_)) {
         // Below the default: a refusal by it is one step, and an image under
         // it is the image of the same options with the default sample limit.
@@ -252,7 +256,7 @@ fuzz_target!(|input: &[u8]| {
         }
         if let Ok(image) = &result {
             let uncapped = options.clone().with_sample_limit(WorkLimit::Default);
-            let reference = decode_with(data, &uncapped).unwrap_or_else(|e| {
+            let reference = checked(decode_with(data, &uncapped)).unwrap_or_else(|e| {
                 panic!("an image under a ceiling, the default sample limit gives {e:?}")
             });
             assert_eq!(
@@ -270,7 +274,7 @@ fuzz_target!(|input: &[u8]| {
     }
     // The decode under the default limits, when the options start above
     // them. At the defaults it is `result` before any step.
-    let default = (!at_defaults).then(|| decode_with(data, &defaults));
+    let default = (!at_defaults).then(|| checked(decode_with(data, &defaults)));
     let default_ok = default.as_ref().map_or(result.is_ok(), Result::is_ok);
     // Raising a limit never turns an image into an error. The options start
     // at or above the default limits, so when those decode, the first decode
@@ -302,7 +306,7 @@ fuzz_target!(|input: &[u8]| {
         // A refusal by the same limit again must name a larger factor:
         // `step` checks it on the next pass against the raised option.
         options = next;
-        result = decode_with(data, &options);
+        result = checked(decode_with(data, &options));
     }
     let Ok(image) = &result else {
         return;
@@ -322,7 +326,7 @@ fuzz_target!(|input: &[u8]| {
                 .with_sample_limit(WorkLimit::Unlimited)
                 .with_packet_work_limit(WorkLimit::Unlimited)
                 .with_code_block_work_limit(WorkLimit::Unlimited);
-            match decode_with(data, &unlimited) {
+            match checked(decode_with(data, &unlimited)) {
                 Ok(image) => image,
                 Err(e) => panic!("the ladder decodes, no limits give {e:?}"),
             }

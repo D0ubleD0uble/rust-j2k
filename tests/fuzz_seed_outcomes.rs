@@ -20,6 +20,8 @@
 //! `J2K_BLESS_SEED_OUTCOMES=1 cargo test --test fuzz_seed_outcomes`.
 //! The script needs `python3` (standard library only), run with `-I`.
 
+#[path = "support/inconsistent.rs"]
+mod inconsistent;
 #[path = "support/synth.rs"]
 mod synth;
 use rust_j2k::{ColorOutput, ColorSpace, DecodeOptions, Error, Image, decode_with};
@@ -109,6 +111,7 @@ fn describe(result: Result<Image, Error>) -> (bool, String) {
             (true, format!("ok {color} {}", image.components.len()))
         }
         Err(e) => {
+            inconsistent::assert_not_inconsistent(&e);
             let debug = format!("{e:?}");
             let variant = debug.split('(').next().unwrap();
             let text = e.to_string();

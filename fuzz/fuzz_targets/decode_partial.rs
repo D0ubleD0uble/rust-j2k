@@ -17,6 +17,10 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../../tests/support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
+
 #[path = "../common/budget.rs"]
 mod budget;
 #[path = "../common/partial.rs"]
@@ -44,10 +48,18 @@ fuzz_target!(|data: &[u8]| {
             corner(47) + 1 + corner(57),
         )));
     }
-    partial::check(data, &options, &rust_j2k::decode_with(data, &options));
+    partial::check(
+        data,
+        &options,
+        &checked(rust_j2k::decode_with(data, &options)),
+    );
     if data.len() > 1 && data.len() <= MAX_CUT_INPUT {
         let cut = &data[..(hash >> 1) as usize % data.len()];
-        partial::check(cut, &options, &rust_j2k::decode_with(cut, &options));
+        partial::check(
+            cut,
+            &options,
+            &checked(rust_j2k::decode_with(cut, &options)),
+        );
     }
 });
 

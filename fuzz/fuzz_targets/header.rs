@@ -41,6 +41,10 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../../tests/support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
+
 #[path = "../common/budget.rs"]
 mod budget;
 
@@ -80,7 +84,7 @@ fuzz_target!(|data: &[u8]| {
     // gets a full-decode comparison when any set reads.
     let headers: Vec<_> = option_sets
         .iter()
-        .map(|options| rust_j2k::read_header_with(data, options))
+        .map(|options| checked(rust_j2k::read_header_with(data, options)))
         .collect();
     let readable: Vec<usize> = (0..headers.len()).filter(|&i| headers[i].is_ok()).collect();
     let picked =
@@ -128,7 +132,7 @@ fn check(
             return;
         }
     }
-    let decoded = rust_j2k::decode_with(data, options);
+    let decoded = checked(rust_j2k::decode_with(data, options));
     match (&header, &decoded) {
         (Err(h), Err(d)) if decode_finds_first_in_a_lower_tile(data, options, h, d) => {}
         (Err(h), _) => assert_eq!(
@@ -207,17 +211,23 @@ fn decode_finds_first_in_a_lower_tile(
     }
     let debug = |result: rust_j2k::Result<rust_j2k::Image>| result.err().map(|e| format!("{e:?}"));
     let expected = Some(format!("{decode:?}"));
-    if debug(rust_j2k::decode_with(data, &lifted)) != expected {
+    if debug(checked(rust_j2k::decode_with(data, &lifted))) != expected {
         return false;
     }
     // The decode of T alone, under the options as given, refuses T as the
     // header does: the header's refusal is real, and not a bug of its own
     // (such as ignoring a tile-part `COD` that brings T within the caps).
-    let refused = debug(rust_j2k::decode_with(data, &tile_alone(options, tile)));
+    let refused = debug(checked(rust_j2k::decode_with(
+        data,
+        &tile_alone(options, tile),
+    )));
     if refused != Some(format!("{header:?}")) {
         return false;
     }
-    debug(rust_j2k::decode_with(data, &tile_alone(&lifted, tile))) != expected
+    debug(checked(rust_j2k::decode_with(
+        data,
+        &tile_alone(&lifted, tile),
+    ))) != expected
 }
 
 /// `options` for the decode of one tile alone, in the color the file codes.

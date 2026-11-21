@@ -73,6 +73,10 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../../tests/support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
+
 #[path = "../common/budget.rs"]
 mod budget;
 
@@ -129,7 +133,8 @@ fuzz_target!(|input: &[u8]| {
     // 12 * MAX_CHECKED_TRIES + 12 bounds, under 64.
     let mut options = budget::options(64).with_code_block_work_limit(limit);
     if control[0] & 4 != 0 {
-        options = options.with_max_quality_layers(Some(1 + u16::from(((control[0] & 0x7F) >> 3) % 3)));
+        options =
+            options.with_max_quality_layers(Some(1 + u16::from(((control[0] & 0x7F) >> 3) % 3)));
     }
     if control[0] & 0x20 != 0 {
         options = options.with_resolution_reduction(1);
@@ -186,7 +191,7 @@ fuzz_target!(|input: &[u8]| {
     options = options.with_components(subset);
     let changes = control[0] & 0x40 != 0;
     let mut lenient = options.clone().with_strict(false);
-    let Ok(mut decoder) = IncrementalDecoder::new(options.clone()) else {
+    let Ok(mut decoder) = checked(IncrementalDecoder::new(options.clone())) else {
         return;
     };
     let mut fed = 0;
@@ -209,7 +214,7 @@ fuzz_target!(|input: &[u8]| {
             }
         }
         let (spent, _) = incremental_code_block_work(&decoder);
-        let refine = decoder.refine();
+        let refine = checked(decoder.refine());
         let waiting = match &refine {
             Ok(Refined::Waiting(why)) => Some(why.clone()),
             _ => None,
@@ -240,7 +245,7 @@ fuzz_target!(|input: &[u8]| {
         }
         checks_left -= 1;
         if due {
-            let one_shot = decode_with(&data[..fed], &lenient);
+            let one_shot = checked(decode_with(&data[..fed], &lenient));
             let shape = one_shot.as_ref().map(|_| ()).map_err(Error::clone);
             let repeat_work = incremental_repeat_work(&decoder);
             if let Some(why) = &waiting {
@@ -294,9 +299,9 @@ fuzz_target!(|input: &[u8]| {
             }
             let zeroed;
             let (fresh, work) = if refined == Ok(None) && (bound.is_some() || repeats) {
-                let mut zero = IncrementalDecoder::new(options.clone()).unwrap();
+                let mut zero = checked(IncrementalDecoder::new(options.clone())).unwrap();
                 zero.feed(&data[..fed]);
-                zeroed = keyed(zero.refine().map(Refined::image));
+                zeroed = keyed(checked(zero.refine()).map(Refined::image));
                 assert_eq!(zeroed, expected, "{fed} bytes, nothing spent");
                 let (work, zero_bound) = incremental_code_block_work(&zero);
                 assert_eq!(zero_bound, bound, "{fed} bytes, nothing spent");
@@ -339,7 +344,7 @@ fuzz_target!(|input: &[u8]| {
                 let mut probe =
                     incremental_with_code_block_work_spent(options.clone(), spent).unwrap();
                 probe.feed(&data[..fed]);
-                let probe_refine = probe.refine();
+                let probe_refine = checked(probe.refine());
                 // The probe is the path that reaches the count past the
                 // cut, so its reason is checked too.
                 if let Ok(Refined::Waiting(why)) = &probe_refine {
@@ -357,11 +362,11 @@ fuzz_target!(|input: &[u8]| {
         match refined {
             Ok(None) => unreachable!("checked only when it decodes"),
             Ok(Some(image)) => {
-                let expected = keyed(decode_with(&data[..fed], &lenient));
+                let expected = keyed(checked(decode_with(&data[..fed], &lenient)));
                 assert_eq!(Ok(&image), expected.as_ref(), "{fed} bytes");
             }
             Err(error) => {
-                match decode_with(&data[..fed], &lenient) {
+                match checked(decode_with(&data[..fed], &lenient)) {
                     Err(expected) => {
                         assert_eq!(error, format!("{expected:?}"), "{fed} bytes");
                         assert!(
@@ -375,8 +380,8 @@ fuzz_target!(|input: &[u8]| {
             }
         }
     }
-    let finished = decoder.finish();
-    match decode_with(data, &options) {
+    let finished = checked(decoder.finish());
+    match checked(decode_with(data, &options)) {
         // A header cut short is a truncation once the input has ended.
         Err(Error::Incomplete(why)) => match finished {
             Err(Error::Codestream(m) | Error::FileFormat(m)) => {
@@ -492,9 +497,9 @@ fn change(decoder: &mut IncrementalDecoder, options: &mut DecodeOptions, hash: u
         _ => return false,
     };
     let set = match hash % 8 {
-        0 => decoder.set_resolution_reduction(wanted.resolution_reduction),
-        1 => decoder.set_max_quality_layers(wanted.max_quality_layers),
-        _ => decoder.set_region(wanted.region.clone()),
+        0 => checked(decoder.set_resolution_reduction(wanted.resolution_reduction)),
+        1 => checked(decoder.set_max_quality_layers(wanted.max_quality_layers)),
+        _ => checked(decoder.set_region(wanted.region.clone())),
     };
     let empty = matches!(wanted.region, Region::Window(w) if w.x0 >= w.x1 || w.y0 >= w.y1);
     if wanted.max_quality_layers == Some(0) || empty {

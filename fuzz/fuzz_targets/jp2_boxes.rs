@@ -46,6 +46,10 @@
 mod synth;
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../../tests/support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
+
 #[path = "../common/budget.rs"]
 mod budget;
 
@@ -107,7 +111,10 @@ fuzz_target!(|data: &[u8]| {
     let options = budget::options(4).with_resolution_reduction(reduction);
     // The codestream's own channels, whatever the palette and channel
     // definitions say.
-    let raw = rust_j2k::decode_with(&file, &options.clone().with_raw_channels(true));
+    let raw = checked(rust_j2k::decode_with(
+        &file,
+        &options.clone().with_raw_channels(true),
+    ));
     if let Ok(raw) = &raw {
         assert!(!raw.jp2.as_ref().is_some_and(|m| m.palette_applied));
         for c in &raw.components {
@@ -122,7 +129,7 @@ fuzz_target!(|data: &[u8]| {
     // conversions. The sRGB result may be a typed error, and its samples
     // differ from the first decode's when converted; these checks hold either
     // way.
-    let Ok(coded) = rust_j2k::decode_with(&file, &options) else {
+    let Ok(coded) = checked(rust_j2k::decode_with(&file, &options)) else {
         return;
     };
     // With no `pclr`, `cmap` or `cdef`, the default decode's channels are the
@@ -144,7 +151,7 @@ fuzz_target!(|data: &[u8]| {
         }
     }
     let options = options.with_color(rust_j2k::ColorOutput::Srgb);
-    let Ok(srgb) = rust_j2k::decode_with(&file, &options) else {
+    let Ok(srgb) = checked(rust_j2k::decode_with(&file, &options)) else {
         return;
     };
     let color = |i: &rust_j2k::Image| i.jp2.as_ref().map(|m| m.color.clone());
