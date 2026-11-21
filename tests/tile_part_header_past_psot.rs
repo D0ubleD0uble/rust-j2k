@@ -58,10 +58,23 @@ fn file(later: bool, before: &[u8], extra: &[u8]) -> (Vec<u8>, usize) {
 /// brings its tile within the cap. Tile 1's has `Psot` 14 and a header of
 /// a 37-byte `COM` and that `COD`. The second value is where it starts.
 fn over_the_cap() -> (Vec<u8>, usize) {
+    let mut bytes = main_over_the_cap();
+    let own = seg(0xFF52, &cod_body(1, 1, 4, 0));
+    bytes.extend(tile_part(0, 0, 1, &own, &[0; 4]));
+    let at = bytes.len();
+    bytes.extend(sot(1, 14, 0, 1));
+    bytes.extend(comment());
+    bytes.extend(own);
+    bytes.extend([0xFF, 0x93, 0, 0, 0, 0, 0xFF, 0xD9]);
+    (bytes, at)
+}
+
+/// The main header of [`over_the_cap`].
+fn main_over_the_cap() -> Vec<u8> {
     let mut main_cod = cod_body(1, 1, 4, 0);
     main_cod[0] = 1;
     main_cod.extend([0x00, 0x11]);
-    let mut bytes = [
+    [
         vec![0xFF, 0x4F],
         seg(
             0xFF51,
@@ -70,14 +83,29 @@ fn over_the_cap() -> (Vec<u8>, usize) {
         seg(0xFF52, &main_cod),
         seg(0xFF5C, &qcd_none_body(2, &[8; 4])),
     ]
-    .concat();
-    let own = seg(0xFF52, &cod_body(1, 1, 4, 0));
-    bytes.extend(tile_part(0, 0, 1, &own, &[0; 4]));
+    .concat()
+}
+
+/// The main header of [`over_the_cap`], then tile 0's tile-part with
+/// `Psot` 18 and a header of a `COD` that brings it within the cap and a
+/// `COM` that holds all of tile 1's tile-part, `SOT` to `SOD`, then `SOD`.
+/// The `Psot` chain goes from tile 0's tile-part on to tile 1's, which is
+/// over the cap. A prefix that ends inside the `COM` is cut in tile 0's
+/// header, so tile 1 is missing; `read_header_with` does not count it. The
+/// second value is where tile 0's tile-part starts.
+fn a_tile_inside_a_comment() -> (Vec<u8>, usize) {
+    let mut bytes = main_over_the_cap();
     let at = bytes.len();
-    bytes.extend(sot(1, 14, 0, 1));
-    bytes.extend(comment());
-    bytes.extend(own);
-    bytes.extend([0xFF, 0x93, 0, 0, 0, 0, 0xFF, 0xD9]);
+    let own = seg(0xFF52, &cod_body(1, 1, 4, 0));
+    let inner = tile_part(1, 0, 1, &[], &[]);
+    let mut body = vec![0, 1];
+    body.extend(&inner);
+    let psot = 12 + own.len() + 6;
+    bytes.extend(sot(0, psot as u32, 0, 1));
+    bytes.extend(&own);
+    bytes.extend(seg(0xFF64, &body));
+    assert_eq!(bytes[at + psot..at + psot + 2], [0xFF, 0x90]);
+    bytes.extend([0xFF, 0x93, 0xFF, 0xD9]);
     (bytes, at)
 }
 
@@ -110,6 +138,7 @@ fn cases() -> Vec<(&'static str, Vec<u8>, usize, usize, &'static str)> {
     // input holds its code, as when the tile-part ends inside the input.
     let (unknown, unknown_at) = file(false, &[0xFF, 0x7F, 0, 2], &[]);
     let (over, over_at) = over_the_cap();
+    let (inside, inside_at) = a_tile_inside_a_comment();
     vec![
         (
             "a COM",
@@ -149,6 +178,13 @@ fn cases() -> Vec<(&'static str, Vec<u8>, usize, usize, &'static str)> {
             65,
             "Codestream(\"tile 1 tile-part 0 declares `Psot` 14, shorter than its 65-byte header\")",
         ),
+        (
+            "a tile-part inside a COM",
+            inside,
+            inside_at,
+            48,
+            "Codestream(\"tile 0 tile-part 0 declares `Psot` 32, shorter than its 48-byte header\")",
+        ),
     ]
 }
 
@@ -158,10 +194,11 @@ fn options(strict: bool) -> DecodeOptions {
 
 /// With `strict` off, every prefix from the tile-part on decodes until one
 /// fails, the first that holds what the error depends on, and every longer
-/// one fails with the whole file's error. The
-/// header of each prefix, from `read_header_with` and from an
-/// `IncrementalDecoder` fed a byte at a time, agree, and an error from it
-/// is the decode's. The two tile-part walks agree on each prefix.
+/// one fails with the whole file's error. (A prefix that ends inside the
+/// first `SOT` is still `Incomplete`.) The header of each prefix, from
+/// `read_header_with` and from an `IncrementalDecoder` fed a byte at a
+/// time, agree, and an error from it is the decode's. The two tile-part
+/// walks agree on each prefix.
 #[test]
 fn a_prefix_moves_from_ok_to_one_final_error() {
     for (name, bytes, at, first, whole) in cases() {
@@ -174,6 +211,7 @@ fn a_prefix_moves_from_ok_to_one_final_error() {
             rust_j2k::fuzz::tile_parts_walks_agree(prefix);
             let decoded = decode_with(prefix, &options(false)).map(|_| ());
             match (decoded, &failed) {
+                (Err(Error::Incomplete(_)), None) if length < at + 12 => {}
                 (Ok(()), None) => {}
                 (Ok(()), Some(error)) => panic!("{name}, {length}: Ok after {error}"),
                 (Err(error), None) => {
@@ -208,7 +246,8 @@ fn a_prefix_moves_from_ok_to_one_final_error() {
 /// header. The unrecognized marker is refused before then.
 #[test]
 fn a_cut_past_psot_is_read_as_a_cut() {
-    for (name, bytes, at, _, _) in cases().into_iter().filter(|case| case.3 > 30) {
+    let cases = cases().into_iter();
+    for (name, bytes, at, _, _) in cases.filter(|case| case.3 > 30 && case.3 != 48) {
         for present in [14, 30] {
             let image = decode_with(&bytes[..at + present], &options(false))
                 .unwrap_or_else(|e| panic!("{name}, {present}: {e}"));

@@ -134,8 +134,12 @@ fn one_tile(end: &[u8]) -> Vec<u8> {
 /// seeds `tests/fixtures/header/strict_off_chain_fault.j2k` and
 /// `tests/fixtures/header/strict_off_one_tile_chain_fault.j2k`, the shape of
 /// the `header` fuzz finds of #504), or tile 0's header holds a `COD` cut
-/// short, a `COD` too short for its length field, or a `COM` that runs past
-/// the tile-part. Without the fault, the header read refuses the tile.
+/// short, a `COD` too short for its length field, or, with `strict` on, a
+/// `COM` that runs past the tile-part and the end of the input. With
+/// `strict` off, the input may be cut inside that `COM`, so the codestream
+/// ends there: tile 1, whose tile-part comes after it, is missing, and the
+/// header read and the decode leave it out. Without the fault, the header
+/// read refuses the tile.
 #[test]
 fn a_tile_parts_fault_comes_before_a_tile_refused() {
     let mut cut_cod = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
@@ -169,11 +173,6 @@ fn a_tile_parts_fault_comes_before_a_tile_refused() {
             1,
             "Marker(\"marker segment length below 2\")",
         ),
-        (
-            row(2, &long_com, &[(1, vec![])], EOC),
-            1,
-            "Codestream(\"truncated marker segment\")",
-        ),
     ];
     for (bytes, tile, fault) in &cases {
         for strict in [false, true] {
@@ -185,6 +184,18 @@ fn a_tile_parts_fault_comes_before_a_tile_refused() {
             assert_eq!(keyed(decode_with(bytes, &alone)), fault, "{strict}");
         }
     }
+    let cut = row(2, &long_com, &[(1, vec![])], EOC);
+    let strict = DecodeOptions::default();
+    let fault = Err("Codestream(\"truncated marker segment\")".to_string());
+    assert_eq!(keyed(read_header_with(&cut, &strict)), fault);
+    assert_eq!(keyed(decode_with(&cut, &strict)), fault);
+    let alone = strict.with_region(Region::Tile(1));
+    assert_eq!(keyed(decode_with(&cut, &alone)), fault);
+    let lenient = DecodeOptions::default().with_strict(false);
+    assert_eq!(keyed(read_header_with(&cut, &lenient)), Ok(()));
+    assert_eq!(keyed(decode_with(&cut, &lenient)), Ok(()));
+    let alone = lenient.with_region(Region::Tile(1));
+    assert_eq!(keyed(decode_with(&cut, &alone)), Ok(()));
     // The same shapes with the fault mended: the header read refuses the
     // tile.
     let mended = [(row(2, &[], &[(1, vec![])], EOC), 1), (one_tile(EOC), 0)];
