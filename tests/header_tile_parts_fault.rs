@@ -60,6 +60,25 @@ fn cod_over_the_cap() -> Vec<u8> {
     synth::seg(0xFF52, &cod)
 }
 
+/// That `header` refuses tile `tile` over the precinct cap: `TilePrecincts`
+/// on a 64-bit target, `AddressSpace` on a 32-bit one, where the sample limit
+/// that would admit the tile is past what the target can address. The message
+/// names the tile on both. That pins today's behavior, not a promise: a later
+/// release may give a 32-bit target the same kind.
+fn assert_tile_refused<T: std::fmt::Debug>(header: &Result<T, Error>, tile: u32, context: &str) {
+    let kind = if cfg!(target_pointer_width = "64") {
+        LimitKind::TilePrecincts
+    } else {
+        LimitKind::AddressSpace
+    };
+    let prefix = format!("tile {tile} holds ");
+    assert!(
+        matches!(header, Err(Error::Limit(limit))
+            if limit.kind() == kind && limit.message().starts_with(&prefix)),
+        "{context}: {header:?}"
+    );
+}
+
 const EOC: &[u8] = &[0xFF, 0xD9];
 
 /// Tile 1 refused under its own header and tile 2 missing (the seed
@@ -89,12 +108,7 @@ fn a_missing_tile_comes_before_a_tile_its_own_header_refuses() {
 
         let lenient = options.with_strict(false);
         let header = read_header_with(&bytes, &lenient);
-        assert!(
-            matches!(&header, Err(Error::Limit(limit))
-                if limit.kind() == LimitKind::TilePrecincts
-                    && limit.message().starts_with("tile 1 holds ")),
-            "{header:?}"
-        );
+        assert_tile_refused(&header, 1, "strict off");
         assert_eq!(keyed(header), keyed(decode_with(&bytes, &lenient)));
     }
 }
@@ -172,13 +186,7 @@ fn with_strict_off_a_tile_parts_fault_can_follow_a_tile_refused() {
     for (bytes, tile, fault) in &cases {
         let lenient = DecodeOptions::default().with_strict(false);
         let header = read_header_with(bytes, &lenient);
-        let refused = format!("tile {tile} holds ");
-        assert!(
-            matches!(&header, Err(Error::Limit(limit))
-                if limit.kind() == LimitKind::TilePrecincts
-                    && limit.message().starts_with(&refused)),
-            "{fault}: {header:?}"
-        );
+        assert_tile_refused(&header, *tile, fault);
         assert_eq!(keyed(decode_with(bytes, &lenient)), Err(fault.to_string()));
         let alone = lenient.clone().with_region(Region::Tile(*tile));
         assert_eq!(keyed(decode_with(bytes, &alone)), Err(fault.to_string()));
@@ -210,12 +218,7 @@ fn a_missing_tile_after_a_tile_over_a_cap_comes_first() {
     assert_eq!(keyed(header), keyed(decode_with(bytes, &strict)));
     let lenient = strict.with_strict(false);
     let header = read_header_with(bytes, &lenient);
-    assert!(
-        matches!(&header, Err(Error::Limit(limit))
-            if limit.kind() == LimitKind::TilePrecincts
-                && limit.message().starts_with("tile 0 holds ")),
-        "{header:?}"
-    );
+    assert_tile_refused(&header, 0, "strict off");
     assert_eq!(keyed(header), keyed(decode_with(bytes, &lenient)));
 }
 
@@ -234,12 +237,7 @@ fn a_strict_only_fault_can_come_before_the_tile_parts_fault() {
     let chain = "Codestream(\"expected `SOT` or `EOC` after a tile-part, found 0x0000\")";
     let lenient = DecodeOptions::default().with_strict(false);
     let header = read_header_with(bytes, &lenient);
-    assert!(
-        matches!(&header, Err(Error::Limit(limit))
-            if limit.kind() == LimitKind::TilePrecincts
-                && limit.message().starts_with("tile 1 holds ")),
-        "{header:?}"
-    );
+    assert_tile_refused(&header, 1, "strict off");
     assert_eq!(keyed(decode_with(bytes, &lenient)), Err(chain.to_string()));
     for tile in 0..2 {
         let alone = lenient.clone().with_region(Region::Tile(tile));
