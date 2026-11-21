@@ -18,7 +18,9 @@
 //!   except where the header refuses a tile over a cap, or a tile whose own
 //!   header has fewer levels than the reduction, and the decode finds a
 //!   fault or a work bound in a lower tile's data first, which only decoding
-//!   can see (`decode_finds_first_in_a_lower_tile`);
+//!   can see (`decode_finds_first_in_a_lower_tile`). That excuse holds only
+//!   if decoding that tile alone (`Region::Tile`) gives the header's error
+//!   too, so a header that refuses a tile the decode accepts is still caught;
 //! - when `decode_with` succeeds, `read_header_with` reports the decoded
 //!   image's area, each channel's format, and the same JP2 metadata.
 //!
@@ -168,10 +170,15 @@ fn check(
 ///   does not decide it: for a tile cap, by the retry it names (the options
 ///   as they are where none raises it); for a reduction, at reduction 0. For
 ///   an `AddressSpace` refusal this is vacuous: it names no retry, so the
-///   lifted decode is the decode itself, and the rule rests on the next
-///   check, the decode of T alone.
-/// - The decode of T alone does not give it, so it lies in the other tiles'
-///   data and not in what every decode reads, such as the tile-parts.
+///   lifted decode is the decode itself, and the rule rests on the next two
+///   checks, the decodes of T alone.
+/// - The decode of T alone, under the options as given, gives exactly the
+///   header's error, so the header's refusal of T is the decode's too. A
+///   header that refuses a tile the decode of that tile accepts is a bug that
+///   a fault in another tile's data must not hide.
+/// - The decode of T alone, with T's refusal lifted, does not give `decode`,
+///   so it lies in the other tiles' data and not in what every decode reads,
+///   such as the tile-parts.
 fn decode_finds_first_in_a_lower_tile(
     data: &[u8],
     options: &rust_j2k::DecodeOptions,
@@ -221,7 +228,18 @@ fn decode_finds_first_in_a_lower_tile(
     if debug(rust_j2k::decode_with(data, &lifted)) != expected {
         return false;
     }
-    let alone = lifted.with_region(rust_j2k::Region::Tile(tile));
+    // The decode of T alone, under the options as given, refuses T as the
+    // header does: the header's refusal is real, and not a bug of its own
+    // (such as ignoring a tile-part `COD` that brings T within the caps).
+    let region = rust_j2k::Region::Tile(tile);
+    let refused = debug(rust_j2k::decode_with(
+        data,
+        &options.clone().with_region(region.clone()),
+    ));
+    if refused != Some(format!("{header:?}")) {
+        return false;
+    }
+    let alone = lifted.with_region(region);
     debug(rust_j2k::decode_with(data, &alone)) != expected
 }
 

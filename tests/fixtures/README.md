@@ -739,6 +739,23 @@ and the `header` fuzz target accepts it. `opj_decompress` 2.5.0 fails to
 decode component 0 of both. `tests/tile_geometry_cap.rs` and
 `tests/read_header.rs` check them. They have no license restriction.
 
+`header/rescued_lower_tile_then_data_fault.j2k` (127 bytes, SHA-256
+`9324472b7a8c2efeba187be5949697818894ad1aa36d088235728965515c4980`) is the
+repro of #532, written by hand (a short Python script over the marker
+layouts in ISO/IEC 15444-1, Annex A). It is an 8500 x 4096 gray codestream
+with `XOsiz` 3600 and tiles of 4200 x 4096, so tile 0 is 600 wide and tile 2
+is 100 wide, both within the caps, and tile 1 is 4200 wide. The main `COD`
+gives 4x4 code-blocks and no levels, which puts tile 1 over the code-block
+cap; its tile-part `COD` gives 64x64 code-blocks, within it. Each tile has
+one empty packet, and tile 2 has one byte after it. `read_header_with`
+reads it and `decode_with` refuses it for tile 2 ("tile 2 has 1 byte(s) left
+after the last packet"), which only decoding finds. A header that ignored
+tile 1's `COD` would refuse tile 1 for its code-blocks instead; the `header`
+target must catch that, because tile 1 decodes alone. Mutating
+`Rescue::count` that way makes the target panic on this file.
+`opj_decompress` 2.5.0, which has no such caps, decodes it.
+`tests/read_header.rs` checks it. It has no license restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and
