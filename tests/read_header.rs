@@ -16,9 +16,12 @@ use std::path::{Path, PathBuf};
 mod inconsistent;
 use inconsistent::checked;
 
+#[path = "support/synth.rs"]
+mod synth;
+
 use rust_j2k::{
-    ColorSpace, DecodeOptions, Error, Header, Image, Jp2Metadata, Ratio, Region, decode_with,
-    read_header, read_header_with,
+    ColorSpace, DecodeOptions, Error, Header, Image, IncrementalDecoder, Jp2Metadata, Ratio,
+    Region, decode_with, read_header, read_header_with,
 };
 
 /// `result` with its error as its `Debug` text, so that two results compare
@@ -664,4 +667,243 @@ fn a_reduction_past_the_main_header_levels_is_refused_by_both() {
         keyed(header.map(|_| ())),
         keyed(decode_with(&bytes, &options).map(|_| ()))
     );
+}
+
+/// Where tile 1's `SOT` starts in `tier1_work_bound/lower_tile_t1bomb_over_cap.j2k`.
+/// Tile 1 is the only tile over a cap, and its one tile-part has no data.
+const OVER_CAP_TILE_SOT: usize = 1289;
+
+/// `tier1_work_bound/lower_tile_t1bomb_over_cap.j2k` with `insert` put
+/// right after tile 1's `SOT` segment and its `Psot` grown to match. With
+/// `colors`, the image has three components under a main `COD` with the
+/// color transform on, so that a tile `COC` can mix the color wavelets.
+/// Returns the bytes and where tile 1's `SOT` is.
+fn over_cap_tile_with(colors: bool, insert: &[u8]) -> (Vec<u8>, usize) {
+    let mut bytes =
+        std::fs::read(fixtures().join("tier1_work_bound/lower_tile_t1bomb_over_cap.j2k")).unwrap();
+    let mut sot = OVER_CAP_TILE_SOT;
+    if colors {
+        // `Lsiz` and `Csiz` grow by two components of the first's format.
+        bytes[5] += 6;
+        bytes[41] = 3;
+        let first = bytes[42..45].to_vec();
+        bytes.splice(45..45, first.iter().chain(&first).copied());
+        // The main `COD`'s multiple component transform.
+        assert_eq!(bytes[51..53], [0xff, 0x52]);
+        bytes[59] = 1;
+        sot += 6;
+    }
+    assert_eq!(bytes[sot..sot + 2], [0xff, 0x90], "tile 1's SOT");
+    let psot = u32::from_be_bytes(bytes[sot + 6..sot + 10].try_into().unwrap());
+    let psot = psot + insert.len() as u32;
+    bytes[sot + 6..sot + 10].copy_from_slice(&psot.to_be_bytes());
+    bytes.splice(sot + 12..sot + 12, insert.iter().copied());
+    (bytes, sot)
+}
+
+/// A fault in the tile-part header of the only tile over a cap, with
+/// whether it needs three color components and how the error the decode
+/// refuses it with starts. `read_header_with` reads that header to count the
+/// tile, so it must give the decode's error for it.
+const OWN_HEADER_FAULTS: &[(&str, bool, &[u8], &str)] = &[
+    (
+        "an MCC",
+        false,
+        &[0xff, 0x75, 0, 4, 0, 0],
+        "Unsupported(\"`MCC`",
+    ),
+    (
+        "an FF30",
+        false,
+        &[0xff, 0x30],
+        "Unsupported(\"reserved marker 0xFF30",
+    ),
+    (
+        "an FF7F of length 0",
+        false,
+        &[0xff, 0x7f, 0, 0],
+        "Codestream(\"0xFF7F",
+    ),
+    (
+        // Component 1 moved to the 9/7 wavelet under the color transform,
+        // with a `QCC` that quantizes it.
+        "a COC that mixes the color wavelets",
+        true,
+        &[
+            0xff, 0x53, 0, 9, 1, 0, 0, 4, 4, 0, 0, 0xff, 0x5d, 0, 6, 1, 0x41, 0x40, 0,
+        ],
+        "Marker(\"in tile 1, the color transform",
+    ),
+];
+
+/// The tile a header refuses alone carries a fault in its own tile-part
+/// header: the read finds it and gives the decode's error, with `strict` on
+/// and off. Without the fault the read refuses the tile.
+#[test]
+fn a_fault_in_the_own_header_of_a_tile_over_a_cap_is_the_decode_s_error() {
+    for &(what, colors, insert, variant) in OWN_HEADER_FAULTS {
+        let (clean, _) = over_cap_tile_with(colors, &[]);
+        let (bytes, _) = over_cap_tile_with(colors, insert);
+        for strict in [true, false] {
+            let options = DecodeOptions::default().with_strict(strict);
+            let refused = read_header_with(&clean, &options);
+            assert!(
+                matches!(&refused, Err(Error::Limit(_))),
+                "{what}, strict {strict}: without it, {refused:?}"
+            );
+            let header = keyed(read_header_with(&bytes, &options).map(|_| ()));
+            let decoded = keyed(decode_with(&bytes, &options).map(|_| ()));
+            assert!(
+                header.as_ref().is_err_and(|e| e.starts_with(variant)),
+                "{what}, strict {strict}: {header:?}"
+            );
+            assert_eq!(header, decoded, "{what}, strict {strict}");
+            for tile in [0, 1] {
+                let alone = decode_with(&bytes, &options.clone().with_region(Region::Tile(tile)));
+                assert_eq!(
+                    keyed(alone.map(|_| ())),
+                    header,
+                    "{what}, strict {strict}: tile {tile} alone"
+                );
+            }
+        }
+    }
+}
+
+/// `IncrementalDecoder::header`, fed the same files a byte at a time, gives
+/// what `read_header_with` gives with `strict` off on the bytes fed, and the
+/// fault in the tile-part header wherever the strict-off decode gives it:
+/// no error before the input holds the inserted segments, and the fault
+/// once the tile-part is whole at the latest. In between, the input may
+/// still complete some of them (an `MCC` is refused only once its header
+/// reaches `SOD`).
+#[test]
+fn the_incremental_header_finds_the_fault_once_the_tile_part_is_whole() {
+    for &(what, colors, insert, variant) in OWN_HEADER_FAULTS {
+        let (bytes, sot) = over_cap_tile_with(colors, insert);
+        let psot = u32::from_be_bytes(bytes[sot + 6..sot + 10].try_into().unwrap());
+        let whole = sot + psot as usize;
+        let held = sot + 12 + insert.len();
+        let lenient = DecodeOptions::default().with_strict(false);
+        let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+        for fed in 1..=bytes.len() {
+            decoder.feed(&bytes[fed - 1..fed]);
+            let got = format!("{:?}", decoder.header());
+            let want = match read_header_with(&bytes[..fed], &lenient) {
+                Err(Error::Incomplete(_)) => Ok(None),
+                read => read.map(Some),
+            };
+            assert_eq!(got, format!("{want:?}"), "{what}: {fed} bytes");
+            // The decode, which is slow on tile 0, is checked from tile 1's
+            // header to its end.
+            if (sot + 12..=whole).contains(&fed) {
+                let decoded = format!("{:?}", decode_with(&bytes[..fed], &lenient).map(|_| ()));
+                if decoded.starts_with(&format!("Err({variant}")) {
+                    assert_eq!(got, decoded, "{what}: {fed} bytes, the decode's fault");
+                }
+            }
+            if fed < held {
+                assert!(got.starts_with("Ok"), "{what}: {fed} bytes, cut: {got}");
+            } else if fed >= whole {
+                assert!(
+                    got.starts_with(&format!("Err({variant}")),
+                    "{what}: {fed} bytes: {got}"
+                );
+            }
+        }
+    }
+}
+
+/// Two tiles read at a reduction of 1: tile 0, one sample wide, has an
+/// empty area on component 1 and a tile-part `COD`; tile 1 is over the caps
+/// under the main header and within them under its own `COD`. With
+/// `fault`, tile 1's second tile-part carries an `MCC`, which the read
+/// does not read.
+fn empty_lower_tile_then(fault: bool) -> Vec<u8> {
+    use synth::{cod_body, qcd_none_body, seg, siz_body, tile_part};
+    // Precincts of 1 x 1 and 2 x 2, so tile 1 is over the caps under it.
+    let mut main_cod = cod_body(1, 1, 4, 0);
+    main_cod[0] = 1;
+    main_cod.extend([0x00, 0x11]);
+    let own_cod = seg(0xff52, &cod_body(1, 1, 4, 0));
+    let mut bytes = vec![0xff, 0x4f];
+    bytes.extend(seg(
+        0xff51,
+        &siz_body(
+            [2048, 1024, 1023, 0, 1024, 1024, 0, 0],
+            &[[7, 1, 1], [7, 255, 1]],
+        ),
+    ));
+    bytes.extend(seg(0xff52, &main_cod));
+    bytes.extend(seg(0xff5c, &qcd_none_body(2, &[8; 4])));
+    bytes.extend(tile_part(0, 0, 1, &own_cod, &[]));
+    bytes.extend(tile_part(1, 0, 2, &own_cod, &[]));
+    let mcc = if fault {
+        seg(0xff75, &[0, 0])
+    } else {
+        Vec::new()
+    };
+    bytes.extend(tile_part(1, 1, 2, &mcc, &[]));
+    bytes.extend([0xff, 0xd9]);
+    bytes
+}
+
+/// A tile whose counts under its own header are at fault, which only the
+/// decode's count of the tile finds, is left to the decode, unless the
+/// decode's parse of the tile-parts finds a fault first: then the read
+/// gives that fault, even in a tile-part it does not read.
+#[test]
+fn a_tile_whose_own_counts_are_at_fault_gives_the_decode_s_fault_for_the_tile_parts() {
+    for strict in [true, false] {
+        let options = DecodeOptions::default()
+            .with_resolution_reduction(1)
+            .with_strict(strict);
+        let clean = empty_lower_tile_then(false);
+        let read = read_header_with(&clean, &options).map(|_| ());
+        assert!(read.is_ok(), "strict {strict}: {read:?}");
+        let decoded = decode_with(&clean, &options);
+        assert!(
+            matches!(&decoded, Err(Error::Codestream(d)) if d.message() == "tile 0 has an empty area on component 1"),
+            "strict {strict}: {:?}",
+            decoded.map(|_| ())
+        );
+        let bytes = empty_lower_tile_then(true);
+        let header = keyed(read_header_with(&bytes, &options).map(|_| ()));
+        assert!(
+            header
+                .as_ref()
+                .is_err_and(|e| e.starts_with("Unsupported(\"`MCC`")),
+            "strict {strict}: {header:?}"
+        );
+        assert_eq!(
+            header,
+            keyed(decode_with(&bytes, &options).map(|_| ())),
+            "strict {strict}"
+        );
+    }
+}
+
+/// The same faults in a tile-part whose `Psot` is 0, which runs to the end
+/// of the codestream, so it is never whole in the input: the read gives
+/// the decode's error with `strict` on and off, as the input holds the
+/// whole header.
+#[test]
+fn a_fault_in_an_own_header_with_a_psot_of_0_is_the_decode_s_error() {
+    for &(what, colors, insert, variant) in OWN_HEADER_FAULTS {
+        let (mut bytes, sot) = over_cap_tile_with(colors, insert);
+        bytes[sot + 6..sot + 10].copy_from_slice(&[0; 4]);
+        for strict in [true, false] {
+            let options = DecodeOptions::default().with_strict(strict);
+            let header = keyed(read_header_with(&bytes, &options).map(|_| ()));
+            assert!(
+                header.as_ref().is_err_and(|e| e.starts_with(variant)),
+                "{what}, strict {strict}: {header:?}"
+            );
+            assert_eq!(
+                header,
+                keyed(decode_with(&bytes, &options).map(|_| ())),
+                "{what}, strict {strict}"
+            );
+        }
+    }
 }

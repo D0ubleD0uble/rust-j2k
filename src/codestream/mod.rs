@@ -667,6 +667,7 @@ fn sot_at(bytes: &[u8], offset: usize) -> Option<(Sot, usize)> {
 }
 
 /// A tile's first tile-part, as [`visit_first_parts`] finds it.
+#[derive(Clone, Copy)]
 pub(crate) struct FirstPart<'b, 'm> {
     /// The input up to the tile-part's end, or `None` if its `Psot` is
     /// shorter than its `SOT`.
@@ -751,6 +752,27 @@ impl<'b, 'm> FirstPart<'b, 'm> {
         };
         read_tile_part_header(&mut Cursor::at(part, self.pos), part.len(), self.main, true)
             .and_then(|(tile, _)| resolve_tile_header(self.main, &tile, usize::from(self.tile)))
+    }
+
+    /// Whether a fault [`header`](Self::header) finds may be the input cut
+    /// short, which the tile walk with `strict` off reads as the end of the
+    /// codestream ([`fault_may_be_cut`]). False for a header it reads
+    /// without a fault where the tile walk reads the markers, and for a
+    /// tile-part whole in the input. It reads the header's markers again.
+    pub(crate) fn header_fault_may_be_cut(&self) -> bool {
+        let Some(part) = self.part else {
+            return false;
+        };
+        let mut site = FaultSite::default();
+        read_tile_part_header_at(
+            &mut Cursor::at(part, self.pos),
+            part.len(),
+            self.main,
+            true,
+            &mut site,
+        )
+        .is_err()
+            && fault_may_be_cut(part, self.offset, self.psot, site)
     }
 }
 

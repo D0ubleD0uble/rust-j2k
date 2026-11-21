@@ -187,6 +187,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   1.48 GiB, and such files stay within about 65 bytes for each byte of
   input. The segment records are also freed before the inverse wavelet.
   Decoded images do not change (#585).
+- `read_header_with` gives the decode's error for a file where the
+  tile-part header it reads to count a tile is at fault (a Part 2 marker
+  such as `MCC`, a reserved marker, or a tile `COC` that mixes the wavelets
+  under the color transform). It returned `Ok` when that tile was the
+  only one over a cap under the main header, while `decode_with` refuses
+  the file for the tile-parts. The same holds where the tile's precincts
+  and code-blocks under that header are at fault and the decode's parse
+  of the tile-parts finds a fault. With `strict` off, a fault the input
+  ends inside is read as a cut, as the decode reads it, so
+  `IncrementalDecoder::header` gives the error once the decode would.
+  Counts at fault in a tile-part not whole in the input (cut, or with a
+  `Psot` of 0) are left to the decode with `strict` off (#578).
 - With `strict` off, a fault in the header of a tile-part that runs to the
   end of the input, a last one with `Psot` 0 or one whose `Psot` runs past
   the end, is refused with the error a strict decode gives when the input
