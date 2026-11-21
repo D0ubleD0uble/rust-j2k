@@ -1415,17 +1415,62 @@ follows OpenJPEG on:
 
 ### The order of the header checks
 
-The header is checked before any tile data is read, in OpenJPEG's order up to
-the codestream's main header: the boxes, the main header, `ihdr` against SIZ.
-So a file whose `ihdr` disagrees with SIZ and whose codestream is also cut
-short reports the `ihdr` fault, as OpenJPEG does. The palette and channel
-definition checks come next, still before the tiles; OpenJPEG checks the
-`cmap` mapping and the `cdef` entries against the channels only after
-decoding the tiles, so a file with both a palette or `cdef` fault and a tile
-fault reports the box fault here and the tile fault there. Both reject it.
-The header boxes after the codestream are read last, also before the tiles,
-where OpenJPEG reads them after decoding. This order is what lets `read_header`
-return the same error as `decode` for every header fault.
+The header is checked before any tile data is read, in this order
+(`read_jp2_prefix` in `src/pipeline/decode.rs`):
+
+1. The box walk, then the layout of the `pclr`, `cmap` and `cdef` boxes: how
+   many there are, their order and their payloads. OpenJPEG refuses these as
+   it reads `jp2h`, before the codestream (`opj_jp2_read_pclr`,
+   `opj_jp2_read_cmap`, `opj_jp2_read_cdef`).
+2. The codestream's main header, then the sample limit on the area the
+   selection reads.
+3. `ihdr` against SIZ, then the resolution reduction.
+4. The selection: the region and the components. OpenJPEG refuses it when
+   the decoded area is set.
+5. What the `pclr`, `cmap` and `cdef` boxes say about the components, then
+   the header boxes after the codestream, then the metadata. OpenJPEG checks
+   these only after it has decoded the tiles (`opj_jp2_check_color`, and its
+   box handlers on what follows `jp2c`).
+6. The sRGB step.
+
+Steps 2 to 4 are in the order a raw codestream is checked, so a codestream
+and its JP2 wrapper give the same error for the same options, except under
+`ColorOutput::Srgb`. A raw codestream declares no color space, so it refuses
+sRGB output of three or more components before the reduction and the
+selection. A JP2 file plans the step last, from its color space and its
+channels. OpenJPEG has no sRGB refusal.
+
+This order is what lets `read_header` return the same error as `decode` for
+every header fault. It differs from OpenJPEG's in these places, all between
+two faults that both refuse the file. Each is an order the decoder already
+had, not a new choice:
+
+- **A main-header fault and an `ihdr` that disagrees with SIZ.** OpenJPEG
+  compares them as it reads SIZ, before the rest of the main header, so a
+  file with both reports the `ihdr` fault ("Error with SIZ marker: IHDR w(1)
+  h(1) vs. SIZ w(64) h(64)" with a `COD` of 2^11 x 2^11 code-blocks). Here
+  the whole main header is read first, so that file reports the `COD`'s
+  `Marker`. The decoder already had this order.
+- **A reduction and a later main-header fault.** OpenJPEG refuses the
+  reduction as it reads each `COD` or `COC`, so a fault in a marker segment
+  after that one is not reached. Here the reduction is checked once the main
+  header is read, so the later segment's fault comes first. The decoder
+  already had this order.
+- **A layout fault and a fault in a later `jp2h` box such as `colr`.**
+  OpenJPEG reports the first in file order. Here `colr` is checked in the box
+  walk of step 1, before the layout, so a `cdef` of 0 channels followed by a
+  `colr` of 2 bytes reports the `colr` fault here and "Number of channel
+  description is equal to zero in CDEF box." there. Between the `pclr`,
+  `cmap` and `cdef` boxes, the first fault in file order wins, as in
+  OpenJPEG. The decoder already checked `colr` first.
+- **A sample limit refusal.** OpenJPEG has no sample limit (see
+  [resource-bounds.md](resource-bounds.md)), so the refusal here can come
+  before an `ihdr` or reduction fault that OpenJPEG reports. The decoder
+  already had this order.
+- **A fault in step 5 and a tile fault.** Step 5 runs before the tiles, where
+  OpenJPEG checks it after decoding them, so a file with a palette or `cdef`
+  fault and a tile fault reports the box fault here and the tile fault
+  there. The decoder already had this order.
 
 ### `ftyp` without `jp2 ` or `jph `
 

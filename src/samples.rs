@@ -111,15 +111,6 @@ pub(crate) struct Cap {
 }
 
 impl Cap {
-    /// This cap with no limit on the count, for a plan that must count
-    /// nothing.
-    pub(crate) fn lifted(self) -> Cap {
-        Cap {
-            allowed: u64::MAX,
-            ..self
-        }
-    }
-
     /// The most code-blocks one tile may hold under this cap:
     /// [`TILE_BLOCKS_FLOOR`], or one for each [`SAMPLES_PER_BLOCK`] samples
     /// the cap allows when that is more.

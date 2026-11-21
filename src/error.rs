@@ -672,6 +672,18 @@ pub(crate) fn is_fixed_limit(error: &Error, kind: LimitKind) -> bool {
     matches!(error, Error::Limit(limit) if limit.kind() == kind && limit.retry_with().is_none())
 }
 
+/// A [`LimitDetail`] of any `kind` and `retry_with`, past the checks the
+/// constructors make, for a test of what a caller does with one.
+#[cfg(test)]
+pub(crate) fn any_limit(kind: LimitKind, retry_with: Option<WorkLimit>) -> LimitDetail {
+    LimitDetail {
+        kind,
+        retry_with,
+        refused_at: None,
+        message: String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -206,6 +206,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   walks it keeps from the walks built under the new cap, as a decoder made
   with it does. It used the largest walk of the old cap, so the room, and
   which walks fit, could differ from a fresh decoder's (#519).
+- A JP2 file's header is checked in OpenJPEG's order, and a codestream and
+  its JP2 wrapper give the same error for the same options (#419):
+  - The layout of the `pclr`, `cmap` and `cdef` boxes (a second box, a
+    `cmap` without a `pclr` or before it, a malformed payload) is checked
+    before the codestream, as OpenJPEG checks it while it reads `jp2h`. A
+    file with such a fault and a codestream fault, an `ihdr` that disagrees
+    with SIZ or a refused option gave the other error first. Between these
+    boxes, the first fault in file order wins. An `IncrementalDecoder` now
+    refuses such a file once the `jp2c` box header is in, even when the main
+    header is still cut.
+  - The resolution reduction, then the selection, are checked right after
+    `ihdr` against SIZ, as a raw codestream checks them, and before what the
+    palette and `cdef` say about the components, the header boxes after the
+    codestream and the sRGB step. A file with a refused reduction or
+    selection and a fault in those steps (a palette over the sample limit, a
+    color space the sRGB step does not convert, a `cdef` or `cmap` that names
+    a missing channel or column) gave that fault, while its codestream gave
+    `InvalidOptions`. OpenJPEG refuses the reduction as it reads `COD`, and
+    the selection when the decoded area is set, both before it checks the
+    channels, which it does after decoding.
+  - An `IncrementalDecoder` reading a paletted file under the default sample
+    limit, with a reduction the file refuses, now refuses at once with
+    `InvalidOptions`. `refine` used to wait on the palette's sample limit
+    refusal, which more bytes would raise.
+  - sRGB output is the one difference left: a raw codestream declares no
+    color space, so it refuses sRGB output of three or more components
+    before the reduction and the selection, while a JP2 file plans the sRGB
+    step last, from its color space and its channels. OpenJPEG has no sRGB
+    refusal to follow.
 
 ## [0.5.0] - 2026-11-17
 

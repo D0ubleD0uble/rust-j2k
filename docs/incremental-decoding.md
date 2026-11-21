@@ -166,8 +166,9 @@ walk starts again.
 change the options of the later refines and of `finish`. Each image a
 refine returns after a change is the one-shot strict-off decode of its
 bytes under the new options. `header` reads the header of the bytes fed
-under the current options (`Ok(None)` until the main header is whole), and
-`bytes` borrows the bytes fed.
+under the current options (`Ok(None)` until the main header is whole,
+except that a JP2 file whose `pclr`, `cmap` or `cdef` boxes are malformed is
+refused once its `jp2c` box header is in), and `bytes` borrows the bytes fed.
 
 - A walk reads its tile's packets under one layer cap, which decides the
   coding passes it keeps. So when the cap has changed since the walks were
