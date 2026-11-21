@@ -17,8 +17,8 @@
 mod synth;
 
 use rust_j2k::{
-    AmountUnit, DecodeOptions, Error, IncrementalDecoder, LimitDetail, LimitKind, Raise, Refined, Region,
-    SampleLimit, Waiting, WorkLimit, decode_with, read_header_with,
+    AmountUnit, DecodeOptions, Error, IncrementalDecoder, LimitDetail, LimitKind, Raise, Refined,
+    Region, SampleLimit, Waiting, WorkLimit, decode_with, read_header_with,
 };
 
 const FLOOR_BLOCKS: u64 = 1 << 20;

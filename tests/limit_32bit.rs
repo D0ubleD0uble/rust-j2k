@@ -76,7 +76,10 @@ fn two_tiles_the_second_over_the_code_block_cap() -> Vec<u8> {
         0,
     );
     synth::jp2_file(
-        &[synth::ihdr_for(&codestream), synth::bx(b"colr", &synth::colr_enum(17))],
+        &[
+            synth::ihdr_for(&codestream),
+            synth::bx(b"colr", &synth::colr_enum(17)),
+        ],
         &[],
         &codestream,
         &[],
