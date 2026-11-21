@@ -126,3 +126,12 @@ path = "fuzz_targets/retry_ladder.rs"
 test = false
 doc = false
 bench = false
+
+# `header_split` feeds `IncrementalDecoder` in pieces and checks each
+# `header()` against `read_header_with`, strict off, on the bytes fed so far.
+[[bin]]
+name = "header_split"
+path = "fuzz_targets/header_split.rs"
+test = false
+doc = false
+bench = false

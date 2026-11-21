@@ -917,11 +917,20 @@ fn each_fuzz_target_passes_the_weight_this_file_pins() {
             continue;
         }
         if calls.is_empty() {
-            // Targets that decode no whole image. A new target is not on this
-            // list until someone decides it needs no budget.
+            // Targets that decode no whole image (`header_split` only reads
+            // headers, whose cost the geometry step budget bounds). A new
+            // target is not on this list until someone decides it needs no
+            // budget.
             assert!(
-                ["tile_body", "icc_srgb", "mq", "tier1_block", "ht_block"]
-                    .contains(&target.as_str()),
+                [
+                    "tile_body",
+                    "icc_srgb",
+                    "mq",
+                    "tier1_block",
+                    "ht_block",
+                    "header_split"
+                ]
+                .contains(&target.as_str()),
                 "{target} calls neither `budget::over` nor `budget::declared`; \
                  budget it, or add it to the unbudgeted list"
             );

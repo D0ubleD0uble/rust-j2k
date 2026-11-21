@@ -364,8 +364,9 @@ A decoder parses bytes it did not produce, so malformed input is an ordinary
 case, not an edge case.
 
 This decoder is fuzzed with `cargo fuzz` (libFuzzer) in the detached
-[`fuzz/`](https://github.com/D0ubleD0uble/rust-j2k/tree/main/fuzz) workspace, with ten targets: `decode`, `header`,
-`decode_partial` and `incremental_decode` over the public entry points, and
+[`fuzz/`](https://github.com/D0ubleD0uble/rust-j2k/tree/main/fuzz) workspace, with thirteen targets: `decode`, `header`,
+`decode_partial`, `incremental_decode`, `header_split`, `window_crop` and
+`retry_ladder` over the public entry points, and
 `tile_body`, `tier1_block`, `ht_block`, `mq`, `jp2_boxes` and `icc_srgb` over
 single stages. See
 [`fuzz/README.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/fuzz/README.md) to run them. The bar is no panics, no
