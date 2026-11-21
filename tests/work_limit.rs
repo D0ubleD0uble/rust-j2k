@@ -727,6 +727,24 @@ fn a_tile_cap_refusal_retries_by_the_sample_limit_and_ends() {
     let Err(Error::Limit(limit)) = decode_with(&bytes, &start) else {
         panic!("the defaults do not refuse")
     };
+    let unlimited = start
+        .clone()
+        .with_sample_limit(WorkLimit::Unlimited)
+        .with_packet_work_limit(WorkLimit::Unlimited)
+        .with_code_block_work_limit(WorkLimit::Unlimited);
+    if !cfg!(target_pointer_width = "64") {
+        // The caps stop at their floor on a 32-bit target, where no sample
+        // limit admits the tile: there is no retry and no ladder, and
+        // `Unlimited` refuses it too. This is current behavior, not a
+        // promise (#529 may give the refusal more).
+        assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
+        assert_eq!(limit.retry_with(), None, "{limit}");
+        assert!(start.with_retry(&limit).is_none());
+        assert!(
+            matches!(decode_with(&bytes, &unlimited), Err(Error::Limit(l)) if l.kind() == LimitKind::AddressSpace)
+        );
+        return;
+    }
     assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
     assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
     let next = start
@@ -746,10 +764,6 @@ fn a_tile_cap_refusal_retries_by_the_sample_limit_and_ends() {
         matches!(decode_with(&bytes, &next), Err(Error::Codestream(m)) if m.message() == end),
         "one rung passes the cap"
     );
-    let unlimited = start
-        .with_sample_limit(WorkLimit::Unlimited)
-        .with_packet_work_limit(WorkLimit::Unlimited)
-        .with_code_block_work_limit(WorkLimit::Unlimited);
     assert!(
         matches!(decode_with(&bytes, &unlimited), Err(Error::Codestream(m)) if m.message() == end)
     );
@@ -775,6 +789,15 @@ fn a_tile_code_block_cap_refusal_retries_by_the_sample_limit() {
     let Err(Error::Limit(limit)) = decode_with(&bytes, &start) else {
         panic!("the defaults do not refuse")
     };
+    if !cfg!(target_pointer_width = "64") {
+        // The cap stops at its floor on a 32-bit target, where no sample
+        // limit admits the tile: there is no retry. This is current
+        // behavior, not a promise (#529 may give the refusal more).
+        assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
+        assert_eq!(limit.retry_with(), None, "{limit}");
+        assert!(start.with_retry(&limit).is_none());
+        return;
+    }
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
     assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
     let next = start
