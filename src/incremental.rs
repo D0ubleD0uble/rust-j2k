@@ -3,14 +3,15 @@
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
+use std::sync::{Mutex, PoisonError, TryLockError};
 
 use crate::codestream::{MainHeader, Tile};
-use crate::pipeline::decode::{check_options, decode_metered};
+use crate::pipeline::decode::{HeaderCache, check_options, decode_metered, read_header_kept};
 use crate::tier2::resume::{Repeats, Walks};
 use crate::tier2::{CodedData, Meter, Reach, Refused};
 use crate::{
     DecodeOptions, Error, Header, Image, LimitDetail, LimitKind, Region, Result, WorkLimit,
-    decode_with, jp2, read_header_with,
+    decode_with, jp2,
 };
 
 /// A decoder for a file that arrives a piece at a time, from a network or a
@@ -183,6 +184,9 @@ pub struct IncrementalDecoder {
     repeat_bound: u64,
     /// The error a refine returned, which every later call returns.
     failed: Option<Error>,
+    /// What [`header`](Self::header) keeps between its calls. A lock, so
+    /// that the decoder stays [`Sync`] and `header` takes `&self`.
+    header_kept: Mutex<HeaderCache>,
 }
 
 impl IncrementalDecoder {
@@ -208,6 +212,7 @@ impl IncrementalDecoder {
             refused_by_repeats: false,
             repeat_bound: 0,
             failed: None,
+            header_kept: Mutex::default(),
         })
     }
 
@@ -284,7 +289,7 @@ impl IncrementalDecoder {
         &self.options
     }
 
-    /// The header of the bytes fed so far, as [`read_header_with`] reads it
+    /// The header of the bytes fed so far, as [`read_header_with`](crate::read_header_with) reads it
     /// under the decoder's options: it describes the image
     /// [`refine`](Self::refine) returns. `Ok(None)` means the bytes fed end
     /// before the first `SOT` marker, or, in a JP2 file, inside the boxes
@@ -311,7 +316,20 @@ impl IncrementalDecoder {
     /// budget: 45 ms for a window of 1530 tiles of a 235 MB file of 16.7
     /// million tile-parts, and 63 ms for 1000 tiles of 4096 components.
     pub fn header(&self) -> Result<Option<Header>> {
-        match read_header_with(&self.bytes, &self.lenient) {
+        // A call on another thread holding the lock reads from the start. A
+        // call that panicked may have left the walk half done, so it is
+        // dropped.
+        let mut kept = match self.header_kept.try_lock() {
+            Ok(kept) => Some(kept),
+            Err(TryLockError::Poisoned(poisoned)) => {
+                let mut kept = poisoned.into_inner();
+                *kept = HeaderCache::default();
+                self.header_kept.clear_poison();
+                Some(kept)
+            }
+            Err(TryLockError::WouldBlock) => None,
+        };
+        match read_header_kept(&self.bytes, &self.lenient, kept.as_deref_mut()) {
             Ok(header) => Ok(Some(header)),
             Err(Error::Incomplete(_)) => Ok(None),
             Err(error) => Err(error),
@@ -399,6 +417,11 @@ impl IncrementalDecoder {
         self.lenient = options.clone().with_strict(false);
         self.options = options;
         self.failed = None;
+        // What the header read kept is for the old selection.
+        *self
+            .header_kept
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner) = HeaderCache::default();
         Ok(())
     }
 

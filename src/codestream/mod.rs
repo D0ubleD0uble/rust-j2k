@@ -574,10 +574,14 @@ pub(crate) fn visit_first_parts<'m>(
     FirstParts::new(parsed).visit(bytes, parsed, visit);
 }
 
-/// A walk of [`visit_first_parts`] that can go on from where it stopped.
+/// A walk of [`visit_first_parts`] that can go on from where it stopped,
+/// in the same bytes or, after [`resume`](Self::resume), in more of them.
 pub(crate) struct FirstParts {
     /// Where the next `SOT` is, or `None` once the chain has ended.
     next: Option<usize>,
+    /// Where the chain ended for want of bytes: at a `SOT` that would run
+    /// past the end of the input, which more input may complete.
+    cut: Option<usize>,
 }
 
 impl FirstParts {
@@ -585,6 +589,17 @@ impl FirstParts {
     pub(crate) fn new(parsed: &ParsedHeader) -> Self {
         FirstParts {
             next: Some(parsed.sot_offset),
+            cut: None,
+        }
+    }
+
+    /// Let the walk go on from where the chain ended for want of bytes,
+    /// for input that extends the input it has walked. It then visits the
+    /// tile-parts that a walk of the longer input from the start visits
+    /// after those this walk has visited.
+    pub(crate) fn resume(&mut self) {
+        if let Some(at) = self.cut.take() {
+            self.next = Some(at);
         }
     }
 
@@ -600,6 +615,10 @@ impl FirstParts {
         while let Some(offset) = self.next {
             let Some((sot, pos)) = sot_at(bytes, offset) else {
                 self.next = None;
+                self.cut = offset
+                    .checked_add(12)
+                    .filter(|&end| end > bytes.len())
+                    .map(|_| offset);
                 return;
             };
             self.next = offset
@@ -684,6 +703,18 @@ impl<'b, 'm> FirstPart<'b, 'm> {
     /// Where the tile-part's `SOT` starts in the input.
     pub(crate) fn offset(&self) -> usize {
         self.offset
+    }
+
+    /// Whether the input holds all of the tile-part, up to the end its
+    /// `Psot` gives, so that [`may_set_coding`](Self::may_set_coding) and
+    /// [`header`](Self::header) give the same in any input that extends
+    /// it. A tile-part with a `Psot` of 0 runs to the end of the input, so
+    /// it is never whole.
+    pub(crate) fn is_whole(&self) -> bool {
+        self.psot != 0
+            && self
+                .part
+                .is_none_or(|part| part.len() == self.offset.saturating_add(self.psot as usize))
     }
 
     /// Whether the tile-part's header may carry a `COD` or `COC`, so that

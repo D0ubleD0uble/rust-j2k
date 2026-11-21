@@ -402,7 +402,21 @@ pub(crate) fn tile_counts(header: &MainHeader, tile: u32) -> Result<(u64, u64)> 
 /// makes it on the main header, so the two refuse a tile alike. A fault of
 /// the coding parameters is its error.
 pub(crate) fn check_tile(header: &MainHeader, tile: u32, cap: crate::samples::Cap) -> Result<()> {
-    let (precincts, blocks) = tile_counts(header, tile)?;
+    check_counts(tile, tile_counts(header, tile)?, cap)
+}
+
+/// Whether a tile of these [`tile_counts`] is within the caps: where it is
+/// not, [`check_counts`] refuses it.
+pub(crate) fn within_caps((precincts, blocks): (u64, u64), cap: crate::samples::Cap) -> bool {
+    precincts <= cap.tile_precincts() && blocks <= cap.tile_blocks()
+}
+
+/// [`check_tile`] for a tile whose [`tile_counts`] are already known.
+pub(crate) fn check_counts(
+    tile: u32,
+    (precincts, blocks): (u64, u64),
+    cap: crate::samples::Cap,
+) -> Result<()> {
     if precincts > cap.tile_precincts() {
         return Err(crate::samples::over_tile(
             crate::LimitKind::TilePrecincts,
