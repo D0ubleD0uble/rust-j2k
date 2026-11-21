@@ -1755,6 +1755,41 @@ fn a_tile_part_header_maps_an_unread_marker_as_the_main_header_does() {
     }
 }
 
+/// Every Part 2 marker is named in the message, in either header, and stays
+/// `Unsupported` (#579). `DCO`, `VMS`, `DFS`, `ADS` and `ATK` sit outside the
+/// `MCT..=CBD` run and were once reported as an unrecognized code.
+#[test]
+fn each_part_2_marker_is_named_in_the_message() {
+    for (name, code) in [
+        ("DCO", 0xFF70u16),
+        ("VMS", 0xFF71),
+        ("DFS", 0xFF72),
+        ("ADS", 0xFF73),
+        ("MCT", 0xFF74),
+        ("MCC", 0xFF75),
+        ("NLT", 0xFF76),
+        ("MCO", 0xFF77),
+        ("CBD", 0xFF78),
+        ("ATK", 0xFF79),
+    ] {
+        let named = format!("`{name}` ({code:#06X}) is a JPEG 2000 Part 2 marker");
+        let in_main = err(&header_with(&seg(code, &[0, 0])));
+        assert!(
+            matches!(&in_main, Error::Unsupported(m) if m.message().contains(&named)),
+            "{name} in the main header: got {in_main:?}"
+        );
+        let in_tile = perr(&assemble_with_tile_markers(
+            &default_header(),
+            &[seg(code, &[0, 0])],
+            &[0],
+        ));
+        assert!(
+            matches!(&in_tile, Error::Unsupported(m) if m.message().contains(&named)),
+            "{name} in a tile-part header: got {in_tile:?}"
+        );
+    }
+}
+
 /// A damaged length in a tile-part header can step past `SOD` into the
 /// packet data, where `0xFF` and a byte below `0x90` may follow each other.
 /// Read there, such a pair is damage, not a marker this decoder does not
@@ -2144,15 +2179,15 @@ fn reserved_markers_carry_no_segment() {
 /// the packet data means, so silently ignoring it would risk a wrong image.
 #[test]
 fn unknown_marker_segments_are_walked_then_reported_unsupported() {
-    // Codes this decoder names — the Part 2 block (0xFF74..=0xFF78) among them —
+    // Codes this decoder names — the Part 2 block (0xFF70..=0xFF79) among them —
     // reject under their own message, checked in the reject matrix. These are the
     // ones it genuinely does not recognize, which the walk must still step over.
     for code in [
         0xFF01u16, // no part of the standard we implement
         0xFF2F,    // just below the reserved segment-less range
         0xFF40,    // just above it
-        0xFF73,    // just below the Part 2 block
-        0xFF79,    // just above the Part 2 block
+        0xFF6F,    // just below the Part 2 block
+        0xFF7A,    // just above the Part 2 block
     ] {
         let bytes = header_with(&seg(code, &[1, 2, 3, 4]));
 
@@ -2749,10 +2784,15 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
         rows.push((name, error, Variant::Codestream));
     }
 
-    // Every JPEG 2000 Part 2 codestream marker (0xFF74..=0xFF78): out of the
+    // Every JPEG 2000 Part 2 codestream marker (0xFF70..=0xFF79): out of the
     // Part 1 subset, so each is an `Unsupported` feature the moment it appears,
     // in either header, never half-parsed as Part 1 (issue #78).
     for (name, code) in [
+        ("DCO", marker::DCO),
+        ("VMS", marker::VMS),
+        ("DFS", marker::DFS),
+        ("ADS", marker::ADS),
+        ("ATK", marker::ATK),
         ("MCT", marker::MCT),
         ("MCC", marker::MCC),
         ("NLT", marker::NLT),
