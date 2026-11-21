@@ -29,7 +29,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Error::Codestream` ("tile T tile-part P declares `Psot` N, shorter than
   its header", or "shorter than its `SOT`"), whatever the segment past the
   `Psot` holds. A bad field in that segment gave `Error::Marker` before,
-  and the message named the header's length.
+  and the message named the header's length. Faults the header's checks
+  find within the `Psot` of such a header, such as quantization steps that
+  do not match the decomposition levels, or a later tile-part's `COD` or
+  `QCD` that differs from the one in force, gave their own error before;
+  the `Psot` is now refused first.
 - A `SIZ` whose image holds no sample of a component is refused as
   `Error::Marker` ("component C holds no sample in the image"), by
   `read_header` too. The decode refused it at the first tile as

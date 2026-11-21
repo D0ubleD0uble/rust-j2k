@@ -1107,7 +1107,8 @@ file's result.
 A tile-part that ends inside the input, by its `Psot`, is not cut short, so
 its header is read no further than its `Psot`. A marker or segment that runs
 past it is refused at once, with `strict` on or off, as a `Psot` shorter
-than its header (`Error::Codestream`), whatever its fields hold. That holds
+than its header (`Error::Codestream`), whatever its fields hold, and before
+any fault the header's checks find within the `Psot`. That holds
 for a segment length damaged to run past the end of an input that ends in
 an `EOC`: it is refused, not read as a cut. OpenJPEG 2.5.0 refuses such a
 whole file ("Tile part length size inconsistent with stream length"), and
