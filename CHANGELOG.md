@@ -168,6 +168,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- With `strict` off, a fault in the header of a tile-part that runs to the
+  end of the input, a last one with `Psot` 0 or one whose `Psot` runs past
+  the end, is refused with the error a strict decode gives, when the input
+  holds that header in full. The decode returned `Ok` without the
+  tile-part, as if the input had been cut inside its header. A header the
+  input does end inside still decodes, with the loss in the report. Files
+  that change: those with such a header holding an unrecognized, reserved
+  or Part 2 marker, a malformed segment, or a segment length that runs past
+  `SOD` within the input. Each was refused with `strict` on, and is now
+  refused with `strict` off too, as `opj_decompress -allow-partial` refuses
+  it (#574).
+
 - With `strict` on, `read_header_with` gives the decode's error for a file
   where a tile over a code-block or precinct cap under the main header has
   no tile-part: the decode's error for the tile-parts, which is the first

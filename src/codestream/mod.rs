@@ -1174,7 +1174,8 @@ fn walk_tiles<'a>(
             Ok(read) => read,
             // Not strict, a tile-part the input ends inside may end inside
             // its header too. Then the codestream ends at this tile-part, and
-            // none of it is read.
+            // none of it is read. A fault in a header the input holds in
+            // full is refused, as when strict.
             Err(_) if !strict && header_may_be_cut(bytes, part_offset, sot.psot, header_at) => {
                 if sot.psot != 0 {
                     entries.push(ReportEntry::TruncatedTilePart {
@@ -1617,18 +1618,17 @@ pub(super) fn part_end(len: usize, offset: usize, psot: u32) -> usize {
 
 /// Whether a fault in the header (from `header_at`) of the tile-part at
 /// `offset` may be the input cut short, which a walk with `strict` off reads
-/// as the end of the codestream: its `Psot` runs past the end of the input,
-/// or it is 0 (the tile-part runs to the end) and the header's markers run
-/// to the end of the input before they reach `SOD`. A `Psot` 0 tile-part
-/// whose header the input holds in full is the last one, not a cut one, so
-/// a fault in its header is refused.
+/// as the end of the codestream: the tile-part runs to the end of the input
+/// (its `Psot` is 0 or runs past it), and the header's markers run to the
+/// end of the input before they reach `SOD`. A header the input holds in
+/// full is read as in a strict walk, so a fault in it is refused: it is
+/// there in every longer input too.
 pub(super) fn header_may_be_cut(bytes: &[u8], offset: usize, psot: u32, header_at: usize) -> bool {
-    match psot {
-        0 => header_is_cut(bytes, header_at),
-        psot => offset
+    let to_the_end = psot == 0
+        || offset
             .checked_add(psot as usize)
-            .is_none_or(|end| end > bytes.len()),
-    }
+            .is_none_or(|end| end > bytes.len());
+    to_the_end && header_is_cut(bytes, header_at)
 }
 
 /// A codestream carrying `PPT` beside a `PPM`, which A.7.4 and A.7.5

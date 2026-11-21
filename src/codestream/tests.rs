@@ -5231,8 +5231,39 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
         bytes.truncate(bytes.len() - 2);
         bytes
     };
+    // A tile-part of tile 3 whose `Psot` runs 100 bytes past the input.
+    let past = |extra: &[u8], data: &[u8]| {
+        let mut bytes = part(3, 0, 1, extra, data);
+        let psot = u32::try_from(bytes.len() + 100).unwrap();
+        bytes[6..10].copy_from_slice(&psot.to_be_bytes());
+        bytes
+    };
     // (name, strict, bytes, the start of the error, or "" for none)
     let cases: Vec<(&str, bool, Vec<u8>, &str)> = vec![
+        (
+            "an unrecognized marker in a whole header of a cut tile-part",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), past(&seg(0xFF7F, &[]), &[1, 2])],
+                &[],
+            ),
+            "Unsupported(\"unrecognized marker 0xFF7F in a tile-part header",
+        ),
+        (
+            "a cut tile-part header the input ends inside",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), {
+                    let mut bytes = past(&[0xFF, 0x64, 0, 16, 1, 2, 3], &[]);
+                    bytes.truncate(bytes.len() - 2);
+                    bytes
+                }],
+                &[],
+            ),
+            "",
+        ),
         (
             "an unrecognized marker in a whole `Psot` 0 header",
             false,
