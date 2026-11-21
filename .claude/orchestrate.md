@@ -13,7 +13,7 @@ slots: { default: 2, max: 3 }
 models: { default: sonnet, mechanical: haiku, complex: opus }
   # complex: new parsers of untrusted input (#160), colour math (#165),
   # anything touching tier1/tier2/dwt numerics, and every review.
-focus_themes: ["0.5.x: milestone '0.5.x — decoder hardening'"]
+focus_themes: ["0.6.0: milestone '0.6.0 — decoder hardening'"]
 standing_orders:
   - "Land #414 (pipeline module split out of src/lib.rs) before #413, #415 and #416; those three touch src/incremental.rs and src/tier2/resume.rs and serialize after it, in the order #415 -> #416 -> #413."
   - "Keep one worker on #412 (HT decode speed, src/tier1/ht*) while it is open; it shares no files with the incremental chain."
