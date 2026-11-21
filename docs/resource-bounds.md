@@ -336,9 +336,11 @@ same builder.
 Every file decoded. Past about 2^26 the sample buffers dominate. The 0.8 GiB
 planning term is an estimate. The 2^24 row gives the cost of a code-block: its
 sample buffers of a square tile are about 1.35 x 4n = 86 MiB, which leaves
-(429 - 86) MiB over about 2^20 code-blocks, about 340 bytes each. The 0.8
-GiB estimate uses 560, measured before the segment records shrank (#585), so
-it is on the high side. The 2^20 row holds 261,632 precincts and about 800,000 code-blocks, nearly both caps, and
+(429 - 86) MiB over about 2^20 code-blocks, about 340 bytes each of
+resident memory. On the heap alone the same file is 241 bytes a code-block
+over the output (see [Code-blocks and precincts per
+tile](#code-blocks-and-precincts-per-tile)). The 0.8 GiB estimate uses 560,
+which is above both, so it is on the high side. The 2^20 row holds 261,632 precincts and about 800,000 code-blocks, nearly both caps, and
 peaks at 233 MiB, so the two caps together have not been shown to reach the
 estimate; the precinct figure of 750 bytes is from #583's probes and is not
 isolated here.
@@ -630,19 +632,22 @@ under when that is more, as the work bounds do, since the tiles after it are
 not counted. Past `u32::MAX` times the default it names `Unlimited`. Under
 `AtMost(n)` the caps scale from `n`, and a refusal names no retry.
 
-Measured on the heap over the output, empty code-blocks take about 80 to
-100 bytes each: 80 for a tile of 2^21 4x4 code-blocks with no levels under
-`AtMost(2^30)` (`tests/tile_geometry_alloc.rs`), 96 for 4 components and 2
-levels, 101 for 3 components and 5 levels. A precinct, its code-blocks
-included, takes about 260 to 750 bytes: 260 for 2^21 1x1 precincts of one
-code-block each under `AtMost(2^32)`, 750 for one component of 8 levels in
-4x4 precincts. With every block coded, a 4096x4096 tile of 2^20 4x4
-code-blocks holds about 480 MiB of heap (about 550 MiB resident), about 480
-bytes a code-block. The struct sizes (`BlockState` 40, `CodeBlock` 80,
-`SegmentState` 56, two tag-tree nodes of 8 each at 4/3 per leaf) give about
-141 bytes a block. So at the caps a tile's code-blocks hold up to about 0.94
-bytes per sample the limit allows and its precincts up to about 0.37, so a
-tile at both caps up to about 1.3 bytes per sample: about a third of the 4
+Measured on the heap over the output, empty code-blocks take 88 bytes each,
+whatever the shape: 2^21 4x4 code-blocks with no levels under
+`AtMost(2^30)` (`tests/tile_geometry_alloc.rs`), and the same for 4
+components and 2 levels or 3 components and 5 levels. A precinct, its
+code-blocks included, takes about 250 to 720 bytes: 252 for 2^21 1x1
+precincts of one code-block each under `AtMost(2^32)`, 720 for one
+component of 8 levels in 4x4 precincts. With every block coded, a
+4096x4096 tile of 2^20 4x4 code-blocks (`t1bomb(4096, 2, 1)`) peaks at
+about 305 MiB of heap, 241 MiB of it over the 64 MiB of output, about 241
+bytes a code-block. The struct sizes (`BlockState` 24, `CodeBlock` 88, two
+tag-tree nodes of 8 each at 4/3 per leaf) give about 133 bytes a block,
+and a coded block adds its boxed `SegmentStates` of 80 bytes and its
+lists. So at the caps a tile's code-blocks hold up to about 0.47 bytes per
+sample the limit allows (241 bytes over 512 samples a block) and its
+precincts up to about 0.35 (720 bytes over 2048 samples a precinct), so a
+tile at both caps up to about 0.82 bytes per sample: about a fifth of the 4
 bytes per sample of output the same limit allows. Past the 2^29 floor that
 share holds at every size, as both caps and the output grow with the
 limit; below it, the floors are what a tile may hold.
