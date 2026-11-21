@@ -2347,5 +2347,27 @@ pub(crate) mod tests {
         check(&file(over, true), &jp2);
         // Another main header: one whose tiles are within the caps first.
         check(&file([0x11, 0x11], false), &refused);
+        // The fault walk kept by a refusal is for one main header too: tile
+        // 0's `COM` turned into an `MCC`, which the walk kept for the first
+        // file has passed, under a main `QCD` of one guard bit, not two.
+        let mut mcc = refused.clone();
+        let at = mcc
+            .windows(2)
+            .rposition(|code| code == [0xFF, 0x64])
+            .expect("the COM");
+        mcc[at + 1] = 0x75;
+        let qcd = mcc
+            .windows(2)
+            .position(|code| code == [0xFF, 0x5C])
+            .expect("the QCD");
+        assert_eq!(mcc[qcd + 4], 2 << 5);
+        mcc[qcd + 4] = 1 << 5;
+        let want = read_header(&mcc, &lenient);
+        assert!(matches!(&want, Err(Error::Unsupported(_))), "{want:?}");
+        let mut kept = HeaderCache::default();
+        let first = read_header_kept(&refused, &lenient, Some(&mut kept));
+        assert!(matches!(first, Err(Error::Limit(_))), "{first:?}");
+        let got = read_header_kept(&mcc, &lenient, Some(&mut kept));
+        assert_eq!(format!("{got:?}"), format!("{want:?}"));
     }
 }
