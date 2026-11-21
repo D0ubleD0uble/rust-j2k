@@ -249,6 +249,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   turned into another as the input grew. Such a header is now refused once
   the input holds the tile-part's `Psot` bytes, with `strict` on or off,
   without reading the header on past it (#597).
+- With `strict` off, "tile T declares A tile-parts in one `SOT` and B in
+  another" gives the counts the two `SOT`s state. It gave them raised by
+  one where the `TPsot == TNsot` correction applies, which can rest on
+  bytes past the tile-part at fault, so the counts changed as a prefix
+  grew. With `strict` on the message is unchanged (#598).
 - A tile narrower than a component's `XRsiz` or shorter than its `YRsiz`,
   which holds no sample of that component, decodes as the standard
   defines it: the tile-component has no precinct and no packet, and adds

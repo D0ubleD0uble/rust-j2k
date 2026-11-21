@@ -1223,8 +1223,15 @@ fn walk_tiles<'a>(
             }
             match tile.declared_parts {
                 Some(declared) if declared != stated => {
+                    // Not strict, the counts the two `SOT`s state: the
+                    // correction may rest on bytes past this tile-part, so
+                    // a prefix that ends before them would give other
+                    // counts. Every count stated so far was raised with it.
+                    let shown = if strict { 0 } else { count_correction };
                     return Err(Error::codestream(format!(
-                        "tile {index} declares {stated} tile-parts in one `SOT` and {declared} in another",
+                        "tile {index} declares {} tile-parts in one `SOT` and {} in another",
+                        stated - shown,
+                        declared - shown,
                     )));
                 }
                 _ => tile.declared_parts = Some(stated),
