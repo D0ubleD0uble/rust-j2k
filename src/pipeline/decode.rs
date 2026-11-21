@@ -214,10 +214,13 @@ fn count_geometry(
     // header, selected area and reduction.
     let area = selection.area.image_rect();
     let (mut kept, start) = kept.map_or((None, 0), |(kept, start)| (Some(kept), start));
-    let main = MainKey::of(bytes, parsed);
+    // Hashed only for a call that keeps, as a read from the start has no use
+    // for it.
+    let main = kept.is_some().then(|| MainKey::of(bytes, parsed));
     let mut earlier = kept
         .as_deref_mut()
-        .and_then(|kept| kept.take(start, bytes.len(), main, area, reduction));
+        .zip(main)
+        .and_then(|(kept, main)| kept.take(start, bytes.len(), main, area, reduction));
     // The tiles read depend on the area alone, so those kept are reused.
     let reads = match &mut earlier {
         Some(earlier) => std::mem::take(&mut earlier.reads),
@@ -325,11 +328,12 @@ fn count_geometry(
         Ok(true)
     };
     let counted = count();
-    if let Some(kept) = kept {
+    if let (Some(kept), Some(main)) = (kept, main) {
         let (walk, known) = (rescue.walk, rescue.known);
         let (counts, known) = (counts.unwrap_or_default(), known.unwrap_or_default());
         // Nothing is kept for a file with no walk and no count: the next
-        // call has nothing to go on from.
+        // call has nothing to go on from. (`known` is filled only by a walk
+        // or a count, so its clause is a guard.)
         if walk.is_some() || !counts.is_empty() || !known.is_empty() {
             kept.keep(Box::new(Kept {
                 start,
@@ -411,10 +415,12 @@ pub(crate) struct HeaderCache {
 }
 
 /// What a main header is keyed on: its length and a hash of its bytes, so
-/// that the cache holds 16 bytes for it, not a copy of the parsed header
-/// (whose `PPM` chunks run to several times the input). The bytes fed only
-/// grow, so a main header read whole stays the same; the key tells a read
-/// of another input from a read of the same one grown.
+/// that the cache holds two integers for it, not a copy of the parsed header
+/// (whose `PPM` chunks run to several times the input). It is sound because
+/// the bytes fed only grow, so a main header read whole stays the same, and
+/// because a change of options drops the cache. The hash is a cheap defense
+/// against a read of another input on the same cache, and probabilistic. Any
+/// future way to truncate or reset the bytes fed must clear the cache.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct MainKey {
     len: usize,

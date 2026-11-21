@@ -173,9 +173,10 @@ last tile-part whose `Psot` is 0, which is never whole. The tiles it
 learned of are charged the read's budget again, as a read from the start
 charges them, so each call gives what `read_header_with` gives with
 `strict` off on the same bytes. It keeps about 140 bytes for each tile
-counted under its own header and a byte for each other tile, and a 16-byte
-key of the main header, not a copy. A file with no tile over a cap keeps
-nothing. What it keeps is for one selected area and reduction,
+counted under its own header and a byte for each other tile, and a key of
+the main header (two integers), not a copy. A file whose tiles' sizes show
+them within the caps keeps nothing; any other keeps a few hundred bytes, plus
+the per-tile counts. What it keeps is for one selected area and reduction,
 and a change of options drops it.
 
 ## Changing the options

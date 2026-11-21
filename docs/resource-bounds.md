@@ -406,10 +406,11 @@ parsed on every call. The header of a tile-part not yet
 fed in full, or of a last tile-part whose `Psot` is 0, is read again on
 each call. What it keeps, about 140 bytes for each tile counted under its
 own header and a byte for each other tile, is held until the options
-change. It keeps no copy of the main header, only a 16-byte key of it, so
-a file with no tile over a cap keeps nothing (`tests/incremental_header_cache_alloc.rs`:
-0 bytes held after a call on a 16.8 MB main header of `PPM` data, where a
-copy of the parsed header held 100 MB). The walk for the
+change. It keeps no copy of the main header, only a key of it (two
+integers). A file whose tiles' sizes show them within the caps keeps nothing
+(`tests/incremental_header_cache_alloc.rs`: 0 bytes held after a call on a
+16.8 MB main header of `PPM` data, where a copy of the parsed header held
+100 MB); any other keeps a few hundred bytes, plus the per-tile counts. The walk for the
 decode's error for the tile-parts is not kept: each call that refuses a
 tile or stops at a budget walks every tile-part fed again, so with tile 0
 refused and `Region::Tile(0)`, calls after each 1 MiB fed of the 235 MB

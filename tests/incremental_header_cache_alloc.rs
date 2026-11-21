@@ -1,6 +1,7 @@
-//! `IncrementalDecoder::header` keeps nothing between calls for a file
-//! that has no tile over a cap, whatever its main header holds, and the
-//! decoder itself stays small.
+//! `IncrementalDecoder::header` keeps nothing between calls for a file whose
+//! tiles' sizes show them within the caps, whatever its main header holds,
+//! only the counts of a file whose tiles' sizes do not, and the decoder
+//! itself stays small.
 //!
 //! The file is the worst main header for the parsed form: one tile of
 //! 64 x 64 samples and 256 `PPM` markers of about 64 KiB each, 16.8 MB in
@@ -19,7 +20,7 @@ mod synth;
 use alloc::CURRENT;
 use std::sync::atomic::Ordering;
 
-use rust_j2k::{DecodeOptions, IncrementalDecoder, read_header_with};
+use rust_j2k::{DecodeOptions, Header, IncrementalDecoder, read_header_with};
 
 #[global_allocator]
 static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
@@ -44,28 +45,65 @@ fn ppm_file() -> Vec<u8> {
     bytes
 }
 
-#[test]
-fn header_keeps_nothing_for_a_file_with_no_tile_over_a_cap() {
-    // The decoder was 448 bytes before the cache, and 896 with it inline.
-    let size = size_of::<IncrementalDecoder>();
-    println!("size_of IncrementalDecoder: {size}");
-    let bytes = ppm_file();
-    assert!(bytes.len() > 16_000_000, "{} bytes", bytes.len());
-    let lenient = DecodeOptions::default().with_strict(false);
-    let want = read_header_with(&bytes, &lenient).expect("a header");
-    let mut decoder = IncrementalDecoder::new(lenient).unwrap();
-    decoder.feed(&bytes);
+/// One tile of 1024 x 1024 samples and no wavelet levels: its size does not
+/// show it within the caps, so its counts under the main header are kept.
+fn big_tile_file() -> Vec<u8> {
+    let siz = synth::siz_body([1024, 1024, 0, 0, 1024, 1024, 0, 0], &[[7, 1, 1]]);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0)),
+        synth::seg(0xFF5C, &synth::qcd_none_body(0, &[8])),
+    ]
+    .concat();
+    bytes.extend(synth::tile_part(0, 0, 1, &[], &[]));
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
+}
+
+/// The heap `decoder` holds after each of 3 calls of `header()`, over what
+/// it held before the first, with each header checked against `want`.
+fn held_after_calls(decoder: &IncrementalDecoder, want: &Header) -> [usize; 3] {
     let base = CURRENT.load(Ordering::SeqCst);
-    // Measured first and printed after: the captured output is heap too.
     let mut helds = [0; 3];
     for (call, slot) in helds.iter_mut().enumerate() {
         let got = decoder.header().expect("a header").expect("a header");
-        assert_eq!(got, want, "call {call}");
-        *slot = CURRENT.load(Ordering::SeqCst) - base;
+        assert_eq!(&got, want, "call {call}");
+        // The header returned is heap too.
+        drop(got);
+        *slot = CURRENT.load(Ordering::SeqCst).saturating_sub(base);
     }
-    for (call, held) in helds.into_iter().enumerate() {
-        println!("call {call}: {held} bytes held after the call");
-        assert!(held <= 64, "call {call}: {held} bytes held");
-    }
+    helds
+}
+
+#[test]
+fn header_holds_what_the_files_tiles_need() {
+    // The decoder was 448 bytes before the cache, and 896 with it inline.
+    let size = size_of::<IncrementalDecoder>();
     assert!(size <= 512, "{size} bytes");
+    let lenient = DecodeOptions::default().with_strict(false);
+
+    // Tiles whose sizes show them within the caps: nothing is kept, though
+    // the main header is 16.8 MB of `PPM` data.
+    let bytes = ppm_file();
+    assert!(bytes.len() > 16_000_000, "{} bytes", bytes.len());
+    let want = read_header_with(&bytes, &lenient).expect("a header");
+    let mut decoder = IncrementalDecoder::new(lenient.clone()).unwrap();
+    decoder.feed(&bytes);
+    let none = held_after_calls(&decoder, &want);
+    drop(decoder);
+
+    // A tile that is not: its counts are kept, a few hundred bytes.
+    let bytes = big_tile_file();
+    let want = read_header_with(&bytes, &lenient).expect("a header");
+    let mut decoder = IncrementalDecoder::new(lenient).unwrap();
+    decoder.feed(&bytes);
+    let counts = held_after_calls(&decoder, &want);
+
+    // Printed after the measures: the captured output is heap too.
+    println!("size {size}; held {none:?} (PPM file), {counts:?} (big tile)");
+    assert_eq!(none, [0; 3]);
+    for held in counts {
+        assert!((1..=4096).contains(&held), "{held} bytes held");
+    }
 }
