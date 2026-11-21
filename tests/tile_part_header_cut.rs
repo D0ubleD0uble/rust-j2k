@@ -121,9 +121,14 @@ fn assert_read_as_cut(name: &str, bytes: &[u8]) {
         .iter()
         .find(|entry| matches!(entry, ReportEntry::TruncatedTilePart { .. }))
         .unwrap();
-    assert!(
-        named.to_string().contains("is cut short in its header"),
-        "{name}: {named}"
+    assert_eq!(
+        named.to_string(),
+        format!(
+            "tile 8 tile-part 2 is cut short in its header: {} bytes of it are there, and \
+             its `Psot` is 0",
+            bytes.len() - at
+        ),
+        "{name}"
     );
     assert_eq!(
         entries

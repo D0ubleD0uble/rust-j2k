@@ -1095,7 +1095,11 @@ must reach `SOD` for the code to be taken as a marker (otherwise it is lost
 sync). So these stay `Ok` until the input holds the header through `SOD`,
 or until those markers break. A longer input then fails at the same marker
 with the same error, so a prefix goes from `Ok` to one final error and
-never from one error to another.
+never from one error to another. An `EPH`, or another marker not allowed
+there, followed by the end of the input is refused at once. OpenJPEG
+`-allow-partial` decodes that cut file, but refuses the whole file ("Marker
+size inconsistent with stream length"), so the refusal matches the whole
+file's result.
 
 For a tile-part whose `Psot` is 0, a segment whose length runs past the end
 of the input is also read as the input ending, even when the file ends in an

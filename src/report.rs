@@ -287,7 +287,7 @@ impl fmt::Display for ReportEntry {
             } => write!(
                 f,
                 "tile {tile} tile-part {tile_part} is cut short in its header: {present} bytes \
-                 are there, and its `Psot` is 0"
+                 of it are there, and its `Psot` is 0"
             ),
             ReportEntry::TruncatedTilePart {
                 tile,
