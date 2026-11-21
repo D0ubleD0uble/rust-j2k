@@ -158,7 +158,7 @@ def shaped_bomb(size: int, cb: int, passes: int, termall: bool = False, last_len
     """A `t1bomb` variant for the memory and time figures in
     docs/resource-bounds.md. With `termall`, the COD code-block style is 0x04
     (terminate on each pass): each pass is its own codeword segment of zero
-    bytes, which costs about 3 header bits and the decoder about 130 bytes of
+    bytes, which costs about 3 header bits and the decoder about 15 bytes of
     heap. Otherwise each code-block has one segment of one byte, except the
     last, which has `last_len` bytes of zeros. A length of `last_len` needs
     its Lblock raised: Lblock starts at 3 and the length field has
@@ -226,7 +226,7 @@ INCREMENTAL = {
 # figures in docs/resource-bounds.md ("Figures for a decode service").
 MEMORY = {
     # Code-blocks of 4x4 with one pass-terminated segment per pass: 1024^2 is
-    # 2.3 MB and peaks at 720 MiB under AtMost(2^20); 2048^2 is 9.3 MB.
+    # 2.3 MB and peaks at 97 MiB under AtMost(2^20); 2048^2 is 9.3 MB.
     "termall_1024_2_88.j2k": lambda: shaped_bomb(1024, 2, 88, termall=True),
     "termall_2048_2_88.j2k": lambda: shaped_bomb(2048, 2, 88, termall=True),
     "termall_4096_2_88.j2k": lambda: shaped_bomb(4096, 2, 88, termall=True),

@@ -42,9 +42,7 @@ input may be hostile. With the default limits, the public functions (`decode`,
 a typed `Error` for any input. They never panic, read out of bounds or hang,
 and they allocate at most what the limits allow: about 6.4 GiB at peak
 for an input of up to 64 MiB, and about 102 bytes per byte of input past
-that, except files of many pass-terminated (`termall`) codeword segments, a
-known gap ([#585](https://github.com/D0ubleD0uble/rust-j2k/issues/585); step 2
-of [Running a decode service](#running-a-decode-service) sizes for it). If the
+that. If the
 machine can't supply that, the process aborts, as any Rust program does; that
 is not a bug. If a panic, an out-of-bounds read, a hang or a larger allocation
 from any other input happens, report it as above.
@@ -110,14 +108,14 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    buffers peak at no more than about 3.2 times that (a square tile
    measured 1.35, resident). Plan on 3.2 x 4n for the samples, plus one
    tile's code-block and precinct records (about 0.8 GiB at the floors),
-   plus up to about 350 bytes for each byte of input for code-block
+   plus up to about 65 bytes for each byte of input for code-block
    segment records, plus the input and the tile records above. The
    records of a tile do not shrink with `n`: a tile may hold at least 2^20
    code-blocks and 2^18 precincts at any ceiling, so below about
    `n` = 2^26 they, not the samples, set the peak. The segment term is
-   estimated: about 130 bytes for each codeword segment, and a file can
-   code one segment in about 3 header bits. Measured peaks, including 11.2
-   GiB for a 37 MB file under `AtMost(2^24)`, are in [Figures for a decode
+   measured on files of one-byte codeword segments, each coded in about 3
+   header bits, the most records a byte of input can ask for. The peaks
+   are in [Figures for a decode
    service](docs/resource-bounds.md#figures-for-a-decode-service).
    A refusal under it is an `Error::Limit` with no retry, since you set the
    ceiling. The code-blocks and precincts a tile may hold are set from `n`
