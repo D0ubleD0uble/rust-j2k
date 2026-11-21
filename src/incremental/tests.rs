@@ -1428,9 +1428,10 @@ fn a_change_of_region_keeps_the_walks() {
 /// fit, and keeps the walk of the tile it reads. A later walk of a tile let
 /// go is charged as a walk read again.
 ///
-/// Which walks fit the room is set by their size in bytes, which follows the
-/// pointer width: on a 64-bit target tiles 1 and 2 are let go, on a 32-bit
-/// one the walks are smaller and letting go of tile 1 is enough.
+/// The region is one sample of tile 0, so the room is about twice the
+/// largest walk. The six walks hold more than that on a target of any
+/// pointer width, so several are let go; how many follows the walks' size
+/// in bytes, which the test reads from the decoder.
 #[test]
 fn a_smaller_region_lets_go_of_the_walks_of_the_tiles_it_does_not_read() {
     let bytes = fixture(SIX_TILES);
@@ -1439,18 +1440,25 @@ fn a_smaller_region_lets_go_of_the_walks_of_the_tiles_it_does_not_read() {
     decoder.feed(&bytes);
     assert!(refine_now(&mut decoder).unwrap().is_some());
     let visits = decoder.spent.walks.visits();
-    let tile = whole.clone().with_region(Region::Tile(0));
-    decoder.set_region(Region::Tile(0)).unwrap();
+    let held = decoder.spent.walks.kept_bytes();
+    let largest = decoder.spent.walks.largest();
+    assert!(
+        held > 3 * largest,
+        "{held} bytes in walks of at most {largest}"
+    );
+    let sample = Region::Window(crate::Window::new(0, 0, 1, 1));
+    decoder.set_region(sample.clone()).unwrap();
     assert_eq!(
         refine_now(&mut decoder).unwrap(),
-        oracle(&bytes, &tile).unwrap()
+        oracle(&bytes, &whole.clone().with_region(sample)).unwrap()
     );
-    // The tiles let go, from the first; tile 0's walk goes on.
-    #[cfg(target_pointer_width = "64")]
-    let gone: &[u16] = &[1, 2];
-    #[cfg(not(target_pointer_width = "64"))]
-    let gone: &[u16] = &[1];
-    assert_eq!(decoder.spent.walks.kept(), (6 - gone.len(), 0));
+    // The tiles let go, from the first; tile 0's walk goes on, as no walk
+    // was read again.
+    let (kept, unkept) = decoder.spent.walks.kept();
+    assert_eq!(unkept, 0);
+    let gone: Vec<u16> = (1..).take(6 - kept).collect();
+    assert!(gone.len() >= 2, "only {gone:?} let go");
+    assert!(decoder.spent.walks.kept_bytes() < held);
     assert_eq!(decoder.spent.repeats, 0);
     assert_eq!(decoder.spent.walks.visits(), visits);
     decoder.set_region(Region::Whole).unwrap();

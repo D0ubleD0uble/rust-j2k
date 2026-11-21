@@ -14,7 +14,7 @@ use crate::tier1::ebcot::mq::MqDecoder;
 use crate::tier1::ebcot::passes::{
     BlockParams, BlockState, Orientation, decode_block, init_contexts,
 };
-use crate::tier2::{CodeBlock, CodedSegment};
+use crate::tier2::{CodeBlock, Segments};
 
 /// Drive the raw MQ decoder over `data`: context transitions, BYTEIN
 /// stuffing, marker handling, and past-end synthesis, with bounded work.
@@ -198,15 +198,10 @@ fn run_ht_block(data: &[u8]) -> Option<((usize, usize), crate::Result<usize>)> {
         }
     }
     let split = (flags & 0x40 != 0).then_some(*extra);
-    let mut segments = vec![CodedSegment {
-        passes: 1,
-        chunks: chunks(&cleanup, split),
-    }];
+    let mut segments = Segments::default();
+    segments.push(1, &chunks(&cleanup, split));
     if num_passes > 1 || !refinement.is_empty() {
-        segments.push(CodedSegment {
-            passes: num_passes.saturating_sub(1),
-            chunks: chunks(&refinement, split),
-        });
+        segments.push(num_passes.saturating_sub(1), &chunks(&refinement, split));
     }
     let block = CodeBlock {
         x: 0,
@@ -715,11 +710,11 @@ mod tests {
                 .flat_map(|r| &r.subbands)
                 .flat_map(|s| &s.blocks);
             for block in blocks {
-                let [cleanup, rest @ ..] = &block.segments[..] else {
+                let Some(cleanup) = block.segments.first() else {
                     continue;
                 };
                 let cleanup = cleanup.bytes();
-                let refinement = rest.first().map(|s| s.bytes()).unwrap_or_default();
+                let refinement = block.segments.get(1).map(|s| s.bytes()).unwrap_or_default();
                 let mut seed = ((block.width - 1) as u16).to_le_bytes().to_vec();
                 seed.push((block.height - 1) as u8);
                 seed.push(0);

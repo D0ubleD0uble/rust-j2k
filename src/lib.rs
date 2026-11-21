@@ -309,7 +309,8 @@ mod readme_examples {}
 ///   count (see [`DecodeOptions::sample_limit`]). Peak memory is about 1.35
 ///   times the output for a square tile, about 2.7 GiB at 2^29 samples,
 ///   and more for a tall, narrow tile or while a palette expands (see [the
-///   sample limit][sample-limit]). The limit also sets the code-blocks and
+///   sample limit][sample-limit]). A tile's code-block segment records can
+///   add up to about 65 bytes per byte of input. The limit also sets the code-blocks and
 ///   precincts one tile may hold: one for each 512 and each 2048 samples it
 ///   allows, and at least 2^20 and 2^18. This is for the one-shot functions; an
 ///   [`IncrementalDecoder`] keeps per-tile state and can hold up to about
@@ -929,9 +930,12 @@ pub struct DecodeOptions {
     /// the file. The input is every byte passed in, a JP2 file's boxes
     /// included; for an [`IncrementalDecoder`] it is the bytes fed so far.
     /// Past 64 MiB, a file may ask for 32 bytes of output per byte of
-    /// input, and a decode peaks at about 43 bytes per byte for a square
-    /// tile and up to about 102 for a tile one sample wide: about 4.1 GiB and
-    /// 9.6 GiB for a file of 100 MB, input included.
+    /// input, and a decode whose peak is its samples peaks at about 43 bytes
+    /// per byte for a square tile and up to about 102 for a tile one sample
+    /// wide: about 4.1 GiB and 9.6 GiB for a file of 100 MB, input included.
+    /// A file that spends its bytes on code-block segments can peak past 43
+    /// with square tiles; about 102 bytes per byte is the bound for any
+    /// file.
     ///
     /// Under a window or a tile ([`region`](Self::region)), the count
     /// is the samples of the tiles the decode reads, in every component, as
@@ -1157,8 +1161,8 @@ impl Default for DecodeOptions {
 ///
 /// Each bound scales with the size of the file, so a small file cannot ask for
 /// minutes of work, and a file of up to 64 MiB is held to the sample limit's
-/// floor: about 2.7 GiB of memory for a square tile and several GiB for a tall,
-/// narrow one. Past 64 MiB the sample limit grows with the file (see
+/// floor: samples that peak at about 2.7 GiB for a square tile and several GiB
+/// for a tall, narrow one, and at most about 6.4 GiB in all. Past 64 MiB the sample limit grows with the file (see
 /// [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)).
 /// A valid file can still go past a bound, when it codes many samples in very
 /// few bytes or is very large. The decode then fails with [`Error::Limit`]. Its
