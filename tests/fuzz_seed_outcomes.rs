@@ -560,7 +560,7 @@ fn the_fuzz_skip_counts_the_header_when_a_palette_makes_more_channels() {
         // so the header read parses the file's bare `SOT` and gives that
         // error (`tests/error_precedence.rs`). The count takes the header's
         // channels only from a header that reads, so it is `SIZ`'s alone and
-        // under the budget.
+        // under the budget. This is current behavior, not a promise.
         assert_is_a_cut_sot(&jp2, &opts);
         assert_eq!(
             budget::declared(&jp2),

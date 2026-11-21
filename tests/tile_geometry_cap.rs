@@ -78,7 +78,7 @@ fn refused_at(limit: &LimitDetail) -> (u32, u64) {
 }
 
 /// The kind that refuses a tile over the code-block cap: `TileCodeBlocks`,
-/// or on a 32-bit target `AddressSpace`. There the sample limit tops out at
+/// or on a 32-bit target `AddressSpace` (current behavior, not a promise). There the sample limit tops out at
 /// 2^29 - 1 samples, so the cap never rises past its 2^20 floor, and the
 /// limit that would admit a tile over it is past what the target addresses.
 const OVER_BLOCKS: LimitKind = if cfg!(target_pointer_width = "64") {
@@ -251,7 +251,12 @@ fn under_at_most_an_image_within_the_floor_decodes() {
     let over = blocks_tile(width, height, 0);
     let options = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost((1 << 29) - 1));
     let limit = refusal(&over, &options);
-    assert_eq!(limit.retry_with(), None, "{limit}");
+    assert_over_cap(
+        &limit,
+        LimitKind::TileCodeBlocks,
+        None,
+        (0, blocks_of(width, height)),
+    );
     assert!(options.with_retry(&limit).is_none());
 }
 
@@ -436,12 +441,12 @@ fn a_tile_of_many_resolutions_is_counted() {
         limit.message().starts_with("tile 0 holds 540672 precincts"),
         "{limit}"
     );
-    assert_eq!(limit.kind(), OVER_PRECINCTS, "{limit}");
-    if cfg!(target_pointer_width = "64") {
-        assert_eq!(refused_at(&limit), (0, 540_672), "{limit}");
-    } else {
-        assert_eq!(limit.refused_at(), None, "{limit}");
-    }
+    assert_over_cap(
+        &limit,
+        LimitKind::TilePrecincts,
+        Some(WorkLimit::Raised(3)),
+        (0, 540_672),
+    );
 }
 
 /// With `strict` off, a tile with no tile-part is left out of the decode, so

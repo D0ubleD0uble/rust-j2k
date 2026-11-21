@@ -735,7 +735,8 @@ fn a_tile_cap_refusal_retries_by_the_sample_limit_and_ends() {
     if !cfg!(target_pointer_width = "64") {
         // The caps stop at their floor on a 32-bit target, where no sample
         // limit admits the tile: there is no retry and no ladder, and
-        // `Unlimited` refuses it too. This is current behavior.
+        // `Unlimited` refuses it too. This is current behavior, not a
+        // promise (#529 may give the refusal more).
         assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
         assert_eq!(limit.retry_with(), None, "{limit}");
         assert!(start.with_retry(&limit).is_none());
@@ -790,7 +791,8 @@ fn a_tile_code_block_cap_refusal_retries_by_the_sample_limit() {
     };
     if !cfg!(target_pointer_width = "64") {
         // The cap stops at its floor on a 32-bit target, where no sample
-        // limit admits the tile: there is no retry. This is current behavior.
+        // limit admits the tile: there is no retry. This is current
+        // behavior, not a promise (#529 may give the refusal more).
         assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
         assert_eq!(limit.retry_with(), None, "{limit}");
         assert!(start.with_retry(&limit).is_none());

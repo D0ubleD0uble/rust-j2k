@@ -291,10 +291,6 @@ mod harness {
 }"#;
 
     #[test]
-    #[cfg_attr(
-        target_os = "wasi",
-        ignore = "writes under the target dir, which the WASI runner does not preopen"
-    )]
     fn discovers_paired_fixture() {
         let dir = scratch("paired");
         // Not a real codestream, so end to end it classifies as Failed
@@ -315,10 +311,6 @@ mod harness {
     }
 
     #[test]
-    #[cfg_attr(
-        target_os = "wasi",
-        ignore = "writes under the target dir, which the WASI runner does not preopen"
-    )]
     fn missing_snapshot_is_a_load_error() {
         let dir = scratch("orphan-codestream");
         write(&dir, "lonely.j2k", "bytes");
@@ -331,10 +323,6 @@ mod harness {
     }
 
     #[test]
-    #[cfg_attr(
-        target_os = "wasi",
-        ignore = "writes under the target dir, which the WASI runner does not preopen"
-    )]
     fn malformed_snapshot_is_a_load_error() {
         let dir = scratch("malformed-snapshot");
         write(&dir, "broken.j2k", "bytes");
@@ -347,10 +335,6 @@ mod harness {
     }
 
     #[test]
-    #[cfg_attr(
-        target_os = "wasi",
-        ignore = "writes under the target dir, which the WASI runner does not preopen"
-    )]
     fn snapshot_with_wrong_sample_count_is_a_load_error() {
         let dir = scratch("wrong-count");
         write(&dir, "bad.j2k", "bytes");
@@ -382,10 +366,6 @@ mod harness {
     }
 
     #[test]
-    #[cfg_attr(
-        target_os = "wasi",
-        ignore = "writes under the target dir, which the WASI runner does not preopen"
-    )]
     fn discovery_is_sorted_and_ignores_other_files() {
         let dir = scratch("sorted");
         write(&dir, "beta.j2k", "bytes");

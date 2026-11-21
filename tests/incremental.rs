@@ -726,7 +726,10 @@ fn a_sample_limit_refusal_is_a_wait() {
 /// the 2^29 - 1 a target addresses, so no byte count raises the limit and the
 /// refusal is `AddressSpace`, not a wait: a refine returns it as an error from
 /// the first one with the header in, with no retry, under the defaults and
-/// under `AtMost` alike, as does `finish`. This is current behavior.
+/// under `AtMost` alike, as does `finish`; each refine agrees with the
+/// one-shot decode, `header` returns it too, and a window inside the first
+/// tile clears it. That `AddressSpace` carries no retry is current behavior,
+/// not a promise.
 #[cfg(not(target_pointer_width = "64"))]
 #[test]
 fn a_sample_limit_refusal_is_an_error_on_a_32_bit_target() {
@@ -750,10 +753,23 @@ fn a_sample_limit_refusal_is_an_error_on_a_32_bit_target() {
                 (Err(Error::Limit(limit)), None) => {
                     assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
                     assert_eq!(limit.retry_with(), None, "{limit}");
-                    first = Some(format!("{:?}", Error::Limit(limit)));
+                    let error = Error::Limit(limit);
+                    assert_eq!(
+                        keyed(Err::<(), _>(error.clone())),
+                        keyed(refine_oracle(&bytes[..decoder.bytes_fed()], &options).map(|_| ())),
+                        "{} bytes",
+                        decoder.bytes_fed()
+                    );
+                    first = Some(format!("{error:?}"));
                 }
                 (Err(error), Some(first)) => assert_eq!(&format!("{error:?}"), first),
                 (other, _) => panic!("{} bytes: {other:?}", decoder.bytes_fed()),
+            }
+            if let Some(first) = &first {
+                match decoder.header() {
+                    Err(error) => assert_eq!(&format!("{error:?}"), first),
+                    other => panic!("{} bytes: {other:?}", decoder.bytes_fed()),
+                }
             }
         }
         let first = first.expect("a refine reached the limit");
@@ -761,6 +777,16 @@ fn a_sample_limit_refusal_is_an_error_on_a_32_bit_target() {
             Err(error) => assert_eq!(format!("{error:?}"), first),
             other => panic!("{other:?}"),
         }
+        // A window inside the first tile is within the limit, and clears it.
+        let window = Region::Window(Window::new(0, 0, 256, 256));
+        decoder.set_region(window.clone()).unwrap();
+        assert!(decoder.header().unwrap().is_some());
+        match decoder.refine() {
+            Ok(Refined::Image(image)) => assert_eq!((image.width, image.height), (256, 256)),
+            other => panic!("{other:?}"),
+        }
+        let image = decoder.finish().expect("the window fits the limit");
+        assert_eq!((image.width, image.height), (256, 256));
     }
 }
 
@@ -773,7 +799,8 @@ fn a_sample_limit_refusal_is_an_error_on_a_32_bit_target() {
 ///
 /// Gated to 64-bit: the ceiling of 2^29 is past the address space of a
 /// 32-bit target, which refuses the file as `AddressSpace` whatever the
-/// ceiling (see `a_sample_limit_refusal_is_an_error_on_a_32_bit_target`).
+/// ceiling, until a region clears it (see
+/// `a_sample_limit_refusal_is_an_error_on_a_32_bit_target`).
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn a_sample_limit_refusal_under_at_most_is_final() {
@@ -1502,7 +1529,8 @@ fn the_bound_spent_seed_waits_on_bound_spent_where_decode_with_is_refused_by_a_t
         panic!("not refused");
     };
     // On a 32-bit target the cap stops at its floor, and the tile is past
-    // what the address space holds.
+    // what the address space holds: `AddressSpace`, which is current
+    // behavior, not a promise.
     let over_precincts = if cfg!(target_pointer_width = "64") {
         LimitKind::TilePrecincts
     } else {
