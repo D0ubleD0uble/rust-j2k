@@ -719,6 +719,197 @@ fn a_refusal_names_the_lowest_tile_whatever_the_order() {
     }
 }
 
+/// A tile-part `COD` that takes a lower tile over a cap is counted before a
+/// higher tile over a cap under the main header (a `header` fuzz find, the
+/// seed `tests/fixtures/header/own_cod_lower_tile.j2k`). Of two tiles, tile
+/// 0 is 600 x 4096 and within the caps under the main header's 4x4
+/// code-blocks and maximal precincts, and its tile-part `COD` gives it 1x1
+/// precincts; tile 1, 4200 x 4096, is over the code-block cap under the main
+/// header. The decode refuses tile 0 for its precincts, and the header read
+/// now does too (it refused tile 1 for its code-blocks, with `Raised(2)`).
+#[test]
+fn a_tile_part_cod_over_a_cap_in_a_lower_tile_is_refused_first() {
+    let bytes = include_bytes!("fixtures/header/own_cod_lower_tile.j2k");
+    for strict in [true, false] {
+        let options = DecodeOptions::default().with_strict(strict);
+        let limit = refusal(bytes, &options);
+        assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
+        assert!(limit.message().starts_with("tile 0 "), "{limit}");
+        assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(10)), "{limit}");
+    }
+}
+
+/// Two rows of two tiles: a row of 4200 x 512, within the caps under the
+/// main header's 4x4 code-blocks and maximal precincts, over a row of
+/// 4200 x 4096, over the code-block cap there. Each tile in `own` has a
+/// tile-part `COD` of 1x1 precincts, over the precinct cap, and every tile
+/// one empty packet (none for a tile refused). The tile-parts come in
+/// `order`, and the main header has `levels` levels.
+fn two_rows(order: &[u16], own: &[u16], levels: u8, own_levels: u8) -> Vec<u8> {
+    let siz = synth::siz_body(
+        [2 * 4200, 2 * 4096, 0, 4096 - 512, 4200, 4096, 0, 0],
+        &[[7, 1, 1]],
+    );
+    let exponents = vec![8; 3 * usize::from(levels) + 1];
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &synth::cod_body(1, levels, 0, 0)),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &exponents)),
+    ]
+    .concat();
+    let mut cod = synth::cod_body(1, own_levels, 0, 0);
+    cod[0] = 1;
+    cod.extend(vec![0; usize::from(own_levels) + 1]);
+    let cod = synth::seg(0xFF52, &cod);
+    for &tile in order {
+        let (extra, data): (&[u8], &[u8]) = if own.contains(&tile) {
+            (&cod, &[])
+        } else {
+            (&[], &[0])
+        };
+        bytes.extend(synth::tile_part(tile, 0, 1, extra, data));
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
+}
+
+/// The header read counts the lower tiles under their own headers in index
+/// order, whatever the order of the tile-parts, and names the lowest tile
+/// refused, as the decode does: tile 0 where tiles 0 and 1 have a tile-part
+/// `COD` over the precinct cap, tile 1 where only tile 1 has (tile 0 is
+/// decoded first), and tile 2, over the code-block cap under the main
+/// header, where neither has.
+#[test]
+fn the_lowest_tile_a_tile_part_cod_takes_over_a_cap_is_refused() {
+    for order in [&[0, 1, 2, 3][..], &[3, 2, 1, 0], &[2, 1, 3, 0]] {
+        for (own, named, kind) in [
+            (&[0, 1][..], 0, LimitKind::TilePrecincts),
+            (&[1], 1, LimitKind::TilePrecincts),
+            (&[], 2, LimitKind::TileCodeBlocks),
+        ] {
+            for strict in [true, false] {
+                let options = DecodeOptions::default().with_strict(strict);
+                let limit = refusal(&two_rows(order, own, 0, 0), &options);
+                assert_eq!(limit.kind(), kind, "{order:?} {own:?}: {limit}");
+                assert!(
+                    limit.message().starts_with(&format!("tile {named} ")),
+                    "{order:?} {own:?}: {limit}"
+                );
+            }
+        }
+    }
+    // Where that `COD` also has fewer levels than the reduction takes, the
+    // tile is refused for the reduction, as the decode checks a tile's
+    // reduction before its caps.
+    let bytes = two_rows(&[3, 2, 1, 0], &[0], 1, 0);
+    let options = DecodeOptions::default().with_resolution_reduction(1);
+    let header = read_header_with(&bytes, &options);
+    assert!(
+        matches!(&header, Err(Error::InvalidOptions(d)) if d.message().ends_with("in tile 0")),
+        "{header:?}"
+    );
+    assert_same_error(&bytes, &options);
+    // Under a reduction a lower tile is counted whatever its size: here tile
+    // 0 is 8 x 4096, within the caps under any header, and its tile-part
+    // `COD` (or a `COC` for its one component) has no levels where the main
+    // header's has one. Tile 1, 4200 x 4096, is over the code-block cap.
+    let siz = synth::siz_body([2 * 4200, 4096, 4192, 0, 4200, 4096, 0, 0], &[[7, 1, 1]]);
+    let cod = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
+    let coc = synth::seg(0xFF53, &[0, 0, 0, 0, 0, 0, 1]);
+    for own in [cod, coc] {
+        let bytes = [
+            vec![0xFF, 0x4F],
+            synth::seg(0xFF51, &siz),
+            synth::seg(0xFF52, &synth::cod_body(1, 1, 0, 0)),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 4])),
+            synth::tile_part(0, 0, 1, &own, &[]),
+            synth::tile_part(1, 0, 1, &[], &[]),
+            vec![0xFF, 0xD9],
+        ]
+        .concat();
+        for strict in [true, false] {
+            let options = options.clone().with_strict(strict);
+            let header = read_header_with(&bytes, &options);
+            assert!(
+                matches!(&header, Err(Error::InvalidOptions(d)) if d.message().ends_with("in tile 0")),
+                "{header:?}"
+            );
+            assert_same_error(&bytes, &options);
+        }
+    }
+}
+
+/// Where the header read refuses a tile, the decode can refuse the file
+/// sooner, for what only decoding finds: here the packets of tile 0 with
+/// `strict` on (a byte left after its last packet), or with `strict` off the
+/// charge for the tiles read that have no tile-part, one step a
+/// tile-component, past the packet work bound. The header read reads
+/// neither, and names the tile over a cap.
+#[test]
+fn what_only_decoding_finds_in_a_lower_tile_comes_first_in_the_decode() {
+    let mut bytes = two_rows(&[0, 1, 2, 3], &[], 0, 0);
+    // Tile 0's tile-part, the first of four of 15 bytes, now with a byte
+    // after its packet.
+    let at = bytes.len() - 2 - 4 * 15;
+    bytes.splice(at..at + 15, synth::tile_part(0, 0, 1, &[], &[0, 0]));
+    // The `header` fuzz seeds: this file, and one with no data in tile 0.
+    assert_eq!(
+        bytes[..],
+        include_bytes!("fixtures/header/lower_tile_data_long.j2k")[..]
+    );
+    let short = include_bytes!("fixtures/header/lower_tile_data_short.j2k");
+    for (bytes, fault) in [
+        (
+            &bytes[..],
+            "tile 0 has 1 byte(s) left after the last packet",
+        ),
+        (&short[..], "the data of tile 0 ends before the last packet"),
+    ] {
+        let header = read_header_with(bytes, &DecodeOptions::default());
+        assert!(
+            matches!(&header, Err(Error::Limit(l)) if l.message().starts_with("tile 2 ")),
+            "{header:?}"
+        );
+        let decoded = decode_with(bytes, &DecodeOptions::default());
+        assert!(
+            matches!(&decoded, Err(Error::Codestream(d)) if d.message() == fault),
+            "{decoded:?}"
+        );
+    }
+
+    // 1024 x 2 tiles of 16384 components: a row of 1x1 tiles, within the
+    // caps by their size, over a row of 1 x 17, over the precinct cap under
+    // the main header's 1x1 precincts. Only tile 1024 has a tile-part.
+    let siz = synth::siz_body([1024, 34, 0, 16, 1, 17, 0, 0], &vec![[7, 1, 1]; 16384]);
+    let mut cod = synth::cod_body(1, 0, 0, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+    ]
+    .concat();
+    bytes.extend(synth::tile_part(1024, 0, 1, &[], &[]));
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    let lenient = DecodeOptions::default().with_strict(false);
+    let header = read_header_with(&bytes, &lenient);
+    assert!(
+        matches!(&header, Err(Error::Limit(l)) if l.kind() == LimitKind::TilePrecincts),
+        "{header:?}"
+    );
+    let decoded = decode_with(&bytes, &lenient);
+    assert!(
+        matches!(&decoded, Err(Error::Limit(l)) if l.kind() == LimitKind::PacketWork),
+        "{decoded:?}"
+    );
+    // With `strict` on, both refuse the file for the missing tile 0: the
+    // header read counts it, as a tile-part header could take it over a cap.
+    assert_same_error(&bytes, &DecodeOptions::default());
+}
+
 /// A JP2 file is held to the same caps, and its header read refuses as its
 /// decode does.
 #[test]
@@ -902,4 +1093,225 @@ fn a_refusal_only_unlimited_lifts_is_a_wait() {
     let unlimited = DecodeOptions::default().with_retry(&limit).unwrap();
     let header = read_header_with(&bytes, &unlimited).expect("Unlimited admits the tile");
     assert_eq!((header.width, header.height), (width, height));
+}
+
+/// A tile over a cap under the main header that has no tile-part, with a
+/// lower tile its own header refuses (a review find, the seed
+/// `tests/fixtures/header/strict_missing_over_cap.j2k`). Tile 0 is 8 wide,
+/// with a tile-part `COD` of no levels; tile 1, 1000 x 1000 and over the
+/// precinct cap, is missing. With `strict` on the decode refuses the file for
+/// the missing tile before it counts any tile, so at reduction 1 the header
+/// read gives that error too, not tile 0's reduction refusal.
+#[test]
+fn a_missing_tile_over_a_cap_comes_before_a_lower_tile_refused() {
+    let bytes = include_bytes!("fixtures/header/strict_missing_over_cap.j2k");
+    let reduced = DecodeOptions::default().with_resolution_reduction(1);
+    let header = read_header_with(bytes, &reduced);
+    assert!(
+        matches!(&header, Err(Error::Codestream(d))
+            if d.message() == "the codestream carries no tile-part for tile 1"),
+        "{header:?}"
+    );
+    assert_same_error(bytes, &reduced);
+    // With `strict` off the decode leaves tile 1 out and refuses tile 0.
+    let lenient = reduced.clone().with_strict(false);
+    let header = read_header_with(bytes, &lenient);
+    assert!(
+        matches!(&header, Err(Error::InvalidOptions(d)) if d.message().ends_with("in tile 0")),
+        "{header:?}"
+    );
+    assert_same_error(bytes, &lenient);
+    // The same for a missing tile between the lower tile refused and the
+    // tile over a cap: tile 1, within the caps, of two rows whose tile 0
+    // has a tile-part `COD` of no levels.
+    let bytes = two_rows(&[0, 2, 3], &[0], 1, 0);
+    let header = read_header_with(&bytes, &reduced);
+    assert!(
+        matches!(&header, Err(Error::Codestream(d))
+            if d.message() == "the codestream carries no tile-part for tile 1"),
+        "{header:?}"
+    );
+    assert_same_error(&bytes, &reduced);
+    let header = read_header_with(&bytes, &lenient);
+    assert!(
+        matches!(&header, Err(Error::InvalidOptions(d)) if d.message().ends_with("in tile 0")),
+        "{header:?}"
+    );
+    assert_same_error(&bytes, &lenient);
+}
+
+/// A tile over a cap with no tile-part after one its own header admits,
+/// with a lower tile refused (a review find, the seed
+/// `tests/fixtures/header/later_missing_over_cap.j2k`). Tile 0 is 8 wide,
+/// with a tile-part `COD` of no levels; tile 1, 1000 x 1000 and over the
+/// precinct cap under the main header, has a tile-part `COD` that admits
+/// it; tile 2, the same size, is missing. With `strict` on the decode
+/// refuses the file for tile 2 before it counts any tile, so at reduction 1
+/// the header read looks past tile 1 and gives that error too.
+#[test]
+fn a_missing_tile_over_a_cap_after_one_admitted_comes_before_a_lower_tile_refused() {
+    let bytes = include_bytes!("fixtures/header/later_missing_over_cap.j2k");
+    let reduced = DecodeOptions::default().with_resolution_reduction(1);
+    let header = read_header_with(bytes, &reduced);
+    assert!(
+        matches!(&header, Err(Error::Codestream(d))
+            if d.message() == "the codestream carries no tile-part for tile 2"),
+        "{header:?}"
+    );
+    assert_same_error(bytes, &reduced);
+    // With `strict` off the decode leaves tile 2 out and refuses tile 0.
+    let lenient = reduced.clone().with_strict(false);
+    let header = read_header_with(bytes, &lenient);
+    assert!(
+        matches!(&header, Err(Error::InvalidOptions(d)) if d.message().ends_with("in tile 0")),
+        "{header:?}"
+    );
+    assert_same_error(bytes, &lenient);
+}
+
+/// `components` gray components over a row of `width` tiles of 1x1 and a
+/// row of `width` tiles of 1 x `tall`, with `levels` levels and precincts
+/// of 1x1 at resolution 0 and 2x2 above.
+/// Every tile has a tile-part with no `COD` or `COC` and no data.
+fn small_row_over_tall_row(components: usize, width: u32, tall: u32, levels: u8) -> Vec<u8> {
+    let siz = synth::siz_body(
+        [width, 2 * tall, 0, tall - 1, 1, tall, 0, 0],
+        &vec![[7, 1, 1]; components],
+    );
+    let mut cod = synth::cod_body(1, levels, 0, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    cod.extend(vec![0x11; usize::from(levels)]);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        synth::seg(
+            0xFF5C,
+            &synth::qcd_none_body(2, &vec![8; 3 * usize::from(levels) + 1]),
+        ),
+    ]
+    .concat();
+    for tile in 0..2 * width {
+        bytes.extend(synth::tile_part(tile as u16, 0, 1, &[], &[]));
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
+}
+
+/// Lower tiles whose tile-parts carry no `COD` or `COC` are coded as the
+/// main header has it, so the header read neither reads nor charges them,
+/// and its budget is left for the tile over a cap: 400 small tiles of 1024
+/// components under a reduction, and 64 of 16384 components (where any
+/// tile-part header could take a small tile over a cap), are refused at
+/// the first tall tile, as the decode refuses them once the packet work
+/// bound is lifted (it reads every lower tile's packets first).
+#[test]
+fn lower_tiles_with_no_tile_part_cod_spend_no_budget() {
+    for (components, width, tall, reduction) in [(1024, 400, 4096, 1), (16384, 64, 17, 0)] {
+        let bytes = small_row_over_tall_row(components, width, tall, 1);
+        let options = DecodeOptions::default()
+            .with_strict(false)
+            .with_packet_work_limit(WorkLimit::Unlimited)
+            .with_resolution_reduction(reduction);
+        let limit = refusal(&bytes, &options);
+        assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
+        let tile = format!("tile {width} ");
+        assert!(limit.message().starts_with(&tile), "{limit}");
+    }
+}
+
+/// An over-cap tile refused by its own reduction check, before a tile with
+/// no tile-part (a review find, the seed
+/// `tests/fixtures/header/own_reduction_then_missing.j2k`). Tile 0 is 8
+/// wide; tile 1, 1000 x 1000 and over the precinct cap under the main
+/// header, has a tile-part `COD` of no levels; tile 2 is missing. With
+/// `strict` on the decode refuses the file for tile 2 before it counts any
+/// tile, so at reduction 1 the header read gives that error too, for the
+/// whole image and for a window that reads tile 1 alone.
+#[test]
+fn a_missing_tile_comes_before_an_own_reduction_refusal() {
+    let bytes = include_bytes!("fixtures/header/own_reduction_then_missing.j2k");
+    let reduced = DecodeOptions::default().with_resolution_reduction(1);
+    let window = reduced
+        .clone()
+        .with_region(Region::Window(rust_j2k::Window::new(1000, 0, 1100, 100)));
+    for options in [&reduced, &window] {
+        let header = read_header_with(bytes, options);
+        assert!(
+            matches!(&header, Err(Error::Codestream(d))
+                if d.message() == "the codestream carries no tile-part for tile 2"),
+            "{header:?}"
+        );
+        assert_same_error(bytes, options);
+    }
+    // With `strict` off the decode leaves tile 2 out and refuses tile 1.
+    let lenient = reduced.clone().with_strict(false);
+    let header = read_header_with(bytes, &lenient);
+    assert!(
+        matches!(&header, Err(Error::InvalidOptions(d)) if d.message().ends_with("in tile 1")),
+        "{header:?}"
+    );
+    assert_same_error(bytes, &lenient);
+}
+
+/// `components` gray components over `rows` rows of two tiles: a 1 x 16
+/// tile (2r) with a tile-part `COD` of one level, or of none where `refuse`
+/// names the row, then a 16 x 16 tile (2r + 1), over the precinct cap under
+/// the main header and brought within by its tile-part `COD`. The tiles
+/// `missing` names have no tile-part.
+fn narrow_and_square(components: usize, rows: u32, refuse: &[u32], missing: &[u16]) -> Vec<u8> {
+    let siz = synth::siz_body(
+        [32, 16 * rows, 15, 0, 16, 16, 0, 0],
+        &vec![[7, 1, 1]; components],
+    );
+    let mut cod = synth::cod_body(1, 1, 0, 0);
+    cod[0] = 1;
+    cod.extend([0x00, 0x11]);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 4])),
+    ]
+    .concat();
+    let one = synth::seg(0xFF52, &synth::cod_body(1, 1, 0, 0));
+    let none = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
+    for tile in 0..2 * rows as u16 {
+        if missing.contains(&tile) {
+            continue;
+        }
+        let refused = tile % 2 == 0 && refuse.contains(&u32::from(tile / 2));
+        let own = if refused { &none } else { &one };
+        bytes.extend(synth::tile_part(tile, 0, 1, own, &vec![0; 2 * components]));
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
+}
+
+/// With `strict` on, a tile with no tile-part comes before a lower tile's
+/// refusal and before a stop at the count's budget (review finds): 60 rows
+/// of 4096 components, where counting the lower tiles under their own
+/// headers spends the budget before the missing tile. Tile 119 is missing
+/// with no tile refused, or with tile 40 refused under a reduction; tile
+/// 118, within the caps, is missing with tile 0 refused.
+#[test]
+fn a_missing_tile_comes_before_a_lower_refusal_or_a_budget_stop() {
+    let cases: [(&[u32], u16, u8); 4] = [
+        (&[], 119, 0),
+        (&[20], 119, 0),
+        (&[20], 119, 1),
+        (&[0], 118, 1),
+    ];
+    for (refuse, missing, reduction) in cases {
+        let bytes = narrow_and_square(4096, 60, refuse, &[missing]);
+        let options = DecodeOptions::default().with_resolution_reduction(reduction);
+        let header = read_header_with(&bytes, &options);
+        let expected = format!("the codestream carries no tile-part for tile {missing}");
+        assert!(
+            matches!(&header, Err(Error::Codestream(d)) if d.message() == expected),
+            "{refuse:?} {missing} r{reduction}: {header:?}"
+        );
+        assert_same_error(&bytes, &options);
+    }
 }

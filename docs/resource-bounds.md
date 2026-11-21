@@ -285,23 +285,44 @@ cap under the main header does it read further. It follows the tile-parts
 by their `Psot`, reading only their `SOT`s, as far as the first tile-part of
 the tile it counts, and notes where it passed the first tile-part of each
 later tile it reads, so the tile-parts are walked once in all and no further
-than the last tile over a cap (to the end where that tile has no
+than the last tile it counts (to the end where that tile has no
 tile-part). It reads each such tile's first tile-part header at that
 offset, within its `Psot` (no tile data, no `PPM`, nothing joined), in index
-order, so one tile's coding parameters are held at a time and the first
-tile refused is the lowest, as in the decode. A
+order, so one tile's coding parameters are held at a time. The decode counts
+each tile under its own header in index order, so a tile-part `COD` or `COC`
+can take a lower tile over a cap, which the decode then refuses first. So
+before such a tile is counted, each lower tile read since the last one
+counted whose size does not rule that out (at 33 resolutions a component,
+the most a header gives) is counted under its own header too. Under a
+reduction every lower tile read is, whatever its size, as a tile-part `COD`
+or `COC` can give fewer levels than the reduction takes, which the decode
+checks before the caps. A lower tile whose first tile-part has no `COD` or
+`COC` is coded as the main header has it, which passed both checks, so it
+is skipped without reading its header or charging the budget; finding that
+steps over the header's marker segments by their lengths. The first tile
+refused is then the lowest, as in the decode. With `strict` on the tiles
+read up to the one over a cap are looked up before the lower tiles are
+counted, and where one has no tile-part the read gives the decode's error
+for the tile-parts, as the decode refuses such a file before it counts any
+tile. A tile-part `COD` that takes a tile over
+a cap with no tile over a cap under the main header after it is left to
+the decode, so a file with no tile over a cap under the main header is
+still read no further than the first `SOT`. A
 tile-part `COD` or `COC` that brings the tile within the caps admits it,
 and so does `strict` off when the tile has no tile-part, as the decode then
-leaves it out. With `strict` on, the decode parses the tile-parts before it
-counts a tile, so it refuses a file where a tile has no tile-part with its
-error for the tile-parts: the first fault its parse finds, or the missing
-tile. The header read then runs that parse too and gives its error. The
+leaves it out. With `strict` on, the decode parses every tile-part before
+it counts a tile, whatever the selection, so it refuses a file where a
+tile has no tile-part, or a tile-part is at fault, with its error for the
+tile-parts: the first fault its parse finds, or the missing tile. So where
+the count finds a tile with no tile-part, refuses a tile, or stops at a
+budget (below), the header read runs that parse too and gives its error
+where it finds one. The
 walk has reached the end of the chain by then, so the parse follows it no
 further, but it reads every tile-part header and keeps the decode's tile
 records, up to about 52 times the input plus 128 KiB (above). It reads the
 main header in place, so it copies no `PPM` data. A tile-part header the
-decode finds at fault, and a tile-part `COD` that takes a tile over the
-caps, are left to the decode. The count has a budget of 2^22 steps under the
+decode finds at fault is left to the decode, or with `strict` on to that
+parse. The count has a budget of 2^22 steps under the
 main header, a step for each resolution of each tile-component, and as many
 under the tiles' own headers, where reading a header that copies the main
 header's coding parameters costs 11 steps a component. It leaves any tile
@@ -311,9 +332,12 @@ return a header for a file the decode refuses. The walk takes no step of a
 budget, as it reads one `SOT` a tile-part. So the time is one walk of the
 tile-parts at most plus the budgets, and the heap one tile's header, a byte
 a tile for the tiles the selection reads, and 8 bytes a tile for the
-offsets, except where a tile has no tile-part with `strict` on: that
-refusal costs the decode's parse of the tile-parts too, as much time and
-heap as the decode spends before it refuses the file. Measured in release on
+offsets, except with `strict` on where the count finds a tile with no
+tile-part, refuses a tile or stops at a budget: that costs the decode's
+parse of the tile-parts too, as much time and heap as the decode spends
+before it refuses the file. On 3800 tiles, refused at the first of 1900
+tiles over the precinct cap, that refusal takes 0.81 ms in release, 0.07 ms
+without the parse. Measured in release on
 65535 tiles of 1024 x 1024, each over the
 precinct cap under the main header and brought within by its first
 tile-part's `COD`, with 255 tile-parts a tile (16.7 million tile-parts,
@@ -334,9 +358,19 @@ almost all of it the offsets of tiles 0 to 65280; 63 ms for 1000 tiles of
 1024 tiles whose `Psot` ends inside a `COM` that holds the next tile-part,
 followed by 4 MiB of `COM`.
 On a file the decode refuses for a fault in its tile-parts,
-`read_header_with` may still give the `Limit` instead of the decode's error
+`read_header_with` may still give a `Limit` or a reduction refusal
+(`InvalidOptions`) instead of the decode's error
 where it refuses a tile it found a tile-part for, as it does not check the
-tile-parts it passes nor walk past that tile.
+tile-parts it passes nor walk past that tile. The decode can also refuse
+the file before it gets to the tile refused, for what only decoding finds,
+and so name another tile, kind or factor, or give another error: a fault or
+a work bound in the packets or code-blocks of a lower tile (with `strict`
+on, data that ends early or runs on past the last packet), or, with
+`strict` off, the charge of a step
+for each tile-component of the tiles read that have no tile-part, past the
+packet work bound. The header read decodes no packet, so it does not
+follow the decode there; `tests/tile_geometry_cap.rs` shows a case of the
+first and of the last.
 `IncrementalDecoder::header` reads the header again on each call, so each
 call costs as much: up to the walk and the budgets, 45 ms on the 235 MB
 file above.
