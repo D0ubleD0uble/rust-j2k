@@ -16,7 +16,7 @@
 mod synth;
 
 use rust_j2k::{
-    ColorOutput, DecodeOptions, Error, IncrementalDecoder, LimitKind, Region, Window, WorkLimit,
+    ColorOutput, DecodeOptions, Error, IncrementalDecoder, LimitKind, Region, SampleLimit, Window,
     decode_with, read_header_with,
 };
 use synth::{bx, seg};
@@ -131,7 +131,7 @@ fn a_jp2_file_checks_the_reduction_before_its_channels() {
     let base = DecodeOptions::default();
     // At reduction 3 the image is 8 x 8, 64 samples: the codestream is
     // within 64, its three palette channels are not.
-    let at_most_64 = base.clone().with_sample_limit(WorkLimit::AtMost(64));
+    let at_most_64 = base.clone().with_sample_limit(SampleLimit::AtMost(64));
     let cases = [
         // sRGB, a palette, and 64 samples at most.
         (
@@ -183,7 +183,7 @@ fn the_sample_limit_comes_before_the_reduction_on_both_paths() {
     let codestream = codestream();
     let jp2 = in_jp2(&codestream, 17, &[]);
     let options =
-        refused_reduction(DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(1)));
+        refused_reduction(DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(1)));
     let from_codestream = keyed(decode_with(&codestream, &options));
     let Err(Error::Limit(limit)) = decode_with(&codestream, &options) else {
         panic!("{from_codestream:?}");
@@ -226,7 +226,7 @@ fn whole_tile_part() -> Vec<u8> {
     bytes
 }
 
-fn under(limit: WorkLimit) -> DecodeOptions {
+fn under(limit: SampleLimit) -> DecodeOptions {
     DecodeOptions::default().with_sample_limit(limit)
 }
 
@@ -238,7 +238,7 @@ fn under(limit: WorkLimit) -> DecodeOptions {
 fn a_cut_tile_part_comes_before_the_tile_cap() {
     let bytes = cut_after_sot();
     let cut = Err("Codestream(\"truncated marker segment\")".to_string());
-    for limit in [WorkLimit::Default, WorkLimit::Unlimited] {
+    for limit in [SampleLimit::Default, SampleLimit::Unlimited] {
         assert_eq!(
             keyed(decode_with(&bytes, &under(limit.clone()))),
             cut,
@@ -246,7 +246,7 @@ fn a_cut_tile_part_comes_before_the_tile_cap() {
         );
     }
     assert_eq!(
-        keyed(read_header_with(&bytes, &under(WorkLimit::Default))),
+        keyed(read_header_with(&bytes, &under(SampleLimit::Default))),
         cut
     );
     // Under `Unlimited` the tile is within the caps on a 64-bit target, so
@@ -254,7 +254,7 @@ fn a_cut_tile_part_comes_before_the_tile_cap() {
     // them, and gives no error. On a 32-bit target `Unlimited` is held to
     // what the target addresses, the tile is over the cap, and the header
     // gives the decode's error.
-    let unlimited = keyed(read_header_with(&bytes, &under(WorkLimit::Unlimited)));
+    let unlimited = keyed(read_header_with(&bytes, &under(SampleLimit::Unlimited)));
     if cfg!(target_pointer_width = "64") {
         assert_eq!(unlimited, Ok(()));
     } else {
@@ -262,7 +262,7 @@ fn a_cut_tile_part_comes_before_the_tile_cap() {
     }
     // With `strict` off, the decode leaves the tile out, and the header
     // agrees.
-    for limit in [WorkLimit::Default, WorkLimit::Unlimited] {
+    for limit in [SampleLimit::Default, SampleLimit::Unlimited] {
         let options = under(limit.clone()).with_strict(false);
         assert_eq!(
             keyed(read_header_with(&bytes, &options)),
@@ -279,7 +279,7 @@ fn a_cut_tile_part_comes_before_the_tile_cap() {
 #[test]
 fn the_tile_cap_refuses_the_tile_when_its_tile_part_is_whole() {
     let bytes = whole_tile_part();
-    let options = under(WorkLimit::Default);
+    let options = under(SampleLimit::Default);
     let header = keyed(read_header_with(&bytes, &options));
     assert_eq!(header, keyed(decode_with(&bytes, &options)));
     let Err(Error::Limit(limit)) = read_header_with(&bytes, &options) else {

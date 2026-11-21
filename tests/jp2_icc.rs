@@ -20,7 +20,7 @@ use std::path::PathBuf;
 #[cfg_attr(not(target_pointer_width = "64"), allow(unused_imports))]
 use rust_j2k::{
     Association, ChannelDefinition, ChannelType, ColorSpace, DecodeOptions, Error, Image,
-    WorkLimit, decode, decode_with, read_header_with,
+    SampleLimit, decode, decode_with, read_header_with,
 };
 use serde::Deserialize;
 
@@ -473,7 +473,7 @@ fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
         other => panic!("{other:?}"),
     }
     assert!(read_header_with(&bytes, &DecodeOptions::default()).is_ok());
-    let raised = srgb().with_sample_limit(WorkLimit::Raised(2));
+    let raised = srgb().with_sample_limit(SampleLimit::Raised(2));
     assert_eq!(
         read_header_with(&bytes, &raised).unwrap().components.len(),
         3
@@ -493,7 +493,7 @@ fn a_tinted_gray_profile_is_held_to_an_at_most_ceiling() {
         read_header_with(&bytes, &srgb()).unwrap().components.len(),
         3
     );
-    let ceiling = WorkLimit::AtMost(1 << 28);
+    let ceiling = SampleLimit::AtMost(1 << 28);
     let capped = srgb().with_sample_limit(ceiling.clone());
     for result in [
         read_header_with(&bytes, &capped).map(|_| ()),
@@ -507,7 +507,7 @@ fn a_tinted_gray_profile_is_held_to_an_at_most_ceiling() {
         assert!(
             limit.message().starts_with(
                 "sRGB output from a monochrome ICC profile that maps gray to color needs \
-                 432000000 samples, over the ceiling of `WorkLimit::AtMost(268435456)`"
+                 432000000 samples, over the ceiling of `SampleLimit::AtMost(268435456)`"
             ),
             "{limit}"
         );

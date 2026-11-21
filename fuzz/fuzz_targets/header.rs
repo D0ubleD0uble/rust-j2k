@@ -65,7 +65,7 @@ fuzz_target!(|data: &[u8]| {
         // ceiling instead of the default limit.
         default
             .clone()
-            .with_sample_limit(rust_j2k::WorkLimit::Unlimited),
+            .with_sample_limit(rust_j2k::SampleLimit::Unlimited),
         // `strict` off: the decode takes missing data as missing, and the
         // header read admits a tile with no tile-part.
         default.clone().with_strict(false),

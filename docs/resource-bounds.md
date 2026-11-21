@@ -8,12 +8,14 @@ allocate gigabytes. This decoder caps three such costs: the samples it
 allocates, the packet-header walk (tier 2) and the code-block decoding
 (tier 1). A file past a cap is refused with `Error::Limit` before the work
 is done. The error's `LimitDetail` says which cap it was (`kind()`, a
-`LimitKind`) and gives a `WorkLimit::Raised(n)` to retry with
-(`retry_with()`), and its message names both. A code-block work refusal, and
+`LimitKind`) and gives a `Raise::Raised(n)` to retry with
+(`retry_with()`), and its message names both. A `Raise` converts into the
+option's type: a `SampleLimit` for the sample limit and the tile caps it
+sets, a `WorkLimit` for a work bound. A code-block work refusal, and
 a refusal of a tile over the cap on code-blocks or precincts, also gives the
 tile refused and the amount it needs (`refused_at()`: sample-passes,
 code-blocks or precincts by `kind()`). Under a sample
-limit of `WorkLimit::AtMost` it gives no factor to retry with (see
+limit of `SampleLimit::AtMost` it gives no factor to retry with (see
 [A fixed ceiling](#a-fixed-ceiling)).
 For the samples it is the smallest factor that admits the image. For the two
 work bounds, and for the code-blocks and precincts a tile holds, it is the
@@ -41,8 +43,8 @@ A tile may hold one code-block for each 512 samples the sample limit allows,
 and one precinct for each 2048, and at least 2^20 code-blocks and 2^18
 precincts. At the 2^29 floor of the default limit the two rules meet, so a
 file of up to 64 MiB has the caps of 2^20 and 2^18; past that they grow with
-the input as the sample limit does, and `WorkLimit::Raised(n)` and
-`WorkLimit::AtMost(n)` on `sample_limit` set them too. A tile past a cap is
+the input as the sample limit does, and `SampleLimit::Raised(n)` and
+`SampleLimit::AtMost(n)` on `sample_limit` set them too. A tile past a cap is
 refused with `Limit` of kind `TileCodeBlocks` or `TilePrecincts`, which
 `with_retry` raises through `sample_limit`
 ([Code-blocks and precincts per tile](#code-blocks-and-precincts-per-tile)).
@@ -112,9 +114,9 @@ counts every component of the tiles read.
 OpenJPEG has no such limit: it allocates what the header declares and fails
 only when the allocation does.
 
-`DecodeOptions::sample_limit` raises the limit (`WorkLimit::Raised(n)`,
+`DecodeOptions::sample_limit` raises the limit (`SampleLimit::Raised(n)`,
 n times the default for the same input), lifts it
-(`WorkLimit::Unlimited`), or sets a fixed ceiling (`WorkLimit::AtMost(n)`,
+(`SampleLimit::Unlimited`), or sets a fixed ceiling (`SampleLimit::AtMost(n)`,
 see [A fixed ceiling](#a-fixed-ceiling)). Under the first two the refusal
 names the option and the smallest `Raised` factor that admits the file. Even
 `Unlimited` refuses an image whose 4-byte samples would pass `isize::MAX`
@@ -184,12 +186,12 @@ about 1.8, and the one below about 2.3, so 8 is about 2.7 times the most
 seen. A file over the floor that holds more than 8 samples per byte, such as
 a large image of flat color, still needs a raised limit.
 
-`WorkLimit::Raised(n)` is n times the default for the same input: n times
+`SampleLimit::Raised(n)` is n times the default for the same input: n times
 2^29 up to 64 MiB, and 8·n samples per byte past it. A factor never allows
 less than `Default`, and a larger factor never allows less than a smaller
 one. The factor a refusal names is still the smallest that admits the
 count, as it divides by the default of the same input. No limit, not even
-`WorkLimit::Unlimited` and whatever the input size, goes past the samples
+`SampleLimit::Unlimited` and whatever the input size, goes past the samples
 the target can address. On a 32-bit target that is 2^29 − 1, one below the
 floor.
 
@@ -245,7 +247,7 @@ of padding, measured.
 
 ### A fixed ceiling
 
-`WorkLimit::AtMost(n)` sets the sample limit to `n` samples, whatever the
+`SampleLimit::AtMost(n)` sets the sample limit to `n` samples, whatever the
 input's length, so padding cannot raise it. It is not a factor of the default:
 `n` is the limit for a file of 100 bytes and for one of 1 GB alike, and only
 the samples the target can address cap it. It holds every count the default
@@ -311,7 +313,7 @@ components needs 520093696 samples". The test
 the same header, cut before its tile data.
 
 **The peak under `AtMost(n)`.** Each file was decoded once with
-`DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(n))` in a
+`DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(n))` in a
 release build, `strict` on, and the peak is `/usr/bin/time -v`'s "Maximum
 resident set size". The `t1bomb` files come from
 `scripts/gen-tier1-work-bound-fixtures.py` (`t1bomb(size, cb, passes)` with
@@ -626,7 +628,7 @@ in another" gives the counts the two `SOT`s state.
 In an `IncrementalDecoder` a refusal under the default or a `Raised` limit
 is a wait (`Waiting::SampleLimit`), as the caps grow with the bytes fed.
 
-A refusal names the `WorkLimit::Raised` factor of `sample_limit` that admits
+A refusal names the `SampleLimit::Raised` factor of `sample_limit` that admits
 both the tile's precincts and its code-blocks, or twice the factor it ran
 under when that is more, as the work bounds do, since the tiles after it are
 not counted. Past `u32::MAX` times the default it names `Unlimited`. Under

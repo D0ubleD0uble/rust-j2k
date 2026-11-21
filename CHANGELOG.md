@@ -39,6 +39,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `read_header` too. The decode refused it at the first tile as
   `Error::Codestream` ("tile N has an empty area on component C"), and
   `read_header` read it.
+- `DecodeOptions::sample_limit` is now a `SampleLimit`, with the same
+  `Default`, `Raised` and `Unlimited` as before plus the new `AtMost`.
+  Write `SampleLimit::` where you wrote `WorkLimit::` for the sample limit;
+  `packet_work_limit` and `code_block_work_limit` stay a `WorkLimit`.
+  `LimitDetail::retry_with` returns `Option<Raise>`: replace
+  `Some(WorkLimit::Raised(n))` with `Some(Raise::Raised(n))`, and pass
+  `.into()` to the builder. `DecodeOptions::with_retry` is unchanged.
+  The `with_*_limit` builders store `Raised(1)` as `Default`, so a field
+  set through one and compared to `Raised(1)` no longer matches. A refusal
+  by the sample limit or a tile cap names `SampleLimit::` in its message
+  (#611).
 
 ### Added
 
@@ -60,7 +71,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without waiting for the next refine, call
   `decode_with(decoder.bytes(), &decoder.options().clone().with_strict(false))`.
   That decode spends nothing from the decoder's bounds.
-- `WorkLimit::AtMost(n)` on `DecodeOptions::sample_limit` sets a fixed
+- `SampleLimit::AtMost(n)` on `DecodeOptions::sample_limit` sets a fixed
   ceiling of `n` samples, whatever the input's length or padding: at most
   `4·n` bytes of output, and sample buffers of no more than about 3.2 times
   that. The input, the tile-part parse (under 1 KiB for each tile the
@@ -77,7 +88,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it gives no retry, and in an `IncrementalDecoder` it is an error, not a
   wait, except a later tile's cap refusal met while a refine counts the
   code-block work, which ends the count as `BoundSpent`.
-  `AtMost(0)`, and `AtMost` on either work bound, is `InvalidOptions`. It
+  `AtMost(0)` is `InvalidOptions`. It
   replaces counting the samples by hand from the header (#475).
 - For a refusal by the code-block work bound or by a tile's cap on
   code-blocks or precincts, `LimitDetail::refused_at` gives the tile refused
@@ -136,7 +147,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   changes. The sample limit no longer refuses a larger file that holds at least
   one byte for every 8 samples: a lossless 23171 x 23171 file of 234 MB, refused
   before, now decodes bit-exact against `opj_decompress` with a peak of 2.84
-  GiB. `WorkLimit::Raised(n)` on `DecodeOptions::sample_limit` is n times that
+  GiB. `SampleLimit::Raised(n)` on `DecodeOptions::sample_limit` is n times that
   default, so past 64 MiB each factor allows more than before, and a refusal may
   name a smaller factor. A 100 MB file may now ask for about 3 GiB of output,
   and a decode of it may peak at about 4.1 GiB for a square tile and up to about
@@ -150,11 +161,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The code-blocks and precincts one tile may hold grow with the sample
   limit: max(2^20, the samples it allows / 512) code-blocks and max(2^18,
   those samples / 2048) precincts. At the defaults, up to 64 MiB of input
-  the caps stay 2^20 and 2^18; `WorkLimit::Raised` and `WorkLimit::AtMost`
+  the caps stay 2^20 and 2^18; `SampleLimit::Raised` and `SampleLimit::AtMost`
   on `sample_limit` move them at any size. `LimitKind::TileCodeBlocks` and
   `LimitKind::TilePrecincts` are now adjustable: a refusal names a
-  `WorkLimit::Raised` factor of `DecodeOptions::sample_limit` as its
-  `retry_with`, which `with_retry` sets, and under `WorkLimit::AtMost(n)`
+  `Raised` factor of `DecodeOptions::sample_limit` as its
+  `retry_with`, which `with_retry` sets, and under `SampleLimit::AtMost(n)`
   the caps are set from `n` and a refusal names no retry. An
   `IncrementalDecoder` waits on such a refusal (`Waiting::SampleLimit`)
   rather than failing, unless under `AtMost`. `read_header_with` now counts
@@ -327,13 +338,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `MissingEoc` is no longer given when the input ends in `FF D9` (#574).
 - A tile over both the precinct and the code-block cap is still refused for
   its precincts (`LimitKind::TilePrecincts`), but `retry_with` now names a
-  `WorkLimit::Raised` factor that admits its code-blocks too, and the
+  `Raised` factor that admits its code-blocks too, and the
   message says the code-blocks are over. It named the factor for the
   precincts alone, so a tile whose code-blocks need more took a second
   refusal and retry. Where the code-blocks need a sample limit past what
   the target can address, the tile is refused as `LimitKind::AddressSpace`
   at once. A tile refusal that needs more than `Raised(u32::MAX)` allows
-  names `WorkLimit::Unlimited`, where it named `Raised(u32::MAX)`, which
+  names `Unlimited`, where it named `Raised(u32::MAX)`, which
   did not admit the tile. `read_header_with`, `decode_with` and
   `IncrementalDecoder` name the same factor (#575).
 - The `LimitKind::PocVolumes` docs no longer name a case no caller sees

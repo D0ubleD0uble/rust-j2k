@@ -5,7 +5,7 @@
 //! which bounds time. Each target divides each budget by a weight of its
 //! own, pinned by `tests/fuzz_seed_outcomes.rs`.
 
-use rust_j2k::{DecodeOptions, WorkLimit};
+use rust_j2k::{DecodeOptions, SampleLimit};
 
 /// The most samples a fuzz input may declare to a target that holds one
 /// image at a time: 2^28 (1 GiB as `i32`). A decode allocates its output
@@ -71,7 +71,7 @@ pub fn samples(weight: u64) -> u64 {
 
 /// The samples `data` declares, counted as [`over`] counts them, before the budget.
 pub fn declared(data: &[u8]) -> u128 {
-    let options = DecodeOptions::default().with_sample_limit(WorkLimit::Unlimited);
+    let options = DecodeOptions::default().with_sample_limit(SampleLimit::Unlimited);
     let header = super::inconsistent::checked(rust_j2k::read_header_with(data, &options))
         .map(|header| {
             header

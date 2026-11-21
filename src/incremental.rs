@@ -10,7 +10,7 @@ use crate::pipeline::decode::{HeaderCache, check_options, decode_metered, read_h
 use crate::tier2::resume::{Repeats, Walks};
 use crate::tier2::{CodedData, Meter, Reach, Refused};
 use crate::{
-    DecodeOptions, Error, Header, Image, LimitDetail, LimitKind, Region, Result, WorkLimit,
+    DecodeOptions, Error, Header, Image, LimitDetail, LimitKind, Raise, Region, Result,
     decode_with, jp2,
 };
 
@@ -145,14 +145,15 @@ use crate::{
 /// on the same bytes, such as a marker segment with an invalid field, or an
 /// [`Error::Limit`] that does not depend on how many bytes there are: an image
 /// too large for the target to address, too many `POC` volumes or too many
-/// bit-planes, or a refusal by a sample limit of [`WorkLimit::AtMost`]. More
-/// bytes do not undo these, so once `refine` returns an error, every later
+/// bit-planes, or a refusal by a sample limit of
+/// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost). More bytes do not
+/// undo these, so once `refine` returns an error, every later
 /// `refine` returns the same error without decoding, until a change of
 /// options. Some refusals are not final
 /// while bytes may still come, so `refine` waits on them, with the reason as a
 /// [`Waiting`], and only `finish` reports them: a main header cut short
 /// ([`Error::Incomplete`]), a refusal by the default or a
-/// [`Raised`](WorkLimit::Raised) sample limit (of the image, or of the
+/// [`Raised`](crate::SampleLimit::Raised) sample limit (of the image, or of the
 /// precincts and code-blocks a tile may hold), the packet or
 /// code-block work bound or the charge for missing tiles, which more bytes
 /// raise, and a refusal by the bound on the walks of tiles not kept, which the
@@ -317,8 +318,9 @@ impl IncrementalDecoder {
     /// [`TilePrecincts`](LimitKind::TilePrecincts), can turn into a header
     /// once more bytes come in; [`refine`](Self::refine) waits
     /// on it instead ([`Waiting::SampleLimit`]). Under a ceiling of
-    /// [`WorkLimit::AtMost`] it does not grow, so the refusal here is final,
-    /// and `refine` returns it as an error too, except that a later tile's
+    /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost) it does not grow,
+    /// so the refusal here is final, and `refine` returns it as an error
+    /// too, except that a later tile's
     /// cap refusal met while a refine counts the code-block work ends the
     /// count as [`Waiting::BoundSpent`] (see [`Waiting`]). A server that
     /// streams files in can refuse a sample count as soon as its main header
@@ -545,7 +547,7 @@ impl IncrementalDecoder {
                     LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
                 ) && matches!(
                     limit.retry_with(),
-                    Some(WorkLimit::Raised(_) | WorkLimit::Unlimited)
+                    Some(Raise::Raised(_) | Raise::Unlimited)
                 ) =>
                 {
                     Waiting::SampleLimit { limit }
@@ -780,7 +782,7 @@ pub enum Waiting {
     /// The sample limit ([`DecodeOptions::sample_limit`]) refused the image,
     /// or a tile of more code-blocks or precincts than it allows a tile
     /// ([`LimitKind::TileCodeBlocks`], [`LimitKind::TilePrecincts`]).
-    /// The default limit and a [`Raised`](crate::WorkLimit::Raised) one
+    /// The default limit and a [`Raised`](crate::SampleLimit::Raised) one
     /// grow with the bytes fed, so more bytes may admit it. The
     /// detail is the one [`decode_with`] gives for the bytes fed, with its
     /// [`retry_with`](LimitDetail::retry_with). A retry can still meet a
@@ -790,7 +792,7 @@ pub enum Waiting {
     ///
     /// Only a refusal that more bytes can lift waits: one with a
     /// [`retry_with`](LimitDetail::retry_with). A ceiling of
-    /// [`AtMost`](crate::WorkLimit::AtMost) does not grow, and a refusal past
+    /// [`AtMost`](crate::SampleLimit::AtMost) does not grow, and a refusal past
     /// what the target can address ([`LimitKind::AddressSpace`]) is lifted
     /// by no limit, so neither is a wait: `refine` returns it as an error,
     /// and every later `refine` returns it again, whatever is fed, until a
@@ -1049,7 +1051,7 @@ impl Ledger {
 
     /// The code-block work a decode whose own bound is `bound` may spend:
     /// what is left of it after the earlier decodes. No bound
-    /// ([`WorkLimit::Unlimited`]) stays none.
+    /// ([`WorkLimit::Unlimited`](crate::WorkLimit::Unlimited)) stays none.
     /// The ledger keeps `bound` as this decode's.
     pub(crate) fn blocks_left(&self, bound: u64) -> u64 {
         self.bound.set(Some(bound));

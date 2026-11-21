@@ -16,8 +16,8 @@ use inconsistent::checked;
 mod synth;
 
 use rust_j2k::{
-    DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Refined, Region, Waiting, Window,
-    WorkLimit, decode_with, read_header, read_header_with,
+    DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Refined, Region, SampleLimit,
+    Waiting, Window, WorkLimit, decode_with, read_header, read_header_with,
 };
 
 /// A splitmix64 stream: small, and the same on every platform.
@@ -89,7 +89,7 @@ fn is_sample_limit(error: &Error) -> bool {
 /// `None`. A sample limit of `AtMost` is a ceiling more bytes do not raise,
 /// so its refusal is the error.
 fn refine_oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>, Error> {
-    let ceiling = matches!(options.sample_limit, WorkLimit::AtMost(_));
+    let ceiling = matches!(options.sample_limit, SampleLimit::AtMost(_));
     match checked(decode_with(prefix, &options.clone().with_strict(false))) {
         Ok(image) => Ok(Some(image)),
         Err(Error::Incomplete(_)) => Ok(None),
@@ -780,7 +780,7 @@ fn a_sample_limit_refusal_is_an_error_on_a_32_bit_target() {
     let bytes = std::fs::read(&path).unwrap();
     for options in [
         DecodeOptions::default(),
-        DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(1 << 29)),
+        DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(1 << 29)),
     ] {
         let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
         let mut first = None;
@@ -849,7 +849,7 @@ fn a_sample_limit_refusal_is_an_error_on_a_32_bit_target() {
 fn a_sample_limit_refusal_under_at_most_is_final() {
     let path = fixtures().join("sample_limit/flat_32769x16385_tiled_lossless.j2k");
     let bytes = std::fs::read(&path).unwrap();
-    let options = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(1 << 29));
+    let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(1 << 29));
     let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
     let mut first = None;
     for piece in bytes.chunks(4096) {
@@ -869,7 +869,7 @@ fn a_sample_limit_refusal_under_at_most_is_final() {
                 assert_eq!(limit.kind(), LimitKind::Samples, "{limit}");
                 assert_eq!(limit.retry_with(), None, "{limit}");
                 assert!(
-                    limit.message().contains("`WorkLimit::AtMost(536870912)`"),
+                    limit.message().contains("`SampleLimit::AtMost(536870912)`"),
                     "{limit}"
                 );
                 let one_shot = refine_oracle(prefix, &options);

@@ -17,7 +17,7 @@ mod alloc;
 use alloc::{CURRENT, PEAK};
 use std::sync::atomic::Ordering;
 
-use rust_j2k::{DecodeOptions, Error, WorkLimit, decode_with};
+use rust_j2k::{DecodeOptions, Error, Raise, WorkLimit, decode_with};
 
 #[global_allocator]
 static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
@@ -54,7 +54,7 @@ fn packets_past_the_end_take_no_memory_under_a_raised_bound() {
     let (result, peak) = peak_of(|| decode_with(&bytes, &lenient));
     match result {
         Err(Error::Limit(detail)) => {
-            assert_eq!(detail.retry_with(), Some(WorkLimit::Raised(6)), "{detail}")
+            assert_eq!(detail.retry_with(), Some(Raise::Raised(6)), "{detail}")
         }
         other => panic!("{other:?}"),
     }

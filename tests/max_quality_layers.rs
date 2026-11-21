@@ -18,7 +18,8 @@ mod support;
 use std::path::{Path, PathBuf};
 
 use rust_j2k::{
-    DecodeOptions, Error, Image, ReportEntry, WorkLimit, decode, decode_with, read_header,
+    DecodeOptions, Error, Image, ReportEntry, SampleLimit, WorkLimit, decode, decode_with,
+    read_header,
 };
 use support::jp2::sha256_hex;
 use support::pgx::parse_pgx;
@@ -247,7 +248,7 @@ fn a_cap_at_or_past_the_layer_count_is_no_cap() {
         options
             .with_packet_work_limit(WorkLimit::Unlimited)
             .with_code_block_work_limit(WorkLimit::Unlimited)
-            .with_sample_limit(WorkLimit::Unlimited)
+            .with_sample_limit(SampleLimit::Unlimited)
     };
     for path in paths {
         let bytes = read(&path);

@@ -415,7 +415,8 @@ fn assert_is_a_cut_sot(file: &[u8], options: &rust_j2k::DecodeOptions) {
 
 #[test]
 fn the_fuzz_skip_counts_siz_when_the_ihdr_box_disagrees() {
-    let opts = rust_j2k::DecodeOptions::default().with_sample_limit(rust_j2k::WorkLimit::Unlimited);
+    let opts =
+        rust_j2k::DecodeOptions::default().with_sample_limit(rust_j2k::SampleLimit::Unlimited);
     // The budget and a row more by SIZ, the budget by ihdr: the header does
     // not read.
     let over = jp2_with_ihdr(SIDE, SIDE, &header_only(SIDE, SIDE + 1));
@@ -499,7 +500,8 @@ fn the_fuzz_skip_counts_every_siz_component_of_a_palettized_file() {
         bx(b"jp2c", &cs),
     ]
     .concat();
-    let opts = rust_j2k::DecodeOptions::default().with_sample_limit(rust_j2k::WorkLimit::Unlimited);
+    let opts =
+        rust_j2k::DecodeOptions::default().with_sample_limit(rust_j2k::SampleLimit::Unlimited);
     let header = rust_j2k::read_header_with(&jp2, &opts);
     if cfg!(target_pointer_width = "64") {
         assert_eq!(header.expect("the palette file reads").components.len(), 1);
@@ -549,7 +551,8 @@ fn the_fuzz_skip_counts_the_header_when_a_palette_makes_more_channels() {
         bx(b"jp2c", &cs),
     ]
     .concat();
-    let opts = rust_j2k::DecodeOptions::default().with_sample_limit(rust_j2k::WorkLimit::Unlimited);
+    let opts =
+        rust_j2k::DecodeOptions::default().with_sample_limit(rust_j2k::SampleLimit::Unlimited);
     if cfg!(target_pointer_width = "64") {
         let header = rust_j2k::read_header_with(&jp2, &opts).expect("the palette file reads");
         assert_eq!(header.components.len(), 3);
@@ -855,7 +858,7 @@ fn the_inputs_at_each_work_cap_fit_it_and_one_more_row_does_not() {
 /// checked tries and the draws of the changes and the probe, which
 /// `incremental_checked_tries_stay_within_the_work_weight` relies on. If it
 /// changed, check that test's count of bounds, then update this hash.
-const INCREMENTAL_HASH: u64 = 9127388444275648024;
+const INCREMENTAL_HASH: u64 = 6366785607727807683;
 
 #[test]
 fn incremental_checked_tries_stay_within_the_work_weight() {

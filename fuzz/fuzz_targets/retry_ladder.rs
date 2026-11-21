@@ -41,7 +41,8 @@ use inconsistent::checked;
 mod budget;
 
 use rust_j2k::{
-    decode_with, read_header_with, DecodeOptions, Error, LimitDetail, LimitKind, WorkLimit,
+    decode_with, read_header_with, DecodeOptions, Error, LimitDetail, LimitKind, Raise,
+    SampleLimit, WorkLimit,
 };
 
 /// The highest factor the ladder decodes at.
@@ -106,18 +107,29 @@ fn low(bits: u64) -> WorkLimit {
 
 /// The sample limit's start: as [`low`], or for the value 1 a ceiling of
 /// [`CEILING`] samples, which the fuzzer's small images pass and miss.
-fn low_samples(bits: u64) -> WorkLimit {
+fn low_samples(bits: u64) -> SampleLimit {
     match bits & 3 {
-        1 => WorkLimit::AtMost(CEILING),
-        _ => low(bits),
+        0 => SampleLimit::Default,
+        1 => SampleLimit::AtMost(CEILING),
+        2 => SampleLimit::Raised(1),
+        _ => SampleLimit::Raised(2),
     }
 }
 
 /// The `AtMost` start of the sample limit: 2^12 samples, a 64 x 64 image.
 const CEILING: u64 = 1 << 12;
 
-/// A limit as a number to compare: `Default` is `Raised(1)`.
-fn rank(limit: &WorkLimit) -> u64 {
+/// A limit to retry with as a number to compare.
+fn rank(raise: &Raise) -> u64 {
+    match raise {
+        Raise::Raised(factor) => u64::from(*factor),
+        Raise::Unlimited => u64::MAX,
+        other => unreachable!("a new retry: {other:?}"),
+    }
+}
+
+/// A work limit as a number to compare: `Default` is `Raised(1)`.
+fn rank_work(limit: &WorkLimit) -> u64 {
     match limit {
         WorkLimit::Default => 1,
         WorkLimit::Raised(factor) => u64::from(*factor),
@@ -126,23 +138,31 @@ fn rank(limit: &WorkLimit) -> u64 {
     }
 }
 
-/// The option of `options` that limit `kind` reads.
-fn field(options: &DecodeOptions, kind: LimitKind) -> &WorkLimit {
+/// The option of `options` that limit `kind` reads, as a number to compare
+/// (`Default` is `Raised(1)`), or `None` for a ceiling of `AtMost`, which is
+/// no factor.
+fn field(options: &DecodeOptions, kind: LimitKind) -> Option<u64> {
     match kind {
-        _ if is_sample_limit(kind) => &options.sample_limit,
-        LimitKind::PacketWork => &options.packet_work_limit,
-        LimitKind::CodeBlockWork => &options.code_block_work_limit,
+        _ if is_sample_limit(kind) => match &options.sample_limit {
+            SampleLimit::Default => Some(1),
+            SampleLimit::Raised(factor) => Some(u64::from(*factor)),
+            SampleLimit::Unlimited => Some(u64::MAX),
+            SampleLimit::AtMost(_) => None,
+            other => unreachable!("a new limit setting: {other:?}"),
+        },
+        LimitKind::PacketWork => Some(rank_work(&options.packet_work_limit)),
+        LimitKind::CodeBlockWork => Some(rank_work(&options.code_block_work_limit)),
         other => unreachable!("an adjustable limit with no option: {other:?}"),
     }
 }
 
-/// `options` with the limit `kind` reads set to `limit`.
-fn with_field(options: &DecodeOptions, kind: LimitKind, limit: WorkLimit) -> DecodeOptions {
+/// `options` with the limit `kind` reads set to `raise`.
+fn with_field(options: &DecodeOptions, kind: LimitKind, raise: Raise) -> DecodeOptions {
     let options = options.clone();
     match kind {
-        _ if is_sample_limit(kind) => options.with_sample_limit(limit),
-        LimitKind::PacketWork => options.with_packet_work_limit(limit),
-        LimitKind::CodeBlockWork => options.with_code_block_work_limit(limit),
+        _ if is_sample_limit(kind) => options.with_sample_limit(raise.into()),
+        LimitKind::PacketWork => options.with_packet_work_limit(raise.into()),
+        LimitKind::CodeBlockWork => options.with_code_block_work_limit(raise.into()),
         other => unreachable!("an adjustable limit with no option: {other:?}"),
     }
 }
@@ -150,13 +170,13 @@ fn with_field(options: &DecodeOptions, kind: LimitKind, limit: WorkLimit) -> Dec
 /// One step of the ladder: the options `with_retry` gives for `limit`,
 /// checked against `options`, with the limit it raised. `None` when no
 /// option raises it.
-fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, WorkLimit)> {
+fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, Raise)> {
     let kind = limit.kind();
     // A refusal by a ceiling the caller set names nothing to retry with, so
     // the ladder ends in this one step. The tile caps are refused by the same
     // ceiling. Not reached for a tile cap at `CEILING`: the area check
     // refuses first. Kept for a higher ceiling.
-    if is_sample_limit(kind) && matches!(options.sample_limit, WorkLimit::AtMost(_)) {
+    if is_sample_limit(kind) && matches!(options.sample_limit, SampleLimit::AtMost(_)) {
         assert!(
             limit.retry_with().is_none() && options.with_retry(limit).is_none(),
             "a refusal under {:?} gives a retry: {limit:?}",
@@ -188,14 +208,14 @@ fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, 
     );
     let raised = limit.retry_with().expect("with_retry raised a limit");
     assert!(
-        rank(&raised) > rank(field(options, kind)),
+        field(options, kind).is_some_and(|old| rank(&raised) > old),
         "{kind:?}: retry_with {raised:?} is not above {:?} ({limit})",
         field(options, kind)
     );
     // The option the kind names is set to `retry_with` and every other
     // option is as it was: compared by `Debug`, so the check covers every
     // field, a new one included (`DecodeOptions` has no `PartialEq`).
-    let expected = with_field(options, kind, raised.clone());
+    let expected = with_field(options, kind, raised);
     assert_eq!(
         format!("{next:?}"),
         format!("{expected:?}"),
@@ -239,9 +259,9 @@ fuzz_target!(|input: &[u8]| {
         .with_strict(options.strict);
     let at_defaults = KINDS
         .into_iter()
-        .all(|kind| *field(&options, kind) == WorkLimit::Default);
+        .all(|kind| field(&options, kind) == Some(1));
     let mut result = checked(decode_with(data, &options));
-    if matches!(options.sample_limit, WorkLimit::AtMost(_)) {
+    if matches!(options.sample_limit, SampleLimit::AtMost(_)) {
         // Below the default: a refusal by it is one step, and an image under
         // it is the image of the same options with the default sample limit.
         // In bounds: the two decodes at up to 2 each.
@@ -255,7 +275,7 @@ fuzz_target!(|input: &[u8]| {
             );
         }
         if let Ok(image) = &result {
-            let uncapped = options.clone().with_sample_limit(WorkLimit::Default);
+            let uncapped = options.clone().with_sample_limit(SampleLimit::Default);
             let reference = checked(decode_with(data, &uncapped)).unwrap_or_else(|e| {
                 panic!("an image under a ceiling, the default sample limit gives {e:?}")
             });
@@ -323,7 +343,7 @@ fuzz_target!(|input: &[u8]| {
         _ => {
             let unlimited = options
                 .clone()
-                .with_sample_limit(WorkLimit::Unlimited)
+                .with_sample_limit(SampleLimit::Unlimited)
                 .with_packet_work_limit(WorkLimit::Unlimited)
                 .with_code_block_work_limit(WorkLimit::Unlimited);
             match checked(decode_with(data, &unlimited)) {

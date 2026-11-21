@@ -305,12 +305,12 @@ for gigabytes of memory or minutes of work. By default an image may hold 2^29
 values (2 GiB as `i32`): a 10980 × 10980 three-band satellite image, or an RGB
 image of about 179 megapixels. Past 64 MiB of input the limit is 8 values per
 byte of the file. For a ceiling that does not grow with the file, set
-`sample_limit` to `WorkLimit::AtMost(n)`: at most `n` values, whatever the
+`sample_limit` to `SampleLimit::AtMost(n)`: at most `n` values, whatever the
 file's size or padding.
 
 Three limits can be raised: `sample_limit`, `packet_work_limit` and
 `code_block_work_limit` on `DecodeOptions`. For a file you trust, set them to
-`WorkLimit::Unlimited`. The process then aborts if memory runs out, instead of
+`SampleLimit::Unlimited` and `WorkLimit::Unlimited`. The process then aborts if memory runs out, instead of
 returning an error. Damage can also look like a limit, since one flipped bit
 in the header can declare an absurd size, so don't lift the limits on that
 evidence alone. The error says which limit refused the file and what to
@@ -320,7 +320,7 @@ needs (`LimitDetail::refused_at`). `DecodeOptions::with_retry` sets that limit
 for you:
 
 ```rust
-use rust_j2k::{DecodeOptions, Error, Image, LimitKind, WorkLimit, decode_with};
+use rust_j2k::{DecodeOptions, Error, Image, LimitKind, Raise, SampleLimit, WorkLimit, decode_with};
 
 /// For files you trust. Each retry decodes again and can ask for more, and a
 /// 100-byte file can name a factor of 8 or more. This loop raises a limit to
@@ -339,7 +339,7 @@ fn decode_raising_limits(bytes: &[u8]) -> Result<Image, Error> {
             Err(Error::Limit(limit)) => limit,
             result => return result,
         };
-        let Some(WorkLimit::Raised(factor)) = limit.retry_with() else {
+        let Some(Raise::Raised(factor)) = limit.retry_with() else {
             // No option raises this limit, or it gave no factor.
             return Err(Error::Limit(limit));
         };
@@ -352,18 +352,21 @@ fn decode_raising_limits(bytes: &[u8]) -> Result<Image, Error> {
             let (at_most, raised) = match limit.kind() {
                 LimitKind::PacketWork => (
                     options.packet_work_limit == most,
-                    options.clone().with_packet_work_limit(most.clone()),
+                    options.clone().with_packet_work_limit(most),
                 ),
                 LimitKind::CodeBlockWork => (
                     options.code_block_work_limit == most,
-                    options.clone().with_code_block_work_limit(most.clone()),
+                    options.clone().with_code_block_work_limit(most),
                 ),
                 // The samples, and the caps on a tile's code-blocks and
                 // precincts, which the sample limit sets.
-                LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => (
-                    options.sample_limit == most,
-                    options.clone().with_sample_limit(most.clone()),
-                ),
+                LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
+                    let most = SampleLimit::Raised(MAX_FACTOR);
+                    (
+                        options.sample_limit == most,
+                        options.clone().with_sample_limit(most),
+                    )
+                }
                 _ => return Err(Error::Limit(limit)),
             };
             // Already at the maximum: the same options would refuse again.
@@ -378,7 +381,7 @@ fn decode_raising_limits(bytes: &[u8]) -> Result<Image, Error> {
 }
 ```
 
-For files from outside, don't retry: set `sample_limit` to `WorkLimit::AtMost(n)`
+For files from outside, don't retry: set `sample_limit` to `SampleLimit::AtMost(n)`
 and run each decode under a timeout (see [Running a decode
 service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service)).
 A retry can be refused again, by the same limit or another, so the loop stops

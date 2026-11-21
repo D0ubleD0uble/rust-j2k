@@ -28,7 +28,7 @@ mod alloc;
 #[path = "support/synth.rs"]
 mod synth;
 use alloc::{CURRENT, PEAK};
-use rust_j2k::{DecodeOptions, WorkLimit, decode_with};
+use rust_j2k::{DecodeOptions, SampleLimit, decode_with};
 use std::collections::HashSet;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
@@ -181,7 +181,7 @@ fn a_segment_costs_a_few_bytes_of_heap() {
 #[ignore = "peaks near 6 GiB"]
 fn large_termall_files_peak_within_the_documented_bound() {
     let _one = ONE_AT_A_TIME.lock().unwrap();
-    let at_most = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(1 << 24));
+    let at_most = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(1 << 24));
     for (side, passes, len, options) in [
         (4096, 88, 0, DecodeOptions::default()),
         (4096, 88, 0, at_most.clone()),
