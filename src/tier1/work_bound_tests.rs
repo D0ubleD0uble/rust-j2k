@@ -51,7 +51,7 @@ fn spend(bytes: &[u8]) -> Option<(u64, u64, u64)> {
             for resolution in &component.resolutions {
                 for subband in &resolution.subbands {
                     for block in &subband.blocks {
-                        for segment in &block.segments {
+                        for segment in block.segments.iter() {
                             block_bytes +=
                                 segment.chunks.iter().map(|c| c.len() as u64).sum::<u64>();
                         }
@@ -130,7 +130,7 @@ fn block(width: usize, height: usize, passes: u32) -> CodeBlock<'static> {
         height,
         num_passes: passes,
         zero_bit_planes: 0,
-        segments: Vec::new(),
+        segments: Default::default(),
         cut: false,
         placeholders: 0,
         coder: crate::tier2::Coder::Part1,
@@ -247,15 +247,9 @@ fn ht_block(
 ) -> CodeBlock<'static> {
     let mut b = block(width, height, passes);
     b.coder = crate::tier2::Coder::Ht;
-    b.segments.push(crate::tier2::CodedSegment {
-        passes: 1,
-        chunks: vec![cleanup],
-    });
+    b.segments.push(1, &[cleanup]);
     if !refinement.is_empty() {
-        b.segments.push(crate::tier2::CodedSegment {
-            passes: passes.saturating_sub(1),
-            chunks: vec![refinement],
-        });
+        b.segments.push(passes.saturating_sub(1), &[refinement]);
     }
     b
 }

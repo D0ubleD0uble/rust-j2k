@@ -39,7 +39,6 @@ use bio::BitReader;
 use spans::UnreadSpans;
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::ops::Range;
 use tagtree::{Saved, TagTree};
 
 pub(crate) use geometry::{
@@ -122,7 +121,7 @@ pub struct CodeBlock<'a> {
     pub zero_bit_planes: u32,
     /// The block's codeword segments, in order. Tier-1 restarts the MQ decoder
     /// at each one and carries its bit-plane state across them.
-    pub segments: Vec<CodedSegment<'a>>,
+    pub segments: Segments<'a>,
     /// Whether the last segment may be cut short: a layer the decode drops
     /// adds coding passes to it, or, with `strict` off, a later packet of the
     /// block's precinct, which may add some, is missing: the data ends
@@ -145,20 +144,43 @@ pub struct CodeBlock<'a> {
     pub missing_from: Option<u32>,
 }
 
-/// One codeword segment: the coding passes it carries and the bytes coding
-/// them, which a multi-layer codestream may deliver in several chunks.
+/// A code-block's codeword segments, in order: per segment its coding passes
+/// and the bytes coding them, which a multi-layer codestream may deliver in
+/// several chunks.
 ///
 /// Without per-pass termination a block has exactly one segment, and the MQ
 /// codeword runs continuously across every layer that contributed to it. Under
 /// `restart` (`termall`) each coding pass is terminated separately, so each is
 /// its own segment and Tier-1 must re-initialize the MQ decoder for it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodedSegment<'a> {
-    pub passes: u32,
-    pub chunks: Vec<&'a [u8]>,
+///
+/// A segment is held as its pass count and where its chunks end, 8 bytes,
+/// and the chunks of all the block's segments share one list. A packet header
+/// can open a segment for 3 bits (`Lblock` is at least 3), so a record of its
+/// own per segment, with a list of chunks each, costs many times the input.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Segments<'a> {
+    heads: Box<[SegmentHead]>,
+    chunks: Box<[&'a [u8]]>,
 }
 
-impl<'a> CodedSegment<'a> {
+/// One segment of [`Segments`]: its passes, and where its chunks end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SegmentHead {
+    passes: u32,
+    /// The end of the segment's chunks in [`Segments::chunks`]. They start
+    /// where the segment before ends.
+    end: u32,
+}
+
+/// One codeword segment of a [`Segments`]: the coding passes it carries and
+/// the chunks of bytes coding them, in layer order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodedSegment<'s, 'a> {
+    pub passes: u32,
+    pub chunks: &'s [&'a [u8]],
+}
+
+impl<'a> CodedSegment<'_, 'a> {
     /// The segment's bytes, concatenated across the layers that carried them.
     /// A segment of one chunk is borrowed from the codestream, not copied.
     pub fn bytes(&self) -> Cow<'a, [u8]> {
@@ -167,6 +189,84 @@ impl<'a> CodedSegment<'a> {
             [chunk] => Cow::Borrowed(chunk),
             _ => Cow::Owned(self.chunks.concat()),
         }
+    }
+}
+
+/// A chunk or segment index of one code-block as a `u32`. A block has
+/// fewer than 2^32 of either: a contribution's segments and chunks are at
+/// most its passes, at most 164, and a precinct has at most 65535 layers.
+fn index_u32(index: usize) -> u32 {
+    debug_assert!(u32::try_from(index).is_ok());
+    index as u32
+}
+
+impl<'a> Segments<'a> {
+    /// The segments of `heads` over `chunks`.
+    fn from_parts(heads: Vec<SegmentHead>, chunks: Vec<&'a [u8]>) -> Self {
+        debug_assert!(heads.windows(2).all(|w| w[0].end <= w[1].end));
+        debug_assert!(heads.last().is_none_or(|h| h.end as usize == chunks.len()));
+        Segments {
+            heads: heads.into_boxed_slice(),
+            chunks: chunks.into_boxed_slice(),
+        }
+    }
+
+    /// How many segments the block has.
+    pub fn len(&self) -> usize {
+        self.heads.len()
+    }
+
+    /// Whether the block has no segment.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn is_empty(&self) -> bool {
+        self.heads.is_empty()
+    }
+
+    /// Segment `index`, or `None` past the last.
+    pub fn get(&self, index: usize) -> Option<CodedSegment<'_, 'a>> {
+        let head = self.heads.get(index)?;
+        let start = match index.checked_sub(1) {
+            Some(before) => self.heads[before].end as usize,
+            None => 0,
+        };
+        Some(CodedSegment {
+            passes: head.passes,
+            chunks: &self.chunks[start..head.end as usize],
+        })
+    }
+
+    /// The first segment, or `None` when there is none.
+    pub fn first(&self) -> Option<CodedSegment<'_, 'a>> {
+        self.get(0)
+    }
+
+    /// The segments in order.
+    pub fn iter(&self) -> impl Iterator<Item = CodedSegment<'_, 'a>> {
+        (0..self.len()).filter_map(|index| self.get(index))
+    }
+
+    /// Add a segment of `passes` passes, coded by `chunks`, after the others.
+    /// It copies the segments there, so it is for building a block by hand.
+    pub fn push(&mut self, passes: u32, chunks: &[&'a [u8]]) {
+        let mut all = std::mem::take(&mut self.chunks).into_vec();
+        all.extend_from_slice(chunks);
+        let mut heads = std::mem::take(&mut self.heads).into_vec();
+        heads.push(SegmentHead {
+            passes,
+            end: index_u32(all.len()),
+        });
+        *self = Segments::from_parts(heads, all);
+    }
+}
+
+impl<'a, C: AsRef<[&'a [u8]]>> FromIterator<(u32, C)> for Segments<'a> {
+    /// Segments from `(passes, chunks)` pairs, for building a block by hand.
+    fn from_iter<I: IntoIterator<Item = (u32, C)>>(iter: I) -> Self {
+        let mut segments = Segments::default();
+        for (passes, chunks) in iter {
+            segments.push(passes, chunks.as_ref());
+        }
+        segments
     }
 }
 
@@ -666,6 +766,10 @@ fn walk_packets<'a>(
             Ok(())
         },
     )?;
+    // The scratch holds the contributions of the largest packet read, an
+    // entry for each of its segments with bytes. Let go of it before the
+    // segments Tier-1 reads are built beside the walk's.
+    drop(scratch);
 
     let mut components = Vec::with_capacity(states.len());
     for (comp, (component_states, component_geoms)) in states.iter().zip(&geoms).enumerate() {
@@ -837,9 +941,8 @@ enum SegmentKind {
 /// instead, since where it ends depends on the placeholder passes of the
 /// contribution that holds the cleanup pass. The other style bits mean nothing
 /// to an HT block.
-fn next_segment(coder: Coder, style: u8, last: Option<&SegmentState>) -> (SegmentKind, u32) {
+fn next_segment(coder: Coder, style: u8, last: Option<SegmentKind>) -> (SegmentKind, u32) {
     use crate::codestream::markers::code_block_style::{LAZY, TERMALL};
-    let last = last.map(|s| s.kind);
     if coder == Coder::Ht {
         match last {
             Some(SegmentKind::HtCleanup { .. }) => (SegmentKind::HtRefinement, 2),
@@ -877,12 +980,12 @@ fn length_bits(lblock: u32, passes: u32) -> u32 {
 const HT_CLEANUP_MAX: u64 = 65534;
 const HT_REFINEMENT_MAX: u64 = 2046;
 
-/// Add a length field's `bytes` to `segment`, which an HT segment may hold
-/// only within its limit. An HT segment's bytes are those of its codeword
-/// segments over the layers (B.3), so the limit is on the sum.
-fn add_length(segment: &mut SegmentState, bytes: u32) -> Result<()> {
+/// Add a length field's `bytes` to the last segment of `segment`, which an HT
+/// segment may hold only within its limit. An HT segment's bytes are those of
+/// its codeword segments over the layers (B.3), so the limit is on the sum.
+fn add_length(segment: &mut SegmentStates, bytes: u32) -> Result<()> {
     segment.length += u64::from(bytes);
-    let (what, max) = match segment.kind {
+    let (what, max) = match segment.last {
         SegmentKind::HtCleanup { .. } => ("cleanup", HT_CLEANUP_MAX),
         SegmentKind::HtRefinement => ("refinement", HT_REFINEMENT_MAX),
         SegmentKind::Mq | SegmentKind::Raw => return Ok(()),
@@ -1054,15 +1157,17 @@ fn mixed_first_length(
 /// decodes. A block of more passes than tier-1 can decode is refused there.
 fn become_part1(block: &mut BlockState) {
     block.coder = Some(Coder::Part1);
-    match block.segments.first_mut() {
-        Some(segment) => {
-            segment.kind = SegmentKind::Mq;
-            segment.max_passes = u32::MAX;
-            block.num_passes += segment.kept;
+    match block.segments.as_deref_mut() {
+        Some(segments) => {
+            // Until now the block's one segment was an open HT cleanup
+            // segment, so it is the first and the last.
+            debug_assert_eq!(segments.passes.len(), 1);
+            segments.first = SegmentKind::Mq;
+            segments.last = SegmentKind::Mq;
+            segments.max_passes = u32::MAX;
+            block.num_passes += segments.kept_of(0);
         }
-        None => block
-            .segments
-            .push(SegmentState::new(SegmentKind::Mq, u32::MAX)),
+        None => block.segments = Some(SegmentStates::new(SegmentKind::Mq, u32::MAX)),
     }
 }
 
@@ -1346,22 +1451,39 @@ struct BlockState {
     /// Coding passes summed over every contributing layer the decode keeps
     /// (see [`Budget::layers`]), an HT block's placeholder passes left out.
     num_passes: u32,
-    /// Codeword segments in order; the last one may still take passes.
-    segments: Vec<SegmentState>,
+    /// The block's codeword segments, `None` until it has one. A block
+    /// state that holds none costs no more than the pointer.
+    segments: Option<Box<SegmentStates>>,
 }
 
-/// A codeword segment while it is being filled from successive layers.
-struct SegmentState {
-    kind: SegmentKind,
-    /// Coding passes from every layer read, which decide where the next
-    /// segment starts. An HT block's first cleanup segment counts its
-    /// placeholder passes.
-    passes: u32,
-    /// The passes of [`passes`](Self::passes) from the layers the decode
-    /// keeps: all of them without a layer cap. The layers past the cap only
-    /// add passes after these, and add no chunks.
+/// A code-block's codeword segments while they are filled from successive
+/// layers. The last one may still take passes; every one before it holds all
+/// it may (see [`max_passes`](Self::max_passes)), since a new segment opens
+/// only once the last is full.
+///
+/// A packet header can open a segment for 3 bits, so what a segment costs
+/// on its own is kept to its pass count: the bytes go in one list for the
+/// block, and what only the first or the last segment needs is held once.
+struct SegmentStates {
+    /// Each segment's coding passes from every layer read, which decide
+    /// where the next segment starts. Never empty. An HT block's first
+    /// cleanup segment counts its placeholder passes.
+    passes: Vec<u32>,
+    /// Where each layer's bytes of a segment lie in the tile data, in
+    /// segment order and, within a segment, in layer order: a layer adds
+    /// bytes to the last segment or to new ones. A length of zero files none.
+    chunks: Vec<Chunk>,
+    /// The passes from the layers the decode keeps, over all segments: all
+    /// of them without a layer cap. The layers past the cap only add passes
+    /// after these, and add no chunks, so a segment's kept passes are what
+    /// of these falls in it (see [`kept_of`](Self::kept_of)).
     kept: u32,
-    /// How many passes this segment may hold before the next one starts:
+    /// The first segment's kind, which says how many placeholder passes an
+    /// HT block has.
+    first: SegmentKind,
+    /// The last segment's kind.
+    last: SegmentKind,
+    /// How many passes the last segment may hold before the next one starts:
     /// 1 under `termall`, the `10, 2, 1, 2, 1, …` pattern under `bypass`,
     /// otherwise 109 — the most a code-block can carry (`3 * Mb - 2` with
     /// `Mb <= 37`), so the default never splits. See [`next_segment`],
@@ -1371,42 +1493,156 @@ struct SegmentState {
     /// cleanup segment holds its placeholder passes and the cleanup pass,
     /// and until the cleanup pass comes it takes any number.
     max_passes: u32,
-    /// The bytes the length fields gave it, over every layer read.
+    /// The bytes the length fields gave the last segment, over every layer
+    /// read.
     length: u64,
-    /// Where each layer's bytes of it lie in the tile data, in layer order.
-    /// They are offsets, not slices, so that the state can outlive the
-    /// bytes it was read from and go on over a longer copy of them.
-    chunks: Vec<Range<usize>>,
 }
 
-impl SegmentState {
-    fn new(kind: SegmentKind, max_passes: u32) -> Self {
-        SegmentState {
-            kind,
-            passes: 0,
+/// One layer's bytes of one codeword segment. They are offsets, not
+/// slices, so that the state can outlive the bytes it was read from and go
+/// on over a longer copy of them.
+#[derive(Clone, Copy)]
+struct Chunk {
+    start: usize,
+    len: u32,
+    /// The segment's index in the block.
+    segment: u32,
+}
+
+impl SegmentStates {
+    /// A block's first segment, of no passes yet.
+    fn new(kind: SegmentKind, max_passes: u32) -> Box<Self> {
+        Box::new(SegmentStates {
+            passes: vec![0],
+            chunks: Vec::new(),
             kept: 0,
+            first: kind,
+            last: kind,
             max_passes,
             length: 0,
-            chunks: Vec::new(),
+        })
+    }
+
+    /// Open a segment of no passes after the last.
+    fn open(&mut self, kind: SegmentKind, max_passes: u32) {
+        self.passes.push(0);
+        self.last = kind;
+        self.max_passes = max_passes;
+        self.length = 0;
+    }
+
+    /// Whether the last segment holds all the passes it may.
+    fn last_full(&self) -> bool {
+        self.passes.last().is_some_and(|&p| p >= self.max_passes)
+    }
+
+    /// Add `passes` to the last segment, kept or not.
+    fn add_passes(&mut self, passes: u32, keep: bool) {
+        if let Some(last) = self.passes.last_mut() {
+            *last += passes;
+        }
+        if keep {
+            self.kept += passes;
         }
     }
 
-    /// The placeholder passes of [`kept`](Self::kept): all of them while the
-    /// cleanup pass is still to come.
+    /// The kept passes of segment `index`, which starts `start` passes into
+    /// the block: what of [`kept`](Self::kept) falls in it.
+    fn kept_in(&self, index: usize, start: u32) -> u32 {
+        self.kept
+            .saturating_sub(start)
+            .min(self.passes.get(index).copied().unwrap_or(0))
+    }
+
+    /// The kept passes of segment `index`.
+    fn kept_of(&self, index: usize) -> u32 {
+        let start = self.passes[..index].iter().sum();
+        self.kept_in(index, start)
+    }
+
+    /// The placeholder passes of the first segment's kept passes: all of
+    /// them while the cleanup pass is still to come. No other segment holds
+    /// any.
     fn kept_placeholders(&self) -> u32 {
-        match self.kind {
+        let kept = self.kept_of(0);
+        match self.first {
             SegmentKind::HtCleanup {
                 placeholders: Some(p),
-            } => self.kept.min(p),
-            SegmentKind::HtCleanup { placeholders: None } => self.kept,
+            } => kept.min(p),
+            SegmentKind::HtCleanup { placeholders: None } => kept,
             _ => 0,
         }
     }
 
-    /// The kept passes Tier-1 decodes: [`kept`](Self::kept) without the
-    /// placeholder passes, which code nothing.
-    fn coded_kept(&self) -> u32 {
-        self.kept - self.kept_placeholders()
+    /// The kept passes Tier-1 decodes of each segment in turn: its kept
+    /// passes without the placeholder passes, which code nothing.
+    fn coded_kept(&self) -> impl Iterator<Item = u32> + '_ {
+        let placeholders = self.kept_placeholders();
+        let mut start = 0u32;
+        self.passes.iter().enumerate().map(move |(index, &passes)| {
+            let kept = self.kept_in(index, start);
+            start = start.saturating_add(passes);
+            if index == 0 {
+                kept - placeholders
+            } else {
+                kept
+            }
+        })
+    }
+
+    /// The segments Tier-1 decodes, over the tile data `data`, and whether
+    /// the last of them may be cut short (see [`CodeBlock::cut`]).
+    ///
+    /// Under a layer cap, the segments the kept layers never reached are
+    /// left out, and the last one kept may hold only some of its passes.
+    /// Without a cap every pass is kept. Stopping at the first segment of no
+    /// coded kept pass is what keeps a cut segment last: Tier-1 exempts only
+    /// the last segment from `predictable termination`, so an empty segment
+    /// left after the cut one would have it checked and refused.
+    ///
+    /// With `unread`, a later packet of the block's precinct was not read,
+    /// so the block may have lost later passes of its last segment, unless
+    /// that segment holds all the passes it can: then the next pass opens a
+    /// new segment, and this one is whole. Every segment before the last is
+    /// whole.
+    fn coded<'a>(&self, data: &'a [u8], unread: bool) -> (Segments<'a>, bool) {
+        let count = self.coded_kept().take_while(|&p| p > 0).count();
+        let Some(last) = count.checked_sub(1) else {
+            return (Segments::default(), false);
+        };
+        let start: u32 = self.passes[..last].iter().sum();
+        let cut = self.kept_in(last, start) < self.passes[last]
+            || (unread && last + 1 == self.passes.len() && !self.last_full());
+        // The chunks are in segment order, so those of the segments kept
+        // come first.
+        debug_assert!(self.chunks.windows(2).all(|w| w[0].segment <= w[1].segment));
+        let kept_chunks = self
+            .chunks
+            .partition_point(|c| (c.segment as usize) < count);
+        let chunks: Vec<&'a [u8]> = self.chunks[..kept_chunks]
+            .iter()
+            .map(|c| &data[c.start..c.start + c.len as usize])
+            .collect();
+        let mut heads = Vec::with_capacity(count);
+        let mut end = 0;
+        for (index, passes) in self.coded_kept().take(count).enumerate() {
+            while end < kept_chunks && self.chunks[end].segment as usize == index {
+                end += 1;
+            }
+            heads.push(SegmentHead {
+                passes,
+                end: index_u32(end),
+            });
+        }
+        (Segments::from_parts(heads, chunks), cut)
+    }
+
+    /// The bytes these hold on the heap, capacity included.
+    fn heap_bytes(&self) -> usize {
+        use std::mem::size_of;
+        size_of::<Self>()
+            + self.passes.capacity() * size_of::<u32>()
+            + self.chunks.capacity() * size_of::<Chunk>()
     }
 }
 
@@ -1418,7 +1654,7 @@ impl BlockState {
             lblock: 3,
             zero_bit_planes: 0,
             num_passes: 0,
-            segments: Vec::new(),
+            segments: None,
         }
     }
 
@@ -1427,16 +1663,16 @@ impl BlockState {
     /// counted only when the decode keeps the cleanup pass after them. A
     /// block without its cleanup pass decodes to zeros whatever the count.
     fn skipped_planes(&self) -> u32 {
-        match self.segments.first() {
+        match self.segments.as_deref() {
             Some(
-                s @ SegmentState {
-                    kind:
+                s @ SegmentStates {
+                    first:
                         SegmentKind::HtCleanup {
                             placeholders: Some(p),
                         },
                     ..
                 },
-            ) if s.coded_kept() > 0 => p / 3,
+            ) if s.kept_of(0) > s.kept_placeholders() => p / 3,
             _ => 0,
         }
     }
@@ -1496,13 +1732,8 @@ impl BandState {
             + self
                 .blocks
                 .iter()
-                .map(|b| {
-                    b.segments.capacity() * size_of::<SegmentState>()
-                        + b.segments
-                            .iter()
-                            .map(|s| s.chunks.capacity() * size_of::<Range<usize>>())
-                            .sum::<usize>()
-                })
+                .filter_map(|b| b.segments.as_deref())
+                .map(SegmentStates::heap_bytes)
                 .sum::<usize>();
         precincts + blocks
     }
@@ -1590,12 +1821,15 @@ impl Journal {
 }
 
 /// What one codeword segment takes from *this* packet: the length of the byte
-/// range that follows the header, and where to file it.
+/// range that follows the header, and where to file it. A packet holds one
+/// for each segment it gives bytes, up to one a byte of its body, so the
+/// fields are kept narrow.
 struct Contribution {
-    band: usize,
     block: usize,
-    segment: usize,
-    seg_len: usize,
+    /// The band's index in its resolution, at most 2.
+    band: u32,
+    segment: u32,
+    seg_len: u32,
 }
 
 /// The buffers a packet read fills and empties again, kept across the
@@ -1636,32 +1870,51 @@ struct Undo {
     lblock: u32,
     zero_bit_planes: u32,
     num_passes: u32,
-    /// How many segments the block had, and the state of the last of them.
-    segments: usize,
-    last: Option<LastSegment>,
+    /// The block's segments before the packet, `None` when it had none.
+    segments: Option<LastSegment>,
 }
 
-/// The state of a block's last segment before a packet, which the packet may
-/// add passes and bytes to, or, for an HT block's first cleanup segment, end.
+/// A block's segments before a packet, which the packet may add segments,
+/// passes and bytes to, or, for an HT block's first cleanup segment, end.
 struct LastSegment {
-    kind: SegmentKind,
+    /// How many segments and chunks the block had.
+    segments: usize,
+    chunks: usize,
+    /// The last segment's passes, and what [`SegmentStates`] holds once.
     passes: u32,
     kept: u32,
+    first: SegmentKind,
+    last: SegmentKind,
     max_passes: u32,
     length: u64,
-    chunks: usize,
 }
 
 impl LastSegment {
-    fn of(segment: &SegmentState) -> Self {
+    fn of(segments: &SegmentStates) -> Self {
         LastSegment {
-            kind: segment.kind,
-            passes: segment.passes,
-            kept: segment.kept,
-            max_passes: segment.max_passes,
-            length: segment.length,
-            chunks: segment.chunks.len(),
+            segments: segments.passes.len(),
+            chunks: segments.chunks.len(),
+            passes: segments.passes.last().copied().unwrap_or(0),
+            kept: segments.kept,
+            first: segments.first,
+            last: segments.last,
+            max_passes: segments.max_passes,
+            length: segments.length,
         }
+    }
+
+    /// Put `segments` back as they were.
+    fn restore(&self, segments: &mut SegmentStates) {
+        segments.passes.truncate(self.segments);
+        if let Some(last) = segments.passes.last_mut() {
+            *last = self.passes;
+        }
+        segments.chunks.truncate(self.chunks);
+        segments.kept = self.kept;
+        segments.first = self.first;
+        segments.last = self.last;
+        segments.max_passes = self.max_passes;
+        segments.length = self.length;
     }
 }
 
@@ -1676,14 +1929,14 @@ fn undo(log: &[Undo], states: &mut [BandState]) {
         block.lblock = entry.lblock;
         block.zero_bit_planes = entry.zero_bit_planes;
         block.num_passes = entry.num_passes;
-        block.segments.truncate(entry.segments);
-        if let (Some(last), Some(was)) = (block.segments.last_mut(), &entry.last) {
-            last.kind = was.kind;
-            last.passes = was.passes;
-            last.kept = was.kept;
-            last.max_passes = was.max_passes;
-            last.length = was.length;
-            last.chunks.truncate(was.chunks);
+        match &entry.segments {
+            // A packet never takes a block's segments away, so they are there.
+            Some(was) => {
+                if let Some(segments) = block.segments.as_deref_mut() {
+                    was.restore(segments);
+                }
+            }
+            None => block.segments = None,
         }
     }
 }
@@ -1860,7 +2113,7 @@ fn parse_packet(
     for contribution in contributions.iter() {
         let end = match streams
             .body_pos
-            .checked_add(contribution.seg_len)
+            .checked_add(contribution.seg_len as usize)
             .filter(|&e| e <= streams.data.len())
         {
             Some(end) => end,
@@ -1870,7 +2123,9 @@ fn parse_packet(
                     // block after it in the header.
                     let from = log
                         .iter()
-                        .position(|u| (u.band, u.block) == (contribution.band, contribution.block))
+                        .position(|u| {
+                            (u.band, u.block) == (contribution.band as usize, contribution.block)
+                        })
                         .unwrap_or(0);
                     undo(&log[from..], states);
                     return Ok(Packet::Ended);
@@ -1882,9 +2137,18 @@ fn parse_packet(
             }
         };
         if keep {
-            states[contribution.band].blocks[contribution.block].segments[contribution.segment]
-                .chunks
-                .push(streams.body_pos..end);
+            // A contribution is filed only after the header gave its block
+            // a segment for it.
+            if let Some(segments) = states[contribution.band as usize].blocks[contribution.block]
+                .segments
+                .as_deref_mut()
+            {
+                segments.chunks.push(Chunk {
+                    start: streams.body_pos,
+                    len: contribution.seg_len,
+                    segment: contribution.segment,
+                });
+            }
         }
         streams.body_pos = end;
     }
@@ -1986,8 +2250,7 @@ fn parse_band_header(
                 lblock: block.lblock,
                 zero_bit_planes: block.zero_bit_planes,
                 num_passes: block.num_passes,
-                segments: block.segments.len(),
-                last: block.segments.last().map(LastSegment::of),
+                segments: block.segments.as_deref().map(LastSegment::of),
             });
         }
 
@@ -2043,8 +2306,8 @@ fn parse_band_header(
         let mut remaining = num_passes;
         let mut placeholders = 0;
         let open = SegmentKind::HtCleanup { placeholders: None };
-        let first_open = block.segments.first().is_none_or(|s| s.kind == open);
-        let prior = block.segments.first().map_or(0, |s| s.passes);
+        let first_open = block.segments.as_ref().is_none_or(|s| s.first == open);
+        let prior = block.segments.as_ref().map_or(0, |s| s.passes[0]);
         // A Part 1 block's length field, when reading it settled the coder
         // of a MIXED block.
         let mut part1_length = None;
@@ -2067,10 +2330,11 @@ fn parse_band_header(
             },
         };
         if let Some(first) = first {
-            if block.segments.is_empty() {
-                block.segments.push(SegmentState::new(open, u32::MAX));
-            }
-            let segment = &mut block.segments[0];
+            // The first segment is open, so it is the block's only one.
+            let segment = block
+                .segments
+                .get_or_insert_with(|| SegmentStates::new(open, u32::MAX));
+            debug_assert_eq!(segment.passes.len(), 1);
             let passes = match first {
                 FirstCleanup::Placeholders => {
                     placeholders = num_passes;
@@ -2082,42 +2346,46 @@ fn parse_band_header(
                     length,
                 } => {
                     placeholders = before - prior;
-                    segment.kind = SegmentKind::HtCleanup {
+                    let kind = SegmentKind::HtCleanup {
                         placeholders: Some(before),
                     };
+                    segment.first = kind;
+                    segment.last = kind;
                     segment.max_passes = before + 1;
                     add_length(segment, length)?;
                     contributions.push(Contribution {
-                        band: band_index,
                         block: block_index,
+                        band: band_index as u32,
                         segment: 0,
-                        seg_len: length as usize,
+                        seg_len: length,
                     });
                     passes
                 }
             };
-            segment.passes += passes;
-            if keep {
-                segment.kept += passes;
-            }
+            segment.add_passes(passes, keep);
             remaining -= passes;
         }
         if keep {
             block.num_passes += num_passes - placeholders;
         }
         while remaining > 0 {
-            if block
-                .segments
-                .last()
-                .is_none_or(|s| s.passes >= s.max_passes)
-            {
-                let coder = block.coder.unwrap_or(Coder::Ht);
-                let (kind, max_passes) = next_segment(coder, style, block.segments.last());
-                block.segments.push(SegmentState::new(kind, max_passes));
-            }
-            let segment_index = block.segments.len() - 1;
-            let segment = &mut block.segments[segment_index];
-            let new_passes = remaining.min(segment.max_passes - segment.passes);
+            let coder = block.coder.unwrap_or(Coder::Ht);
+            let segment: &mut SegmentStates = match &mut block.segments {
+                Some(segments) => {
+                    if segments.last_full() {
+                        let (kind, max_passes) = next_segment(coder, style, Some(segments.last));
+                        segments.open(kind, max_passes);
+                    }
+                    segments
+                }
+                none => {
+                    let (kind, max_passes) = next_segment(coder, style, None);
+                    none.insert(SegmentStates::new(kind, max_passes))
+                }
+            };
+            let segment_index = segment.passes.len() - 1;
+            let last_passes = segment.passes[segment_index];
+            let new_passes = remaining.min(segment.max_passes - last_passes);
 
             // The length field's width uses *this* segment's new passes.
             let seg_len = match part1_length.take() {
@@ -2125,7 +2393,6 @@ fn parse_band_header(
                 None => bio.read(length_bits(block.lblock, new_passes)),
             };
             add_length(segment, seg_len)?;
-            let seg_len = seg_len as usize;
 
             // A layer may add coding passes and no bytes (B.10.7 sets no
             // lower bound on the length). The MQ codeword is continuous
@@ -2136,16 +2403,12 @@ fn parse_band_header(
             // the segment, so a later layer's passes land in the right one.
             // A zero length files no chunk, and reading it took at least the
             // header bits above, so it costs no more than one with bytes.
-            let segment = &mut block.segments[segment_index];
-            segment.passes += new_passes;
-            if keep {
-                segment.kept += new_passes;
-            }
+            segment.add_passes(new_passes, keep);
             if seg_len > 0 {
                 contributions.push(Contribution {
-                    band: band_index,
                     block: block_index,
-                    segment: segment_index,
+                    band: band_index as u32,
+                    segment: index_u32(segment_index),
                     seg_len,
                 });
             }
@@ -2224,43 +2487,20 @@ fn build_subbands<'a>(
                 |(index, ((x, y, width, height), block))| {
                     let missing_from = unread.get(index).copied().flatten();
                     let unread = missing_from.is_some();
-                    // Under a layer cap, the segments the kept layers never
-                    // reached are left out, and the last one kept may hold
-                    // only some of its passes. Without a cap every pass is
-                    // kept. The filter is what keeps a cut segment last:
-                    // Tier-1 exempts only the last segment from `predictable
-                    // termination`, so an empty segment left after the cut
-                    // one would have it checked and refused.
-                    //
                     // An HT block's placeholder passes code nothing, so they
                     // count as neither passes nor a segment (see
-                    // [`SegmentState::coded_kept`]); they skip bit-planes
+                    // [`SegmentStates::coded`]); they skip bit-planes
                     // instead.
-                    //
-                    // With `strict` off, a block whose precinct the data
-                    // ended in may have lost later passes of its last
-                    // segment, unless that segment holds all the passes it
-                    // can: then the next pass opens a new segment, and this
-                    // one is whole.
-                    let mut cut = false;
                     let coder = block.coder.unwrap_or(Coder::Ht);
                     let zero_bit_planes = block.zero_bit_planes + block.skipped_planes();
                     let placeholders = block
                         .segments
-                        .first()
-                        .map_or(0, SegmentState::kept_placeholders);
-                    let segments = block
+                        .as_deref()
+                        .map_or(0, SegmentStates::kept_placeholders);
+                    let (segments, cut) = block
                         .segments
-                        .iter()
-                        .take_while(|s| s.coded_kept() > 0)
-                        .map(|s| {
-                            cut = s.kept < s.passes || (unread && s.passes < s.max_passes);
-                            CodedSegment {
-                                passes: s.coded_kept(),
-                                chunks: s.chunks.iter().map(|r| &data[r.clone()]).collect(),
-                            }
-                        })
-                        .collect();
+                        .as_deref()
+                        .map_or((Segments::default(), false), |s| s.coded(data, unread));
                     CodeBlock {
                         x,
                         y,

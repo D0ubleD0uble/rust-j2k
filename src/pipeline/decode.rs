@@ -1471,6 +1471,9 @@ fn decode_codestream(
         tests::BLOCKS
             .with(|count| count.set(count.get() + tests::blocks(&coded, reduction, &wanted)));
         let coeffs = tier1::decode_code_blocks(&header, &coded, reduction, &wanted)?;
+        // The segment records end with tier-1, so they do not add to the
+        // inverse wavelet's peak.
+        drop(coded);
 
         // Invert the DWT per resolution level into samples, over the whole
         // tile-component or over its footprint. Tier-1 has already

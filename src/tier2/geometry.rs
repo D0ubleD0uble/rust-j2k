@@ -33,11 +33,14 @@ pub(crate) const MAX_PRECINCTS: usize = crate::samples::TILE_PRECINCTS_FLOOR as 
 /// the sample limit past it. The samples bound the decoded buffers, but the
 /// per-block bookkeeping is driven by the code-block *count*, which legal 4×4
 /// blocks push toward samples/16, and small precincts toward one a sample.
-/// The struct sizes (`BlockState` 40, `CodeBlock` 80, `SegmentState` 56, two
-/// tag-tree nodes of 8 at 4/3 a leaf) give about 141 bytes a block, a lower
-/// bound. Measured on a 4096² tile in 4×4 blocks (2^20 of them), a tile takes
-/// about 129 MiB with empty blocks and about 480 MiB of heap (about 550 MiB
-/// resident) with every block coded. [`check_tile`] holds a tile to the cap
+/// The struct sizes (`BlockState` 24, `CodeBlock` 88, two tag-tree nodes of 8
+/// at 4/3 a leaf) give about 133 bytes a block, a lower bound; a coded block
+/// adds its boxed `SegmentStates` of 80 bytes and its lists. Measured on a
+/// 4096² tile in 4×4 blocks (2^20 of them), every block coded with one pass
+/// (`t1bomb(4096, 2, 1)` in `scripts/gen-tier1-work-bound-fixtures.py`), a
+/// decode under `AtMost(2^24)` peaks at about 429 MiB resident, as the table
+/// in `docs/resource-bounds.md` ("Figures for a decode service") has it.
+/// [`check_tile`] holds a tile to the cap
 /// before its geometry is built, and [`band_geom`] spends a walk's budget
 /// before anything sized by a band's block count is allocated.
 pub(crate) const MAX_CODE_BLOCKS: usize = crate::samples::TILE_BLOCKS_FLOOR as usize;

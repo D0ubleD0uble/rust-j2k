@@ -219,7 +219,7 @@ fn strip(coded: CodedData<'_>) -> CodedData<'static> {
                         .map(|block| {
                             assert!(block.segments.is_empty());
                             CodeBlock {
-                                segments: Vec::new(),
+                                segments: Default::default(),
                                 ..block
                             }
                         })

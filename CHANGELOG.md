@@ -35,9 +35,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shrink with `n`: a tile may hold at least 2^20 code-blocks and 2^18
   precincts at any ceiling, estimated at about 0.8 GiB. Below about
   `n` = 2^26 they, not the samples, set the peak. Code-block segment
-  records add up to about 350 bytes for each byte of input (estimated:
-  about 130 bytes a segment, one segment per 3 header bits; measured 11.2
-  GiB for a 37 MB file under `AtMost(2^24)`).
+  records add up to about 65 bytes for each byte of input.
   It holds every count the default limit holds (the tiles a region reads, in
   every component the codestream codes, a palette's expanded channels and
   sRGB output). `read_header_with` refuses the sample count as the decode
@@ -181,6 +179,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A code-block's codeword segments cost about 15 bytes of heap each, or
+  about 85 with a byte, where they cost about 130 with none. A file of
+  many pass-terminated (`termall`) segments peaked at up to about 350
+  bytes for each byte of input, past the documented bound: a 37 MB
+  4096 x 4096 file peaked at 11.2 GiB at the defaults. It now peaks at
+  1.50 GiB. A tile's segment records take up to about 65 bytes of heap
+  for each byte of input, and a file of such a tile after tiles of
+  samples stays within the bound of about 6.4 GiB up to 64 MiB of input
+  and about 102 bytes for each byte past it. In a one-shot decode, a
+  packet's notes of its segments are freed before the records Tier-1
+  reads are built, and the records before the inverse wavelet. Decoded images do not change
+  (#585).
 - `read_header_with` gives the decode's error for a file where the
   tile-part header it reads to count a tile is at fault (a Part 2 marker
   such as `MCC`, a reserved marker, or a tile `COC` that mixes the wavelets

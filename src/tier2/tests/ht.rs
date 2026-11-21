@@ -192,7 +192,11 @@ fn refinement_passes_in_later_layers_fill_one_segment() {
         segments(&block),
         [(1, vec![1, 2]), (2, vec![3, 4, 5]), (1, vec![6, 7])]
     );
-    assert_eq!(block.segments[1].chunks.len(), 2, "one chunk per layer");
+    assert_eq!(
+        block.segments.get(1).unwrap().chunks.len(),
+        2,
+        "one chunk per layer"
+    );
 
     // Both refinement passes in one later layer: one field of 4 bits.
     let data = packets(&[
@@ -429,20 +433,17 @@ fn a_cut_packet_puts_back_the_ht_segment_state() {
     let mut log = Vec::new();
     let snapshot = |states: &[BandState]| {
         let block = &states[0].blocks[0];
-        let segments: Vec<_> = block
-            .segments
-            .iter()
-            .map(|s| {
-                (
-                    s.kind,
-                    s.passes,
-                    s.kept,
-                    s.max_passes,
-                    s.length,
-                    s.chunks.len(),
-                )
-            })
-            .collect();
+        let segments = block.segments.as_deref().map(|s| {
+            (
+                s.passes.clone(),
+                s.kept,
+                s.first,
+                s.last,
+                s.max_passes,
+                s.length,
+                s.chunks.len(),
+            )
+        });
         (block.num_passes, block.lblock, segments)
     };
     let mut before = None;
@@ -469,17 +470,8 @@ fn a_cut_packet_puts_back_the_ht_segment_state() {
         assert_eq!(packet, expected, "layer {layer}");
     }
     let before = before.unwrap();
-    assert_eq!(
-        before.2,
-        [(
-            SegmentKind::HtCleanup { placeholders: None },
-            3,
-            3,
-            u32::MAX,
-            0,
-            0
-        )]
-    );
+    let open = SegmentKind::HtCleanup { placeholders: None };
+    assert_eq!(before.2, Some((vec![3], 3, open, open, u32::MAX, 0, 0)));
     assert_eq!(snapshot(&states), before);
 }
 
@@ -809,7 +801,11 @@ fn a_block_empty_in_layer_0_then_part1() {
     assert_eq!(block.placeholders, 0);
     assert_eq!(block.zero_bit_planes, 2);
     assert_eq!(segments(&block), [(3, body(10))]);
-    assert_eq!(block.segments[0].chunks.len(), 1, "layer 0 gave no chunk");
+    assert_eq!(
+        block.segments.get(0).unwrap().chunks.len(),
+        1,
+        "layer 0 gave no chunk"
+    );
 }
 
 /// A block whose length fields are all zero is read as HT, as the A.4 note
@@ -885,7 +881,7 @@ fn a_part1_block_that_passes_109_in_a_later_layer_is_one_segment() {
     assert_eq!(block.num_passes, 120);
     let both: Vec<u8> = body(5).into_iter().chain(body(3)).collect();
     assert_eq!(segments(&block), [(120, both)]);
-    assert_eq!(block.segments[0].chunks.len(), 2);
+    assert_eq!(block.segments.get(0).unwrap().chunks.len(), 2);
 }
 
 /// A packet cut short, with `strict` off, puts back the coder its header
@@ -932,12 +928,13 @@ fn a_cut_packet_puts_back_the_coder() {
     let block = &states[0].blocks[0];
     assert_eq!(block.coder, None);
     assert_eq!(block.num_passes, 0);
-    assert_eq!(block.segments.len(), 1);
+    let segments = block.segments.as_deref().expect("a segment");
+    assert_eq!(segments.passes, [2]);
     assert_eq!(
-        block.segments[0].kind,
+        segments.first,
         SegmentKind::HtCleanup { placeholders: None }
     );
-    assert_eq!(block.segments[0].passes, 2);
+    assert_eq!(segments.last, segments.first);
 }
 
 /// A MIXED style leaves each block's coder open unless `CAP` says every
