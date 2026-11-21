@@ -97,18 +97,19 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[non_exhaustive]
 pub enum Error {
     /// Not a JPEG 2000 codestream, or its structure is broken: how the
-    /// markers and the data are laid out, not what a segment says. That is
-    /// a marker that is missing, repeated or out of place; the tile-parts
-    /// that `SOT` lays out (its tile index, `Psot`, `TPsot` and `TNsot`)
-    /// and the `PPM` and `PPT` packet headers they share out; a segment or
-    /// tile-part that runs past the end of the input; packets the `POC`
-    /// volumes leave out; and corrupt packet or coded data, `SOP`
-    /// sequence numbers and `EPH` included. Input that ends before the
-    /// main header is whole is [`Error::Incomplete`] instead. Any input that
-    /// is not JPEG 2000 at all (text, another image format) is this
-    /// variant, since it has no `SOC` marker.
+    /// markers and the data are laid out, not what one segment says. That
+    /// is a marker that is missing, repeated or out of place (a `PPT` beside
+    /// a `PPM` included); the tile-parts that `SOT` lays out (its tile
+    /// index, `Psot`, `TPsot` and `TNsot`) and the `PPM` chunks they take;
+    /// a segment that runs past its tile-part, or anything that runs past
+    /// the end of the input; packets the `POC` volumes leave out; and
+    /// corrupt packet or coded data, `SOP` sequence numbers and `EPH`
+    /// included. Input that ends before the main header is whole is
+    /// [`Error::Incomplete`] instead. Any input that is not JPEG 2000 at all
+    /// (text, another image format) is this variant, since it has no `SOC`
+    /// marker.
     ///
-    /// A cap on the main header's marker segments (65,536) is this variant
+    /// A main header of more than 65,536 marker segments is this variant
     /// too, not [`Error::Limit`]: no valid main header comes near it, and no
     /// option raises it.
     Codestream(ErrorDetail),
@@ -186,13 +187,12 @@ pub enum Error {
     /// fields the segment carries (too short, bytes left over, not a whole
     /// number of entries, or below the segment's minimum), or a coding
     /// parameter that another segment rules out. That last covers a
-    /// component index past `SIZ`'s count, a `TLM` tile index past the tile
-    /// grid, an `RGN` or a MIXED code-block
-    /// style that `CAP` rules out, quantization steps too few for the
-    /// decomposition levels, and a color transform over components that
-    /// differ. A segment whose length runs past the end of the input is
-    /// [`Error::Codestream`] or [`Error::Incomplete`] instead, since the input
-    /// may be cut short.
+    /// component index past `SIZ`'s count, a `TLM` tile index past the
+    /// grid, an `RGN` or a MIXED code-block style that `CAP` rules out,
+    /// quantization steps too few for the decomposition levels, and a color
+    /// transform over components that differ. A segment whose length runs
+    /// past the end of the input is [`Error::Codestream`] or
+    /// [`Error::Incomplete`] instead, since the input may be cut short.
     Marker(ErrorDetail),
     /// The JP2 box structure or a box field is malformed: a box that runs past
     /// the superbox holding it, a truncated box after the codestream, a

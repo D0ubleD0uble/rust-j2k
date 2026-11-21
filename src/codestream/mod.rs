@@ -3176,12 +3176,12 @@ fn decode_ppm_chunks(mut markers: Vec<(u8, Vec<u8>)>) -> Result<Vec<Vec<u8>>> {
             "duplicate `PPM` index `Zppm` in the main header",
         ));
     }
-    // `Lppm` is at least 4: `Zppm` and one byte of `Nppm` or `Ippm`.
-    if let Some(&(zppm, _)) = markers.iter().find(|(_, bytes)| bytes.is_empty()) {
-        return Err(Error::marker(format!(
-            "`PPM` with `Zppm` {zppm} carries no `Nppm` or `Ippm` byte; `Lppm` must be at least 4"
-        )));
-    }
+    // `Lppm` is at least 4: `Zppm` and one byte of `Nppm` or `Ippm`. Judged
+    // after the records below, so a fault in them is still the one reported.
+    let short = markers
+        .iter()
+        .find(|(_, bytes)| bytes.is_empty())
+        .map(|&(zppm, _)| zppm);
     let joined: Vec<u8> = markers.into_iter().flat_map(|(_, bytes)| bytes).collect();
 
     let mut cur = Cursor::at(&joined, 0);
@@ -3190,6 +3190,11 @@ fn decode_ppm_chunks(mut markers: Vec<(u8, Vec<u8>)>) -> Result<Vec<Vec<u8>>> {
         // Nppm: the byte count of this tile-part's packet headers (may be 0).
         let nppm = cur.u32()? as usize;
         chunks.push(cur.take(nppm)?.to_vec());
+    }
+    if let Some(zppm) = short {
+        return Err(Error::marker(format!(
+            "`PPM` with `Zppm` {zppm} carries no `Nppm` or `Ippm` byte; `Lppm` must be at least 4"
+        )));
     }
     Ok(chunks)
 }
