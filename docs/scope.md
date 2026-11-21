@@ -1,8 +1,8 @@
 # Feature scope
 
 This page lists the JPEG 2000 features, grouped by part of the standard, and
-says whether this decoder reads each one today. When a feature isn't read yet,
-the table names the [roadmap](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md) phase that plans it. A file that
+says whether this decoder reads each one today. The [roadmap](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md)
+says which features are planned. A file that
 needs a feature this decoder doesn't read is refused with
 `Error::Unsupported` rather than decoded wrongly.
 
@@ -29,7 +29,7 @@ refused or handled partly. The text under each table names them.
 | Non-zero image offset (XOsiz/YOsiz) | Yes |
 | Non-zero tile offset (XTOsiz/YTOsiz) | Yes |
 | CAP (capabilities) and CPF (corresponding profile) | Yes, with limits |
-| Part 2 markers (MCT, MCC, NLT, MCO, CBD) | No (Phase 6) |
+| Part 2 markers (MCT, MCC, NLT, MCO, CBD) | No |
 
 Limits inside the decoded rows:
 
@@ -211,22 +211,22 @@ HT and Part 1 code-blocks, and refuses more than one HT set with
 
 | Feature | Decoded |
 |---|---|
-| Extended (.jpx) file format and boxes | No (Phase 6) |
-| Variable DC offset, nonlinear point transform | No (Phase 6) |
-| Trellis-coded quantization (TCQ) | No (Phase 6) |
-| Arbitrary decomposition structures and custom wavelet kernels | No (Phase 6) |
-| Extended and array-based multiple component transforms (multi- and hyperspectral) | No (Phase 6) |
-| Extended region of interest | No (Phase 6) |
+| Extended (.jpx) file format and boxes | No |
+| Variable DC offset, nonlinear point transform | No |
+| Trellis-coded quantization (TCQ) | No |
+| Arbitrary decomposition structures and custom wavelet kernels | No |
+| Extended and array-based multiple component transforms (multi- and hyperspectral) | No |
+| Extended region of interest | No |
 
 ## Encoding and later parts
 
 | Feature | Supported |
 |---|---|
-| Part 1 encoder (forward DWT, MQ encoder, rate control, packetization) | No (Phase 5) |
-| HTJ2K (FBCOT) block encoder | No (Phase 6) |
-| Part 3: Motion JPEG 2000 (MJ2 container) | No (Phase 7) |
-| Part 9: JPIP interactive streaming protocol | No (Phase 7) |
-| Part 11: JPWL wireless error protection | No (Phase 7) |
+| Part 1 encoder (forward DWT, MQ encoder, rate control, packetization) | No |
+| HTJ2K (FBCOT) block encoder | No |
+| Part 3: Motion JPEG 2000 (MJ2 container) | No |
+| Part 9: JPIP interactive streaming protocol | No |
+| Part 11: JPWL wireless error protection | No |
 
 ## Speed
 
