@@ -68,7 +68,7 @@ impl TagTree {
     }
 
     /// Build a tag tree for a precinct's `width × height` code-block grid. All
-    /// nodes start unresolved; values arrive through [`read`](Self::read).
+    /// nodes start unresolved; values arrive through [`read_saving`](Self::read_saving).
     pub fn new(width: u32, height: u32) -> Self {
         let width = width.max(1);
         let height = height.max(1);
@@ -127,7 +127,7 @@ impl TagTree {
         self.read_saving(x, y, threshold, bio, None)
     }
 
-    /// [`read`](Self::read), noting in `saved`, when it is given, each node
+    /// `read`, noting in `saved`, when it is given, each node
     /// on the read's path as it was before, so that [`restore`](Self::restore)
     /// can undo the read.
     pub(crate) fn read_saving(
@@ -181,7 +181,7 @@ impl TagTree {
         }
     }
 
-    /// The leaves that a [`read`](Self::read) at `threshold` passes over
+    /// The leaves that a [`read_saving`](Self::read_saving) at `threshold` passes over
     /// without reading a bit, found from leaf `(x, y)`: `None` if a read of
     /// `(x, y)` itself could take a bit or resolve.
     ///

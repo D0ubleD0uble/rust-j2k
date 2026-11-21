@@ -1,5 +1,5 @@
-//! The advice an [`Error::Limit`](crate::Error::Limit) for a work bound or
-//! the sample limit carries: a [`WorkLimit::Raised`](crate::WorkLimit::Raised)
+//! The advice an [`Error::Limit`] for a work bound or
+//! the sample limit carries: a [`WorkLimit::Raised`]
 //! factor worked out from what the refusal already shows.
 //!
 //! A bound scales with the file, so `Raised(n)` allows `n` times the default
