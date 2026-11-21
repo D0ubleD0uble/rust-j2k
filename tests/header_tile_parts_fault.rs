@@ -167,7 +167,7 @@ fn a_tile_parts_fault_comes_before_a_tile_refused() {
         (
             row(2, &[0xFF, 0x52, 0x00, 0x01], &[(1, vec![])], EOC),
             1,
-            "Codestream(\"marker segment length below 2\")",
+            "Marker(\"marker segment length below 2\")",
         ),
         (
             row(2, &long_com, &[(1, vec![])], EOC),
@@ -273,7 +273,7 @@ fn a_count_fault_with_strict_on_and_a_data_fault_with_it_off() {
     let lenient = strict.with_strict(false);
     let header = read_header_with(bytes, &lenient);
     assert_tile_refused(&header, 2, "strict off");
-    let sop = "Codestream(\"`SOP` declares `Lsop` 5, expected 4\")";
+    let sop = "Marker(\"`SOP` declares `Lsop` 5, expected 4\")";
     assert_eq!(keyed(decode_with(bytes, &lenient)), Err(sop.to_string()));
     let alone = lenient.with_region(Region::Tile(2));
     assert_eq!(keyed(header), keyed(decode_with(bytes, &alone)));
