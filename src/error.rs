@@ -48,6 +48,15 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// [`WorkLimit::Unlimited`](crate::WorkLimit::Unlimited) unless the source
 /// is trusted.
 ///
+/// When an input has more than one fault, which one is reported can change in
+/// any release. What holds is that for a fault
+/// [`read_header_with`](crate::read_header_with) finds,
+/// [`decode_with`](crate::decode_with) returns the same one, and a codestream and its JP2 wrapper report the same
+/// one. The exceptions are sRGB output, whose check comes at a different
+/// point for a raw codestream and for a JP2 file, and a fault that only
+/// decoding finds, which the header read can miss or answer with a
+/// [`Error::Limit`] or [`Error::InvalidOptions`] for another tile.
+///
 /// ```
 /// use rust_j2k::{Error, decode};
 ///
