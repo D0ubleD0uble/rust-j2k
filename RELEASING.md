@@ -69,11 +69,13 @@ differential checks and mutation testing that are not listed here.
    its `version` line by hand.
 3. Update the supported-versions table in `SECURITY.md` to the new minor
    version.
-4. Point the published docs at the release, so docs.rs and crates.io show
-   the docs for that version rather than `main`:
+4. Point the published docs at the release, so docs.rs, crates.io and the
+   `docs/` folder packaged in the crate show the docs for that version
+   rather than `main`:
    - In `src/`, `docs/` and `README.md`, change every `rust-j2k/blob/main/`
-     link, and every link pinned at an older tag, to `rust-j2k/blob/vX.Y.Z/`
-     (`sed -i -E 's#rust-j2k/blob/(main|v[0-9]+\.[0-9]+\.[0-9]+)/#rust-j2k/blob/vX.Y.Z/#g' $(grep -rlE 'rust-j2k/blob/' src docs README.md)`;
+     and `rust-j2k/tree/main/` link, and every such link pinned at an older
+     tag, to the new tag
+     (`sed -i -E 's#rust-j2k/(blob|tree)/(main|v[0-9]+\.[0-9]+\.[0-9]+)/#rust-j2k/\1/vX.Y.Z/#g' $(grep -rlE 'rust-j2k/(blob|tree)/' src docs README.md)`;
      this is GNU sed, and BSD or macOS sed needs `sed -i '' -E` instead).
    - In `README.md`, make each relative link (`docs/...`, `CONTRIBUTING.md`,
      `SECURITY.md`, the license files) absolute at the tag:
@@ -81,12 +83,12 @@ differential checks and mutation testing that are not listed here.
 
    The tag does not exist yet when the PR is written, but it does by the time
    docs.rs builds the published crate. Afterwards, both
-   `grep -rnoE 'rust-j2k/blob/[^/]+/' src docs README.md | grep -v 'blob/vX.Y.Z/'`
+   `grep -rnoE 'rust-j2k/(blob|tree)/[^/]+/' src docs README.md | grep -vE '(blob|tree)/vX.Y.Z/'`
    (with the new version in place of `vX.Y.Z`; `-o` prints each link on its
    own, so a stale link on the same line as a new one still shows) and
    `grep -nE '\]\((docs|[A-Z][A-Za-z-]*\.md|LICENSE)' README.md` should print
-   nothing. Between releases, new links use `main` or relative paths, and
-   links left at the last tag go back to `main`; the next release pins them.
+   nothing. Between releases, new links use `main` or relative paths; step 9
+   puts the pinned ones back.
 5. Open a PR with those changes; merge once CI is green.
 6. Tag the merged commit and push the tag:
    ```sh
@@ -98,6 +100,14 @@ differential checks and mutation testing that are not listed here.
    crate version, then pauses on the `crates-io` environment. Approve the
    deployment in the GitHub UI (Actions → the run → Review deployments).
 8. On approval it publishes to crates.io and creates the GitHub Release.
+9. Once the release is published, open a PR that moves the pinned links in
+   `src/`, `docs/` and `README.md` back to `main`, so `main` does not keep
+   pointing at the old tag:
+   `sed -i -E 's#rust-j2k/(blob|tree)/v[0-9]+\.[0-9]+\.[0-9]+/#rust-j2k/\1/main/#g' $(grep -rlE 'rust-j2k/(blob|tree)/v' src docs README.md)`.
+   `grep -rnE 'rust-j2k/(blob|tree)/v[0-9]' src docs README.md` should then
+   print nothing. The tagged commit keeps its pins, so the published crate
+   still shows the release's docs. The `README.md` links that step 4 made
+   absolute can stay absolute, now at `main`.
 
 ## Versioning
 
