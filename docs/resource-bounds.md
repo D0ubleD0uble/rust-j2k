@@ -384,7 +384,11 @@ of the 235 MB file above, 66 ms in all. The header of a tile-part not yet
 fed in full, or of a last tile-part whose `Psot` is 0, is read again on
 each call. What it keeps, about 140 bytes for each tile counted under its
 own header and a byte for each other tile plus a copy of the main header
-(`PPM` data included), is held until the options change.
+(`PPM` data included), is held until the options change. The walk for the
+decode's error for the tile-parts is not kept: each call that refuses a
+tile or stops at a budget walks every tile-part fed again, so with tile 0
+refused and `Region::Tile(0)`, calls after each 1 MiB fed of the 235 MB
+file take 22 s in all.
 In an `IncrementalDecoder` a refusal under the default or a `Raised` limit
 is a wait (`Waiting::SampleLimit`), as the caps grow with the bytes fed.
 
