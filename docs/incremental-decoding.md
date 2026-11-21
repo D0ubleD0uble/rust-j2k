@@ -20,7 +20,7 @@ does again on each refine.
   | --- | --- |
   | `MoreBytes { until, .. }` | It did not decode: the bytes fed have not doubled since the last try, or none are fed. `until` is a total of bytes fed, not the bytes still to come: a refine decodes once that many are fed, if not before. |
   | `HeaderIncomplete { .. }` | `decode_with` gives `Error::Incomplete`: the main header is cut short. |
-  | `SampleLimit { limit, .. }` | The default or a `Raised` sample limit refused the image, or a tile of more code-blocks or precincts than it allows a tile, with a `retry_with`. A refusal with none (under `AtMost`, or past the address space) is an error, not a wait, except that a later tile's cap refusal met while a refine counts the code-block work ends the count as `BoundSpent`. |
+  | `SampleLimit { limit, .. }` | The default or a `Raised` sample limit refused the image, or a tile of more code-blocks or precincts than it allows a tile, with a `retry_with`. A refusal with none (under `AtMost`, or past the address space) is an error, not a wait. In either case, a later tile's cap refusal met while a refine counts the code-block work ends the count as `BoundSpent` instead. |
   | `WorkLimit { limit, .. }` | The bytes fed cost more than the packet or code-block work bound allows; a decode of them on its own is refused too, with the same detail. |
   | `BoundSpent { limit, .. }` | The earlier refines spent the code-block bound the refines share, so the refine stopped decoding at a tile, the cut, whose work fits the whole bound. Decode the bytes fed now or start a new decoder. That decode can be refused for work or fail: where the whole bound refuses a later tile, the detail's `refused_at` gives it and its work, and that decode is refused there or fails first in a tile the refine did not decode. |
   | `MissingTiles { limit, .. }` | The charge for missing tiles passed the packet bound. |
@@ -42,18 +42,20 @@ does again on each refine.
   raises it. The sample limit of a refine is that of a one-shot decode of
   its bytes: 2^29 samples, or 8 samples per byte when that is more. So a
   file of more than 2^29 samples gives no image until the bytes fed reach an
-  eighth of its samples, 64 MiB for 2^29 samples and more for a larger image,
-  and each refine before that waits on `Waiting::SampleLimit`. The cadence
-  doubles the bytes between tries, so the first image can come at up to twice
-  that (derived from the limit, not timed). The limit is counted at the
+  eighth of its samples: about 64 MiB just past 2^29 samples, and more for a
+  larger image. Each refine before that waits on `Waiting::SampleLimit`. The
+  cadence doubles the bytes between tries, so the first image can come at up
+  to twice that: a file over 2^29 samples of 296 MB gave its first image at
+  128 MiB fed (measured, reported in #474). The sample count is taken at the
   reduction, so a viewer that wants a preview sooner can set a resolution
-  reduction first. A sample
+  reduction first. The tile caps on code-blocks and precincts are not counted
+  at the reduction, so a reduction does not shorten a wait on them. A sample
   limit of `WorkLimit::AtMost(n)` does not grow with the bytes, so a refusal
-  under it is not a wait: `refine` returns it as an error (bar the later-tile
-  case in the table above), `header` returns
-  it too, and it sticks however many bytes come after, until a change of
-  options. A server that streams files in can refuse one as soon as its main
-  header has come in. Any other error, including a limit that does not
+  under it is not a wait: `refine` returns it as an error (except in the
+  later-tile case in the table above), `header` returns it too, and it sticks
+  however many bytes come after, until a change of options. A server that
+  streams files in can refuse one as soon as its main header has come in.
+  Any other error, including a limit that does not
   depend on the bytes (an image or a tile too large for the target to
   address, too many `POC` volumes, too many bit-planes), is the one
   `decode_with` gives on those bytes. A refusal by a bound only the refines
@@ -209,9 +211,9 @@ refused once its `jp2c` box header is in), and `bytes` borrows the bytes fed.
   keeps every walk, and each walk charges the code-blocks the new
   reduction drops, counted from the geometry it holds. A walk whose
   geometry failed holds none to count from, and is let go. That is
-  defensive: a decoder keeps a walk only after `check_tile` has built the
-  same geometry and passed the caps, so the public API does not reach it. A larger
-  reduction has a smaller image, so the walks kept may no longer fit in
+  defensive. The public API does not reach this: a decoder keeps a walk
+  only after `check_tile` has built the same geometry and passed the caps. A
+  larger reduction has a smaller image, so the walks kept may no longer fit in
   the room (see [Work and memory](#work-and-memory)). Then the next refine
   lets go of the walks it reads that no longer fit, and walks those tiles
   from the start until there is room.
@@ -372,9 +374,9 @@ refine refused before that, partway through the tiles, can leave the walks of
 later tiles above the new room, but not above the larger of 1 MiB and 32
 bytes per byte fed; the next refine that decodes lets them go. A change of
 the layer cap lets go of every walk, and the largest walk with them, so the
-memory room is then that of a decoder made with the new options. Only the
-memory: the repeat bound stays spent, and the walks built again are charged
-to it as repeats (see above). A change of the
+memory room is then that of a decoder made with the new options. That
+holds for memory only. The repeat bound stays spent, and the walks built
+again are charged to it as repeats (see above). A change of the
 reduction or the window keeps the largest walk, which still bounds the walks
 kept. Of the
 committed fixtures fed 1 KB at a time, this keeps fewer walks than the image

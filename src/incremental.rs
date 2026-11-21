@@ -80,8 +80,8 @@ use crate::{
 /// for the 65535 tiles a file can have (up to twice that in capacity as
 /// the table grows). What [`header`](Self::header) keeps between its calls
 /// comes to about 140 bytes for each tile counted under its own header and
-/// a byte for each other tile, plus a key of the main header (not a copy of
-/// it). Each refine also holds what [`decode_with`] holds for the same
+/// a byte for each other tile, plus a key of the main header, its length and
+/// a hash. Each refine also holds what [`decode_with`] holds for the same
 /// bytes, so the decoder holds at most about three times one
 /// decode's peak memory, plus the bytes fed. After the options change,
 /// these bounds hold from the first refine that decodes under the new
@@ -288,9 +288,11 @@ impl IncrementalDecoder {
     /// error.
     ///
     /// With `strict` left on, it refuses a stream that is cut short, as
-    /// [`finish`](Self::finish) does. The kind differs where the cut is in
-    /// the main header: `decode_with` gives [`Error::Incomplete`], which
-    /// `finish` reports as [`Error::Codestream`] or [`Error::FileFormat`].
+    /// [`finish`](Self::finish) does. The kind differs where the bytes end
+    /// before the main header is whole: `decode_with` gives
+    /// [`Error::Incomplete`], which `finish` reports as [`Error::FileFormat`]
+    /// inside a JP2 file's boxes and as [`Error::Codestream`] inside the main
+    /// header.
     pub fn options(&self) -> &DecodeOptions {
         &self.options
     }
@@ -781,7 +783,9 @@ pub enum Waiting {
     /// what the target can address ([`LimitKind::AddressSpace`]) is lifted
     /// by no limit, so neither is a wait: `refine` returns it as an error,
     /// and every later `refine` returns it again, whatever is fed, until a
-    /// change of options.
+    /// change of options. The exception is a later tile's cap refusal met
+    /// while a refine counts the code-block work: that ends the count as
+    /// [`BoundSpent`](Self::BoundSpent).
     #[non_exhaustive]
     SampleLimit {
         /// The refusal, as an error would carry it.

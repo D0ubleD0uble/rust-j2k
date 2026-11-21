@@ -36,7 +36,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sRGB output). `read_header_with` refuses the sample count as the decode
   would, and the tile caps where the main header shows them. A refusal under
   it gives no retry, and in an `IncrementalDecoder` it is an error, not a
-  wait, unless a later tile's cap refusal ends a `BoundSpent` count.
+  wait, except a later tile's cap refusal met while a refine counts the
+  code-block work, which ends the count as `BoundSpent`.
   `AtMost(0)`, and `AtMost` on either work bound, is `InvalidOptions`. It
   replaces counting the samples by hand from the header (#475).
 - For a refusal by the code-block work bound or by a tile's cap on

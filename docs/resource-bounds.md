@@ -278,6 +278,37 @@ tile while a refine counts the code-block work: that ends the count as
 decoding](incremental-decoding.md)). `AtMost(0)`, and `AtMost` on
 `packet_work_limit` or `code_block_work_limit`, is `InvalidOptions`.
 
+### Figures for a decode service
+
+The [operator recipe](../SECURITY.md#running-a-decode-service) quotes these.
+Each was measured on a release build, by timing `decode_with` or as
+`/usr/bin/time` reports the peak resident set, unless it says estimated.
+
+**The palettized file.** `tests/sample_limit.rs` builds it:
+`many_tiles_of_empty_packets(8, 512, 31)` (31 components of 4096 x 4096 in 64
+tiles of 512, six levels, an empty packet each) in a JP2 file whose `pclr` and
+`cmap` map component 0 to one channel (`palette_jp2`). It is 15,069 bytes. The
+header lists one channel of 2^24 samples. The decode at the defaults holds
+31 x 2^24 samples and took 6.5 s with a peak of 2.03 GiB (2,130,788 KiB) in a
+standalone program, and 2.07 GiB under the test harness. Reproduce it with
+`/usr/bin/time -v cargo test --release --test sample_limit -- --ignored
+the_palettized_file_decodes_every_component` and read "Maximum resident set
+size". `AtMost(2^28)` refuses it in about 50 microseconds: "a decode of 31
+components needs 520093696 samples". The test
+`at_most_holds_the_codestream_and_the_palette_expansion` asserts the refusal on
+the same header, cut before its tile data.
+
+**The time.** The file is `t1bomb(16384, 6, 27)` from
+`scripts/gen-tier1-work-bound-fixtures.py`: one 16384 x 16384 tile in 64x64
+code-blocks of 27 passes and one byte each. It is 228,378 bytes, and its
+7.25e9 sample-passes are 97% of the code-block bound
+(max(2^26, 2^15 x 228,378) = 7.48e9). At the defaults it decodes in 26 to 27 s
+on one core, with a peak of 1.04 GiB. A variant of 36 passes (239,958 bytes) is
+refused in 34 ms. The estimate for the slowest data is the bound times 8 ns a
+sample-pass (see [The tier-1 work bound](#the-tier-1-work-bound)): 0.5 s at the
+floor, and 2^15 x 8 ns, about 0.25 ms, for each byte of tile data past it. A
+456 KB file taking 52.7 s at the defaults was reported in #474.
+
 ### Code-blocks and precincts per tile
 
 The sample limit bounds the decoded buffers, but each code-block and each

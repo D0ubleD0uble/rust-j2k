@@ -362,15 +362,15 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 ///
 /// A readable header does not mean [`decode`] will succeed. The tile data is
 /// not read, so it can still be damaged, unsupported, or past a work bound
-/// ([`Error::Limit`]). The tile-part headers are read only in some cases.
-/// At the defaults (`strict` on) these are a tile over a cap on its
-/// code-blocks or precincts under the main header, and a refusal, a stop at
-/// the read's budget or a tile with no tile-part, where it walks every
-/// tile-part header as the decode's parse does. That walk keeps no tile
-/// record: its heap is about 10 bytes for each tile, plus the coding of
-/// restated long headers. The packet headers of the last tile of a JP2 file
-/// whose tile-part has `Psot = 0` are read too. All of it is described on
-/// [`read_header_with`].
+/// ([`Error::Limit`]). The tile-part headers are read only where a tile is
+/// over a cap on its code-blocks or precincts under the main header. Where
+/// that read refuses a tile, finds a tile with no tile-part before it, or
+/// stops at its budget (which can happen with no tile over a cap), it walks
+/// every tile-part header as the decode's parse does. That walk keeps no
+/// tile record: up to 10 bytes of heap a tile, plus the coding of long first
+/// tile-part headers that later tile-parts restate. The packet headers of the
+/// last tile of a JP2 file whose tile-part has `Psot = 0` are read too. All
+/// of it is described on [`read_header_with`].
 ///
 /// ```
 /// use rust_j2k::{read_header, Error};
@@ -962,8 +962,8 @@ pub struct DecodeOptions {
     ///
     /// [`read_header_with`] checks the sample count as the decode does. It
     /// checks the tile caps below only where the main header shows them (see
-    /// the exceptions on [`read_header_with`]), so run the decode under the
-    /// limits too.
+    /// the exceptions on [`read_header_with`]), so a header that reads is not
+    /// a promise that the decode passes the caps.
     ///
     /// Padding counts as input, so a file can raise its own limit with
     /// `COM` segments, a JP2 `xml ` box or bytes after `EOC`. For a ceiling

@@ -1104,6 +1104,27 @@ fn at_most_holds_the_codestream_and_the_palette_expansion() {
     );
 }
 
+/// The palettized file of #474 with its tile data, decoded at the defaults:
+/// 31 components of 4096x4096 in 64 tiles of 512, one of them mapped through
+/// a one-column palette. The header lists one channel of 2^24 samples, but
+/// the decode holds 31 x 2^24 and peaks near 2 GiB. It is ignored for that
+/// memory. `SECURITY.md` quotes the peak; reproduce it with
+/// `/usr/bin/time -v cargo test --release --test sample_limit -- --ignored
+/// the_palettized_file_decodes_every_component` and read "Maximum resident
+/// set size" (about 2.1 GB, with the harness).
+#[cfg(target_pointer_width = "64")]
+#[test]
+#[ignore = "peaks near 2 GiB"]
+fn the_palettized_file_decodes_every_component() {
+    let file = palette_jp2(4096, 31, 1, &many_tiles_of_empty_packets(8, 512, 31));
+    assert_eq!(file.len(), 15_069);
+    assert_eq!(read_header(&file).unwrap().components.len(), 1);
+    let image = decode(&file).expect("under the default limit");
+    assert_eq!(image.components.len(), 1);
+    let n = 1 << 28;
+    refused_at_most(decode_with(&file, &at_most(n)), n);
+}
+
 /// Padding does not raise the ceiling. A 32769x16384 image is over the
 /// default for a small file; padded past 64 MiB with `COM` segments, a JP2
 /// `xml ` box or bytes after `EOC`, its default limit admits it, and
