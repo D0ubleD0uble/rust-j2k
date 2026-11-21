@@ -5696,7 +5696,11 @@ fn the_fault_walk_reads_a_first_header_again_at_most_twice_a_tile() {
                 part(3, 0, 1, first, &[]),
             ];
             for at in 1..parts {
-                let later = if usize::from(at) % turns == 0 { &own } else { &qcd };
+                let later = if usize::from(at) % turns == 0 {
+                    &own
+                } else {
+                    &qcd
+                };
                 for tile in 0..3 {
                     tile_parts.push(part(tile, at, parts, later, &[0]));
                 }
@@ -5778,14 +5782,21 @@ fn the_fault_walk_checks_a_restatement_for_each_tile_and_header() {
         let parsed = parse_header(&bytes).expect("the main header");
         for strict in [true, false] {
             let found = format!("{:?}", fault::tile_parts_fault(&bytes, &parsed, strict));
-            assert!(found.starts_with(&format!("Some({error}")), "{name}: {found}");
+            assert!(
+                found.starts_with(&format!("Some({error}")),
+                "{name}: {found}"
+            );
         }
         let mut kept = None;
         let mut last = None;
         for len in parsed.main_header_len()..=bytes.len() {
             let fault = fault::tile_parts_fault_kept(&bytes[..len], &parsed, false, &mut kept);
             let afresh = fault::tile_parts_fault(&bytes[..len], &parsed, false);
-            assert_eq!(format!("{fault:?}"), format!("{afresh:?}"), "{name}, {len} bytes");
+            assert_eq!(
+                format!("{fault:?}"),
+                format!("{afresh:?}"),
+                "{name}, {len} bytes"
+            );
             last = fault;
         }
         let last = format!("{last:?}");

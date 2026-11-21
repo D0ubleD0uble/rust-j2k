@@ -139,14 +139,15 @@ fn a_refusal_on_the_235_mb_file_walks_the_tile_parts_once() {
             let start = Instant::now();
             let decoded = rust_j2k::decode_with(&bytes, &options);
             let decode = start.elapsed();
-            let name = format!(
-                "short first headers of `QCC`s, {turns} later headers, strict {strict}"
-            );
+            let name =
+                format!("short first headers of `QCC`s, {turns} later headers, strict {strict}");
             eprintln!(
                 "{name} ({} MB): {spent:?}, the decode {decode:?}: {error:?}",
                 bytes.len() / 1_000_000
             );
-            let decoded = decoded.map(|_| ()).expect_err("the decode refuses the file");
+            let decoded = decoded
+                .map(|_| ())
+                .expect_err("the decode refuses the file");
             assert_eq!(format!("{decoded:?}"), format!("{error:?}"), "{name}");
             if spent > decode * 3 {
                 over.push("short first headers of `QCC`s");
@@ -168,7 +169,10 @@ fn restated_over_qccs(turns: u8) -> Vec<u8> {
     let mut cod = synth::cod_body(1, 0, 4, 0);
     cod[0] = 1;
     cod.push(0x00);
-    let siz = synth::siz_body([side * tiles, side, 0, 0, side, side, 0, 0], &[[7, 1, 1]; 256]);
+    let siz = synth::siz_body(
+        [side * tiles, side, 0, 0, side, side, 0, 0],
+        &[[7, 1, 1]; 256],
+    );
     let cod = synth::seg(0xFF52, &cod);
     let qcd = synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8]));
     let mut bytes = [
