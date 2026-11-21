@@ -391,24 +391,35 @@ release](#against-the-last-release) on both targets:
 
 ```sh
 CARGO_TARGET_WASM32_WASIP1_RUNNER="wasmtime run --dir=$PWD::$PWD" \
-  cargo test --target wasm32-wasip1 --tests
+  cargo test --target wasm32-wasip1 --tests --no-fail-fast
 ```
 
-Every test binary passes. The whole run takes about six minutes, and the
-longest binary, `incremental`, about 90 s. It skips the tests marked
-`#[ignore = "slow"]`, as it does on every target. Run
-`--test work_limit -- --include-ignored` as well: its three slow tests
+Every test binary passes: in this run 67 binaries, 1580 tests passed, 7
+ignored, none failed. The tests take about six minutes, plus the build; the
+longest binaries are the library's unit tests and `incremental`, each about
+100 s. The run does not execute the `#[ignore]`d tests, as on every target
+(the attributes read `"slow: about ..."`, and the one in
+`tests/tile_geometry_cap.rs` reads `"decodes 1.6 x 10^9 samples..."`). Run the
+three slow tests of `work_limit`
 (`the_large_ht_bomb_decodes_at_the_default_bound`,
 `the_issue_bomb_decodes_with_the_limit_lifted` and
-`a_ladder_over_many_tiles_that_each_reach_the_bound_takes_log_steps`) pass on
-wasm32 in about a minute in a release build. The slow test in
+`a_ladder_over_many_tiles_that_each_reach_the_bound_takes_log_steps`) as well,
+in a release build:
+
+```sh
+CARGO_TARGET_WASM32_WASIP1_RUNNER="wasmtime run --dir=$PWD::$PWD" \
+  cargo test --release --target wasm32-wasip1 --test work_limit -- --include-ignored
+```
+
+It passes 42 tests in about 66 s. The ignored test in
 `tests/tile_geometry_cap.rs` (a 40000-square tile) is gated to 64-bit, because
 the caps never rise above their floor on 32-bit and the tile is
-`AddressSpace` there. The slow test in `src/image.rs` (about 30 CPU-minutes) and the one in
-`src/jp2/math_tests.rs` (it needs the host's glibc) are not part of this run. A wasm
-test binary stops at its first failure, because a panic aborts there, so a
-failing run names one test a binary. To list them all, run each test in its
-own process (`<binary>.wasm --list`, then `--exact <name>`).
+`AddressSpace` there. The ignored test in `src/image.rs` (about 30
+CPU-minutes) is not part of this run, and the one in `src/jp2/math_tests.rs`
+is not built for wasm32 (it needs the host's glibc). A wasm test binary stops
+at its first failure, because a panic aborts there, so a failing run names
+one test a binary. To list them all, run each test in its own process
+(`<binary>.wasm --list`, then `--exact <name>`).
 
 Some tests write under the target directory. If `CARGO_TARGET_DIR` (or a
 `build.build-dir`) is outside the repository, the runner must preopen it too,
@@ -425,8 +436,9 @@ expectation for each target, in `tests/tile_geometry_cap.rs`,
 (a ceiling past 2^29 samples, a retry that scales the cap). What is ignored
 on WASI needs what it lacks: a process to run `python3` in, or an unwinding
 panic. The `should_panic` test `one_entry_over_the_bound_panics` in
-`tests/fuzz_partial_oracle.rs` is the exception: under panic=abort libtest
-drops it from the wasm run, so it does not run there.
+`tests/fuzz_partial_oracle.rs` is the exception: it is listed and reported as
+`ignored`, because under panic=abort libtest does not run a test that must
+panic, so it does not run there.
 
 Print a hash of each corpus input's output (or its error text) from a small
 program built for each target, and compare the two lists.
