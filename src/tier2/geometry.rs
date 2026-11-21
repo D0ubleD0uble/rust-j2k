@@ -411,7 +411,8 @@ pub(crate) fn within_caps((precincts, blocks): (u64, u64), cap: crate::samples::
     precincts <= cap.tile_precincts() && blocks <= cap.tile_blocks()
 }
 
-/// [`check_tile`] for a tile whose [`tile_counts`] are already known.
+/// [`check_tile`] for a tile whose [`tile_counts`] are already known. The
+/// refusal names a factor that admits both counts, whichever it is for.
 pub(crate) fn check_counts(
     tile: u32,
     (precincts, blocks): (u64, u64),
@@ -421,7 +422,7 @@ pub(crate) fn check_counts(
         return Err(crate::samples::over_tile(
             crate::LimitKind::TilePrecincts,
             tile,
-            precincts,
+            (precincts, blocks),
             cap,
         ));
     }
@@ -429,7 +430,7 @@ pub(crate) fn check_counts(
         return Err(crate::samples::over_tile(
             crate::LimitKind::TileCodeBlocks,
             tile,
-            blocks,
+            (precincts, blocks),
             cap,
         ));
     }
