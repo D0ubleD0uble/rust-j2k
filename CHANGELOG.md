@@ -179,6 +179,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- With `strict` off, a last tile-part with `Psot` 0 whose input does not
+  end in `FF D9` always reports `ReportEntry::MissingEoc`. It was missing
+  when the input ended inside the tile-part's data, though it was given
+  when the input ended inside its header (#588).
 - A fault in a tile's own tile-part header (too few quantization steps,
   the 9/7 wavelet with no quantization, a wavelet that differs from the
   main header's) is found as the tile-part walk reads that header, and a

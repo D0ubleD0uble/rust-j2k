@@ -249,6 +249,11 @@ pub enum ReportEntry {
     },
     /// The codestream ends without its `EOC` marker. On its own this changes
     /// no sample.
+    ///
+    /// A last tile-part with `Psot` 0 runs to the end of the input, so it is
+    /// reported whenever the input does not end in `FF D9`, wherever the
+    /// input is cut. A tile-part with a `Psot` that runs past the end is
+    /// always reported, as its last bytes are tile data.
     #[non_exhaustive]
     MissingEoc,
 }
