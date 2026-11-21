@@ -1,16 +1,17 @@
 //! The walk of the tile-parts that looks for a fault and keeps no tile
 //! record: [`tile_parts_fault`] gives the error [`parse_tiles_with`] gives,
 //! in time linear in the input and with heap that grows with the tile count
-//! and, for the tiles a later tile-part restates a coding value of, their
-//! first tile-part's coding.
+//! and, for the tiles whose first tile-part header of over [`KEPT_OVER`]
+//! bytes a later tile-part restates a coding value of, with those headers.
 //!
 //! It is [`walk_tiles`] step for step, with what a tile record holds cut to
 //! what the faults depend on: for each tile, the tile-parts seen, the count
 //! they declare, the `POC` volumes they carry, and where its first
-//! tile-part's header starts. That header is read again, once for the tile,
-//! at the first later tile-part that restates a value, and the coding it
-//! gives is kept for the tile's later restatements
-//! ([`check_restatement`]). The two walks are kept in step
+//! tile-part's header starts. That header is read again for a later
+//! tile-part that restates a value ([`check_restatement`]): for each such
+//! tile-part where it is short, and once for the tile where it is long, the
+//! coding it gives then kept for the tile's later restatements. The two
+//! walks are kept in step
 //! by a differential over every committed codestream and header seed in
 //! `tests.rs`, and over fuzzed input by the `header` fuzz target
 //! ([`crate::fuzz::tile_parts_walks_agree`]).
@@ -38,7 +39,7 @@ struct Seen {
     declared: u16,
     /// The `POC` volumes of its tile-parts, at most [`MAX_POC_VOLUMES`].
     poc: u8,
-    /// [`CODES`], [`POC_FIRST`] and [`INVALID`].
+    /// [`CODES`], [`POC_FIRST`], [`INVALID`] and [`LONG`].
     flags: u8,
 }
 
@@ -49,6 +50,22 @@ const CODES: u8 = 1;
 const POC_FIRST: u8 = 2;
 /// The first tile-part's markers fail [`tile_overrides_are_valid`].
 const INVALID: u8 = 4;
+/// The first tile-part's header, flagged [`CODES`], is longer than
+/// [`KEPT_OVER`], so the coding read from it again is kept.
+const LONG: u8 = 8;
+
+/// The length past which a first tile-part header, read again for a later
+/// tile-part that restates a value, is kept rather than read again for
+/// each. A kept header costs about a kilobyte whatever its length (its
+/// `Overrides` and the state of [`check_restatement`], with their maps),
+/// and more for each `COC` or `QCC` it holds: up to about 13 bytes of heap
+/// a byte of header, for a header of `QCC`s. Keeping only the headers
+/// longer than this holds that heap to at most about 13 times their bytes
+/// in the input, where keeping every header would cost a kilobyte for a
+/// tile whose header is one 14-byte `COD`. A shorter header is read again
+/// for each restating tile-part, which is at least 14 bytes long, so that
+/// work stays within about 73 times the input.
+const KEPT_OVER: usize = 1024;
 
 /// Where the header of each tile's first tile-part starts, for the tiles
 /// flagged [`CODES`]. Nothing is held until a tile is flagged; then it
@@ -102,9 +119,11 @@ impl Firsts {
 /// gives none. It reads `parsed` in place and keeps no tile record: its
 /// heap is 6 bytes a tile of the grid, and 4 more a tile (8 on an input of
 /// 4 GiB or more) once any tile's first tile-part carries a `COD`, `QCD`,
-/// `COC` or `QCC`, plus one tile-part header at a time, plus the first
-/// tile-part's coding for each tile that a later tile-part restates a
-/// value of. The walk again for a tile whose joined header is at fault
+/// `COC` or `QCC`, plus one tile-part header at a time, plus, for each tile
+/// whose first tile-part header is over [`KEPT_OVER`] bytes and has a value
+/// a later tile-part restates, the coding it gives: up to about 13 times
+/// the bytes of those headers. The walk again for a tile whose joined
+/// header is at fault
 /// starts once the first walk's record is let go, so the two are not held
 /// at once.
 pub(crate) fn tile_parts_fault(bytes: &[u8], parsed: &ParsedHeader, strict: bool) -> Option<Error> {
@@ -134,8 +153,8 @@ fn walk(
     let mut count_correction = 0u16;
     let uniform = OnceCell::new();
     let summary = OnceCell::new();
-    // For each tile a later tile-part of which restates a coding value: its
-    // first tile-part's coding, read again once, and what
+    // For each tile flagged [`LONG`] a later tile-part of which restates a
+    // coding value: its first tile-part's coding, read again once, and what
     // [`check_restatement`] has found so far, as the tile record holds them.
     let mut restating: HashMap<usize, (Overrides, Option<Restated>)> = HashMap::new();
     // Whether the walk ended where the input did, with `strict` off: where
@@ -231,6 +250,9 @@ fn walk(
                         tile.flags |= INVALID;
                     }
                     firsts.set(index, tile_count, header_at);
+                    if cur.pos - header_at > KEPT_OVER {
+                        tile.flags |= LONG;
+                    }
                 }
                 if !tile_header.poc.is_empty() {
                     tile.flags |= POC_FIRST;
@@ -242,25 +264,29 @@ fn walk(
                 }
             } else {
                 if tile_header.overrides.codes_or_quantizes() {
-                    let (own, restated) = match restating.entry(index) {
-                        Entry::Occupied(entry) => entry.into_mut(),
-                        Entry::Vacant(entry) => {
-                            // The first tile-part's header read again, once
-                            // for the tile: it read the same when the walk
-                            // passed it.
-                            let own = if tile.flags & CODES != 0 {
-                                #[cfg(test)]
-                                super::tests::FIRST_REREADS
-                                    .with(|reads| reads.set(reads.get() + 1));
-                                let mut at = Cursor::at(bytes, firsts.get(index));
-                                read_tile_part_header(&mut at, main, true)?.0.overrides
-                            } else {
-                                Overrides::default()
-                            };
-                            entry.insert((own, None))
-                        }
+                    // The first tile-part's header read again: it read the
+                    // same when the walk passed it. What `check_restatement`
+                    // keeps between tile-parts only saves it comparing
+                    // again, so starting it afresh gives the same result.
+                    let first_again = || -> Result<Overrides> {
+                        #[cfg(test)]
+                        super::tests::FIRST_REREADS.with(|reads| reads.set(reads.get() + 1));
+                        let mut at = Cursor::at(bytes, firsts.get(index));
+                        Ok(read_tile_part_header(&mut at, main, true)?.0.overrides)
                     };
-                    check_restatement(main, &uniform, own, restated, &tile_header, index)?;
+                    if tile.flags & CODES == 0 {
+                        let own = Overrides::default();
+                        check_restatement(main, &uniform, &own, &mut None, &tile_header, index)?;
+                    } else if tile.flags & LONG == 0 {
+                        let own = first_again()?;
+                        check_restatement(main, &uniform, &own, &mut None, &tile_header, index)?;
+                    } else {
+                        let (own, restated) = match restating.entry(index) {
+                            Entry::Occupied(entry) => entry.into_mut(),
+                            Entry::Vacant(entry) => entry.insert((first_again()?, None)),
+                        };
+                        check_restatement(main, &uniform, own, restated, &tile_header, index)?;
+                    }
                 }
                 let volumes = usize::from(tile.poc) + tile_header.poc.len();
                 check_poc_budget(volumes)?;

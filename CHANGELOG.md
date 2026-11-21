@@ -139,8 +139,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   while `decode_with` refuses the file for the tile-parts before it counts
   any tile. To find the error it walks the tile-parts as the decode's
   parse does, keeping up to 10 bytes a tile (14 on an input of 4 GiB or
-  more) in place of the decode's tile records, plus the first tile-part's
-  coding for each tile a later tile-part restates: on a 235 MB file of
+  more) in place of the decode's tile records, plus the coding of each
+  first tile-part header over 1 KiB that a later tile-part restates, up to
+  about 13 times those headers' bytes: on a 235 MB file of
   16.7 million tile-parts that refusal takes 240 ms and 640 KiB, where the
   decode's parse takes 1.7 s and 290 MiB (#498, #545).
 - With `strict` off, `read_header_with` gives the decode's error for the

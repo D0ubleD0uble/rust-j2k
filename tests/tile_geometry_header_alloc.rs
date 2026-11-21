@@ -180,6 +180,19 @@ fn the_header_read_holds_no_tile_data() {
         );
         assert_eq!(matches!(error, Error::Limit(_)), !fault, "{error:?}");
     }
+    // The same with a second tile-part for each tile that restates its
+    // `COD`: each restatement reads the tile's short first header again
+    // rather than keep its coding, so the peak is as above.
+    for strict in [true, false] {
+        let options = last.clone().with_strict(strict);
+        let bytes = most_tiles_with(u16::MAX - 1, true, EOC);
+        let (peak, error) = peak_of_refusal(&bytes, &options);
+        eprintln!(
+            "{tiles} tiles restated, the last refused, strict {strict}: {peak} bytes at the peak"
+        );
+        assert!(peak < PEAK_BYTES + 11 * tiles, "{peak} bytes");
+        assert!(matches!(error, Error::Limit(_)), "{error:?}");
+    }
 }
 
 const EOC: &[u8] = &[0xFF, 0xD9];
@@ -188,18 +201,19 @@ const EOC: &[u8] = &[0xFF, 0xD9];
 /// main header (266,240 a tile, over the 2^18 cap), each with a tile-part
 /// `COD` of the maximal precincts and one empty packet.
 fn most_tiles() -> Vec<u8> {
-    most_tiles_with(u16::MAX, EOC)
+    most_tiles_with(u16::MAX, false, EOC)
 }
 
 /// [`most_tiles`], but the last tile has no tile-part `COD`, so it is
 /// refused, and `end` closes the codestream.
 fn most_tiles_last_refused(end: &[u8]) -> Vec<u8> {
-    most_tiles_with(u16::MAX - 1, end)
+    most_tiles_with(u16::MAX - 1, false, end)
 }
 
-/// [`most_tiles`], with a tile-part `COD` in tiles 0 to `own - 1` only, and
-/// `end` after the last tile-part.
-fn most_tiles_with(own_up_to: u16, end: &[u8]) -> Vec<u8> {
+/// [`most_tiles`], with a tile-part `COD` in tiles 0 to `own_up_to - 1`
+/// only, with a second tile-part for each tile that restates it where
+/// `restated`, and `end` after the last tile-part.
+fn most_tiles_with(own_up_to: u16, restated: bool, end: &[u8]) -> Vec<u8> {
     let mut cod = synth::cod_body(1, 0, 4, 0);
     cod[0] = 1;
     cod.push(0x00);
@@ -212,9 +226,13 @@ fn most_tiles_with(own_up_to: u16, end: &[u8]) -> Vec<u8> {
     ]
     .concat();
     let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
+    let parts = 1 + u8::from(restated);
     for tile in 0..u16::MAX {
         let header: &[u8] = if tile < own_up_to { &own } else { &[] };
-        bytes.extend(synth::tile_part(tile, 0, 1, header, &[0]));
+        bytes.extend(synth::tile_part(tile, 0, parts, header, &[0]));
+        if restated {
+            bytes.extend(synth::tile_part(tile, 1, parts, header, &[]));
+        }
     }
     bytes.extend_from_slice(end);
     bytes
