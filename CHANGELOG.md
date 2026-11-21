@@ -168,6 +168,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `read_header_with` gives the decode's error for a file where the
+  tile-part header it reads to count a tile is at fault (a Part 2 marker
+  such as `MCC`, a reserved marker, or a tile `COC` that mixes the wavelets
+  under the color transform, say). It returned `Ok` when that tile was the
+  only one over a cap under the main header, while `decode_with` refuses
+  the file for the tile-parts. The same holds where the tile's precincts
+  and code-blocks under that header are at fault and the decode's parse
+  of the tile-parts finds a fault. `IncrementalDecoder::header` gives the
+  error once the tile-part is whole (#578).
 - A tile over both the precinct and the code-block cap is still refused for
   its precincts (`LimitKind::TilePrecincts`), but `retry_with` now names a
   `WorkLimit::Raised` factor that admits its code-blocks too, and the

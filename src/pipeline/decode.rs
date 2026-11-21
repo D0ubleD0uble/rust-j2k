@@ -271,6 +271,7 @@ fn count_geometry(
             None => kept.is_some().then(BTreeMap::new),
         },
         steps: 0,
+        fault_free: false,
     };
     let mut count = || {
         let mut steps = 0u64;
@@ -524,6 +525,9 @@ struct Rescue<'a> {
     known: Option<BTreeMap<u32, Own>>,
     /// The steps taken reading and counting the tiles' own headers.
     steps: u64,
+    /// Whether [`own_fault`](Self::own_fault) has walked the tile-parts and
+    /// found no fault, so that it walks them once at most.
+    fault_free: bool,
 }
 
 /// What [`Rescue::count`] read of a tile's first tile-part, whole in the
@@ -539,11 +543,11 @@ struct Own {
 /// [`Own::header`].
 #[derive(Clone, Copy)]
 enum OwnHeader {
-    /// At fault, which is the decode's to report.
+    /// At fault ([`Rescue::own_fault`]).
     Fault,
     /// Read, and within the reduction (the one [`Kept`] is for): the
     /// resolutions it gives the tile, and its [`tier2::tile_counts`], or
-    /// `None` where those are at fault, which is the decode's to report too.
+    /// `None` where those are at fault ([`Rescue::own_fault`] too).
     Read {
         resolutions: u64,
         counts: Option<(u64, u64)>,
@@ -638,8 +642,9 @@ impl<'a> Rescue<'a> {
     /// checked first, as the decode checks it, and one with none with the
     /// decode's error for the tile-parts with `strict` on
     /// ([`walk_fault`](Self::walk_fault)) and not at all with it off (the
-    /// decode leaves it out). A tile whose tile-part header is at fault is
-    /// the decode's to report. So a tile-part `COD` that brings a tile
+    /// decode leaves it out). A tile whose tile-part header is at fault, or
+    /// whose counts under it are, gets the decode's error for the
+    /// tile-parts ([`own_fault`](Self::own_fault)). So a tile-part `COD` that brings a tile
     /// within the caps is admitted, and one that takes it over them is
     /// refused. A tile within them (`None`) whose first tile-part has no
     /// `COD` or `COC` is admitted unread and uncharged.
@@ -694,10 +699,9 @@ impl<'a> Rescue<'a> {
         if !self.charge(self.read_cost()) {
             return Ok(false);
         }
-        // A tile-part header at fault is the decode's to report.
         let Ok(own) = part.header() else {
             self.learn(index, whole, sets_coding, Some(OwnHeader::Fault));
-            return Ok(true);
+            return self.own_fault();
         };
         let resolutions = resolutions(&own);
         if !self.charge(resolutions) {
@@ -731,7 +735,7 @@ impl<'a> Rescue<'a> {
             counts,
         } = header
         else {
-            return Ok(true);
+            return self.own_fault();
         };
         if !self.charge(resolutions) {
             return Ok(false);
@@ -741,12 +745,35 @@ impl<'a> Rescue<'a> {
     }
 
     /// Hold tile `index` to the caps under its own header, which gave its
-    /// tile `counts`, as [`tier2::check_tile`] holds it.
-    fn check_own(&self, index: u32, counts: Option<(u64, u64)>) -> Result<bool> {
-        match counts.map(|counts| tier2::check_counts(index, counts, self.cap)) {
-            Some(Err(error @ Error::Limit(_))) => Err(error),
+    /// tile `counts`, as [`tier2::check_tile`] holds it. Counts at fault
+    /// (`None`) are [`own_fault`](Self::own_fault)'s.
+    fn check_own(&mut self, index: u32, counts: Option<(u64, u64)>) -> Result<bool> {
+        let Some(counts) = counts else {
+            return self.own_fault();
+        };
+        match tier2::check_counts(index, counts, self.cap) {
+            Err(error @ Error::Limit(_)) => Err(error),
             _ => Ok(true),
         }
+    }
+
+    /// The error for a tile whose own tile-part header, or whose counts
+    /// under it, are at fault: the decode's error for the tile-parts, with
+    /// `strict` as the read has it ([`codestream::tile_parts_fault`]), as
+    /// the decode parses every tile-part before it counts any tile. A whole
+    /// tile-part header at fault is one that parse finds, if it finds no
+    /// fault before it. Where it finds none (a tile-part the input cuts,
+    /// with `strict` off, or counts at fault that only the decode's count
+    /// of the tile finds), the tile is left to the decode. The tile-parts
+    /// are walked once at most.
+    fn own_fault(&mut self) -> Result<bool> {
+        if !self.fault_free {
+            match codestream::tile_parts_fault(self.bytes, self.parsed, self.strict) {
+                Some(fault) => return Err(fault),
+                None => self.fault_free = true,
+            }
+        }
+        Ok(true)
     }
 
     /// The steps reading a tile's header costs. It copies the main header's
