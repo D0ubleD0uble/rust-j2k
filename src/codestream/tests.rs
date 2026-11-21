@@ -1770,7 +1770,8 @@ fn a_length_that_runs_into_the_packet_data_is_codestream() {
         vec![0xFF, 0x4D, 0x12, 0x34],
         vec![0xFF, 0x75, 0x00, 0x40],
     ] {
-        let bytes = assemble_with_tile_markers(&default_header(), &[com.clone()], &data);
+        let bytes =
+            assemble_with_tile_markers(&default_header(), std::slice::from_ref(&com), &data);
         crate::fuzz::tile_parts_walks_agree(&bytes);
         let e = perr(&bytes);
         assert!(
