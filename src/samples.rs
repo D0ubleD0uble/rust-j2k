@@ -409,7 +409,6 @@ fn check_extent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Raise;
 
     /// The default cap of an input under 64 MiB: the floor.
     const DEFAULT: Cap = Cap {
@@ -457,7 +456,7 @@ mod tests {
                 unreachable!()
             };
             assert_eq!(limit.kind(), crate::LimitKind::Samples);
-            assert_eq!(limit.retry_with(), Some(Raise::Unlimited));
+            assert_eq!(limit.retry_with(), Some(crate::Raise::Unlimited));
         }
     }
 
@@ -470,7 +469,7 @@ mod tests {
             unreachable!()
         };
         assert_eq!(limit.kind(), crate::LimitKind::Samples);
-        assert_eq!(limit.retry_with(), Some(Raise::Raised(3)));
+        assert_eq!(limit.retry_with(), Some(crate::Raise::Raised(3)));
     }
 
     /// Past what the target can address, no option admits the image, so the
@@ -560,7 +559,7 @@ mod tests {
             let Error::Limit(limit) = over("image area", total, default) else {
                 unreachable!()
             };
-            let Some(Raise::Raised(n)) = limit.retry_with() else {
+            let Some(crate::Raise::Raised(n)) = limit.retry_with() else {
                 panic!("{limit:?}")
             };
             assert!(n >= 2, "{limit}");
@@ -705,17 +704,20 @@ mod tests {
         let floor = cap(&SampleLimit::Default, 0);
         assert_eq!(
             hint(TileCodeBlocks, (1 << 20) + 1, floor),
-            Some(Raise::Raised(2))
+            Some(crate::Raise::Raised(2))
         );
-        assert_eq!(hint(TileCodeBlocks, 5 << 20, floor), Some(Raise::Raised(5)));
+        assert_eq!(
+            hint(TileCodeBlocks, 5 << 20, floor),
+            Some(crate::Raise::Raised(5))
+        );
         assert_eq!(
             hint(TilePrecincts, (1 << 18) + 1, floor),
-            Some(Raise::Raised(2))
+            Some(crate::Raise::Raised(2))
         );
         let raised = cap(&SampleLimit::Raised(2), 0);
         assert_eq!(
             hint(TileCodeBlocks, 3 << 20, raised),
-            Some(Raise::Raised(4))
+            Some(crate::Raise::Raised(4))
         );
         let at_most = cap(&SampleLimit::AtMost(1 << 30), 0);
         assert_eq!(hint(TileCodeBlocks, (1 << 21) + 1, at_most), None);
@@ -746,7 +748,7 @@ mod tests {
         // The code-blocks need three times the default, the precincts
         // twice.
         let (retry, message) = hint(TilePrecincts, ((1 << 18) + 1, 3 << 20), floor);
-        assert_eq!(retry, Some(Raise::Raised(3)), "{message}");
+        assert_eq!(retry, Some(crate::Raise::Raised(3)), "{message}");
         assert!(
             message.contains(
                 ", and its 3145728 code-blocks are more than the 1048576 a tile may hold too;"
@@ -755,22 +757,22 @@ mod tests {
         );
         // The precincts need five times the default, the code-blocks twice.
         let (retry, message) = hint(TilePrecincts, (5 << 18, (1 << 20) + 1), floor);
-        assert_eq!(retry, Some(Raise::Raised(5)), "{message}");
+        assert_eq!(retry, Some(crate::Raise::Raised(5)), "{message}");
         assert!(
             message.contains(" code-blocks are more than the "),
             "{message}"
         );
         // Only the precincts over: the code-blocks need less.
         let (retry, message) = hint(TilePrecincts, (5 << 18, 1 << 20), floor);
-        assert_eq!(retry, Some(Raise::Raised(5)), "{message}");
+        assert_eq!(retry, Some(crate::Raise::Raised(5)), "{message}");
         assert!(!message.contains(", and its "), "{message}");
         // Under `Raised(2)` the doubling still holds as the floor of the
         // hint, and the larger need passes it.
         let raised = cap(&SampleLimit::Raised(2), 0);
         let (retry, _) = hint(TilePrecincts, ((1 << 19) + 1, 6 << 20), raised);
-        assert_eq!(retry, Some(Raise::Raised(6)));
+        assert_eq!(retry, Some(crate::Raise::Raised(6)));
         let (retry, _) = hint(TileCodeBlocks, (1 << 19, (1 << 21) + 1), raised);
-        assert_eq!(retry, Some(Raise::Raised(4)));
+        assert_eq!(retry, Some(crate::Raise::Raised(4)));
         // Under `AtMost` it names no factor, but still says the code-blocks
         // are over.
         let at_most = cap(&SampleLimit::AtMost(1 << 29), 0);
@@ -801,7 +803,7 @@ mod tests {
                 unreachable!()
             };
             assert_eq!(limit.kind(), kind, "{limit}");
-            assert_eq!(limit.retry_with(), Some(Raise::Unlimited), "{limit}");
+            assert_eq!(limit.retry_with(), Some(crate::Raise::Unlimited), "{limit}");
             assert!(cap(&SampleLimit::Unlimited, 0).tile_blocks() >= blocks);
             assert!(cap(&SampleLimit::Raised(u32::MAX), 0).tile_blocks() < blocks);
         }
@@ -810,7 +812,11 @@ mod tests {
         let Error::Limit(limit) = over_tile(TileCodeBlocks, 7, (1, blocks), raised) else {
             unreachable!()
         };
-        assert_eq!(limit.retry_with(), Some(Raise::Raised(u32::MAX)), "{limit}");
+        assert_eq!(
+            limit.retry_with(),
+            Some(crate::Raise::Raised(u32::MAX)),
+            "{limit}"
+        );
     }
 
     /// A tile refused for its precincts whose code-blocks need a sample limit
@@ -854,7 +860,7 @@ mod tests {
         let Error::Limit(limit) = over("image area", total, raised) else {
             unreachable!()
         };
-        assert_eq!(limit.retry_with(), Some(Raise::Raised(4)), "{limit}");
+        assert_eq!(limit.retry_with(), Some(crate::Raise::Raised(4)), "{limit}");
         assert!(cap(&SampleLimit::Raised(4), 0).allowed >= total);
     }
 }

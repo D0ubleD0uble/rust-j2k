@@ -145,8 +145,9 @@ use crate::{
 /// on the same bytes, such as a marker segment with an invalid field, or an
 /// [`Error::Limit`] that does not depend on how many bytes there are: an image
 /// too large for the target to address, too many `POC` volumes or too many
-/// bit-planes, or a refusal by a sample limit of [`SampleLimit::AtMost`](crate::SampleLimit::AtMost). More
-/// bytes do not undo these, so once `refine` returns an error, every later
+/// bit-planes, or a refusal by a sample limit of
+/// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost). More bytes do not
+/// undo these, so once `refine` returns an error, every later
 /// `refine` returns the same error without decoding, until a change of
 /// options. Some refusals are not final
 /// while bytes may still come, so `refine` waits on them, with the reason as a
@@ -317,8 +318,9 @@ impl IncrementalDecoder {
     /// [`TilePrecincts`](LimitKind::TilePrecincts), can turn into a header
     /// once more bytes come in; [`refine`](Self::refine) waits
     /// on it instead ([`Waiting::SampleLimit`]). Under a ceiling of
-    /// [`SampleLimit::AtMost`] it does not grow, so the refusal here is final,
-    /// and `refine` returns it as an error too, except that a later tile's
+    /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost) it does not grow,
+    /// so the refusal here is final, and `refine` returns it as an error
+    /// too, except that a later tile's
     /// cap refusal met while a refine counts the code-block work ends the
     /// count as [`Waiting::BoundSpent`] (see [`Waiting`]). A server that
     /// streams files in can refuse a sample count as soon as its main header
