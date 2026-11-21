@@ -289,8 +289,9 @@ impl IncrementalDecoder {
         &self.options
     }
 
-    /// The header of the bytes fed so far, as [`read_header_with`](crate::read_header_with) reads it
-    /// under the decoder's options: it describes the image
+    /// The header of the bytes fed so far, as
+    /// [`read_header_with`](crate::read_header_with) reads it under the
+    /// decoder's options: it describes the image
     /// [`refine`](Self::refine) returns. `Ok(None)` means the bytes fed end
     /// before the first `SOT` marker, or, in a JP2 file, inside the boxes
     /// before it, so the main header is not complete yet. An error is the
