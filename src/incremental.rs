@@ -79,10 +79,10 @@ use crate::{
 /// tile index up to the highest it has seen, which comes to about 1.5 MiB
 /// for the 65535 tiles a file can have (up to twice that in capacity as
 /// the table grows). What [`header`](Self::header) keeps between its calls
-/// comes to about 140 bytes for each tile over a cap and a byte for each
-/// other tile, plus a copy of the main header, `PPM` data included. Each
-/// refine also holds what [`decode_with`] holds for the same bytes, so the
-/// decoder holds at most about three times one
+/// comes to about 140 bytes for each tile counted under its own header and
+/// a byte for each other tile, plus a copy of the main header, `PPM` data
+/// included. Each refine also holds what [`decode_with`] holds for the same
+/// bytes, so the decoder holds at most about three times one
 /// decode's peak memory, plus the bytes fed. After the options change,
 /// these bounds hold from the first refine that decodes under the new
 /// options; until then the walks kept may stay within the room of the old
@@ -322,10 +322,11 @@ impl IncrementalDecoder {
     /// of a last tile-part whose `Psot` is 0, is read again on each call. On
     /// a window of 1530 tiles of a 235 MB file of 16.7 million tile-parts,
     /// calls after each 256 KiB fed took 5.9 s in all and now take 66 ms.
-    /// What is kept, about 140 bytes for each tile over a cap and a byte for
-    /// each other tile plus a copy of the main header (its `PPM` data
-    /// included), is held until the options change, which drops it. A call
-    /// made while another thread is in one reads from the start.
+    /// What is kept, about 140 bytes for each tile counted under its own
+    /// header and a byte for each other tile plus a copy of the main header
+    /// (its `PPM` data included), is held until the options change, which
+    /// drops it. A call made while another thread is in one reads from the
+    /// start.
     pub fn header(&self) -> Result<Option<Header>> {
         // A call on another thread holding the lock reads from the start. A
         // call that panicked may have left the walk half done, so it is

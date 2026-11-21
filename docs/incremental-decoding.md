@@ -171,8 +171,9 @@ last tile-part whose `Psot` is 0, which is never whole. The tiles it
 learned of are charged the read's budget again, as a read from the start
 charges them, so each call gives what `read_header_with` gives with
 `strict` off on the same bytes. It keeps about 140 bytes for each tile
-over a cap, a byte for each other tile, and a copy of the main header. What it keeps is for one selected area and reduction, and a change
-of options drops it.
+counted under its own header, a byte for each other tile, and a copy of
+the main header. What it keeps is for one selected area and reduction,
+and a change of options drops it.
 
 ## Changing the options
 

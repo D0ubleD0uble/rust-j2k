@@ -384,9 +384,9 @@ Calls after each feed walk the tile-parts about once in all, and each call
 is charged the budgets as a read from the start is: after each 256 KiB fed
 of the 235 MB file above, 66 ms in all. The header of a tile-part not yet
 fed in full, or of a last tile-part whose `Psot` is 0, is read again on
-each call. What it keeps, about 140 bytes for each tile over a cap and a
-byte for each other tile plus a copy of the main header (`PPM` data
-included), is held until the options change.
+each call. What it keeps, about 140 bytes for each tile counted under its
+own header and a byte for each other tile plus a copy of the main header
+(`PPM` data included), is held until the options change.
 In an `IncrementalDecoder` a refusal under the default or a `Raised` limit
 is a wait (`Waiting::SampleLimit`), as the caps grow with the bytes fed.
 
