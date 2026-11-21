@@ -1022,7 +1022,7 @@ impl Ledger {
 
     /// The code-block work a decode whose own bound is `bound` may spend:
     /// what is left of it after the earlier decodes. No bound
-    /// ([`WorkLimit::Unlimited`](crate::WorkLimit::Unlimited)) stays none.
+    /// ([`WorkLimit::Unlimited`]) stays none.
     /// The ledger keeps `bound` as this decode's.
     pub(crate) fn blocks_left(&self, bound: u64) -> u64 {
         self.bound.set(Some(bound));

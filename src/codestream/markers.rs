@@ -117,7 +117,7 @@ pub mod marker {
 /// Each flag changes how Tier-1 reads a code-block's coded segments, so a
 /// decoder that ignores one does not decode a slightly different image — it
 /// decodes the wrong one. The six Part 1 flags below are decoded. The two
-/// HTJ2K bits are read into [`Coding`](super::Coding): `HT` alone selects
+/// HTJ2K bits are read into [`Coding`]: `HT` alone selects
 /// the HT block coder, and `HT` with `HT_MIXED` lets each code-block be
 /// an HT or a Part 1 block, which tier-2 tells apart. `HT_MIXED` without
 /// `HT` is refused by the block-coder guard (`check_block_coder` in

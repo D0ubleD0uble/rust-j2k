@@ -45,7 +45,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// field can read as an absurd image size (`Limit`), an unknown marker or a
 /// feature the decoder does not read (`Unsupported`), so a corrupt file can
 /// come back as any of those. Do not retry a `Limit` with
-/// [`WorkLimit::Unlimited`](crate::WorkLimit::Unlimited) unless the source
+/// [`WorkLimit::Unlimited`] unless the source
 /// is trusted.
 ///
 /// When an input has more than one fault, which one is reported can change in
@@ -191,7 +191,7 @@ pub enum Error {
     /// It is not a missing feature (that is [`Error::Unsupported`]), and the
     /// file may be valid.
     ///
-    /// Three of these can be changed, each with a [`WorkLimit`](crate::WorkLimit):
+    /// Three of these can be changed, each with a [`WorkLimit`]:
     /// the sample limit
     /// ([`DecodeOptions::sample_limit`](crate::DecodeOptions::sample_limit)),
     /// which holds the image area and the samples that palette expansion, sYCC
@@ -205,9 +205,9 @@ pub enum Error {
     /// For one of them, [`LimitDetail::kind`] names the limit, and
     /// [`LimitDetail::retry_with`] gives the `WorkLimit` to retry with, which
     /// the message names too. It is a hint (see
-    /// [`WorkLimit`](crate::WorkLimit)), not a measure of the file. A
+    /// [`WorkLimit`]), not a measure of the file. A
     /// refusal under a sample limit of
-    /// [`WorkLimit::AtMost`](crate::WorkLimit::AtMost) gives none: the
+    /// [`WorkLimit::AtMost`] gives none: the
     /// caller set that ceiling.
     ///
     /// The other guards have no option, so a file past one of them is refused

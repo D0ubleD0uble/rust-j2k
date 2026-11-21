@@ -71,7 +71,7 @@ pub enum SubbandCoeffs {
 /// used. Reversible 5/3 reconstructs in exact integers; irreversible 9/7
 /// reconstructs in `f32` and is *not* rounded here.
 ///
-/// The rounding is deferred to [`crate::image::assemble`] so that it happens
+/// The rounding is deferred to [`crate::image::assemble_over`] so that it happens
 /// exactly once, after the inverse color transform. ICT mixes the first three
 /// components arithmetically (Annex G.3), and rounding each of them beforehand
 /// would inject up to half a unit of error into that mix. OpenJPEG defers it the
