@@ -717,7 +717,9 @@ pub enum Waiting {
     /// grow with the bytes fed, so more bytes may admit it. The
     /// detail is the one [`decode_with`] gives for the bytes fed, with its
     /// [`retry_with`](LimitDetail::retry_with). A retry can still meet a
-    /// fixed limit, such as the address space, on the way.
+    /// fixed limit, such as the address space, on the way. The detail's
+    /// [`refused_at`](LimitDetail::refused_at) describes the bytes fed so
+    /// far: a later tile-part can change which tile is refused.
     ///
     /// Only a refusal that more bytes can lift waits: one with a
     /// [`retry_with`](LimitDetail::retry_with). A ceiling of

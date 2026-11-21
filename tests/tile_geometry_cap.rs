@@ -71,6 +71,12 @@ fn refusal(bytes: &[u8], options: &DecodeOptions) -> LimitDetail {
     }
 }
 
+/// The tile and the amount a refusal's `refused_at` gives.
+fn refused_at(limit: &LimitDetail) -> (u32, u64) {
+    let at = limit.refused_at().expect("the tile and its amount");
+    (at.tile(), at.amount())
+}
+
 /// That `bytes` decode under `options` to `width` x `height`, and that
 /// `read_header_with` admits them too.
 fn decodes(bytes: &[u8], options: &DecodeOptions, width: u32, height: u32) {
@@ -95,6 +101,7 @@ fn a_tile_past_the_floor_decodes_once_the_input_raises_the_limit() {
     let limit = refusal(&small, &DecodeOptions::default());
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
     assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
+    assert_eq!(refused_at(&limit), (0, blocks), "{limit}");
     assert!(
         limit.message().starts_with(&format!(
             "tile 0 holds {blocks} code-blocks, more than the 1048576 a tile may hold"
@@ -129,6 +136,7 @@ fn a_tile_that_needs_twice_the_scaled_cap_gets_raised_2() {
     let limit = refusal(&bytes, &DecodeOptions::default());
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
     assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
+    assert_eq!(refused_at(&limit), (0, 1_572_864), "{limit}");
     assert!(
         limit.message().starts_with(&format!(
             "tile 0 holds 1572864 code-blocks, more than the {cap} a tile may hold under the \
@@ -156,6 +164,7 @@ fn under_at_most_the_code_block_cap_scales_from_n_with_no_retry() {
     let limit = refusal(&bytes, &options);
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
     assert_eq!(limit.retry_with(), None, "{limit}");
+    assert_eq!(refused_at(&limit), (0, blocks), "{limit}");
     assert!(options.with_retry(&limit).is_none());
     assert_eq!(
         limit.message(),
@@ -192,6 +201,7 @@ fn the_precinct_cap_scales_with_the_sample_limit() {
     let limit = refusal(&bytes, &DecodeOptions::default());
     assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
     assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
+    assert_eq!(refused_at(&limit), (0, precincts), "{limit}");
     assert!(
         limit.message().starts_with(&format!(
             "tile 0 holds {precincts} precincts, more than the 262144 a tile may hold under \
@@ -208,12 +218,14 @@ fn the_precinct_cap_scales_with_the_sample_limit() {
     let limit = refusal(&bytes, &under);
     assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
     assert_eq!(limit.retry_with(), None, "{limit}");
+    assert_eq!(refused_at(&limit), (0, precincts), "{limit}");
 
     // A tile over both caps is refused for its precincts.
     let both = precincts_tile(2048, 1024);
     let limit = refusal(&both, &DecodeOptions::default());
     assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
     assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(8)), "{limit}");
+    assert_eq!(refused_at(&limit), (0, 2048 * 1024), "{limit}");
 }
 
 /// Of two tiles, the one over the cap is the one named, by the header read
@@ -241,9 +253,17 @@ fn the_tile_over_the_cap_is_named_alike() {
         "{limit}"
     );
     assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
+    assert_eq!(refused_at(&limit), (1, blocks_of(side, height)), "{limit}");
 
     let tile0 = DecodeOptions::default().with_region(rust_j2k::Region::Tile(0));
     decodes(&bytes, &tile0, side / 2, height);
+
+    // Under `AtMost` it is tile 1 too, with the same amount.
+    let blocks = blocks_of(side, height);
+    let at_most = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(blocks * 512 - 1));
+    let limit = refusal(&bytes, &at_most);
+    assert_eq!(limit.retry_with(), None, "{limit}");
+    assert_eq!(refused_at(&limit), (1, blocks), "{limit}");
 }
 
 /// A tile is counted under its own header, as the decode counts it: a
@@ -304,6 +324,7 @@ fn a_tile_part_cod_is_counted_as_the_decode_counts_it() {
         other => panic!("{other:?}"),
     };
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
+    assert_eq!(refused_at(&limit), (0, blocks_of(width, height)), "{limit}");
     let retry = DecodeOptions::default().with_retry(&limit).unwrap();
     decodes(&wide, &retry, width, height);
 }
@@ -332,6 +353,7 @@ fn a_tile_of_many_resolutions_is_counted() {
         limit.message().starts_with("tile 0 holds 540672 precincts"),
         "{limit}"
     );
+    assert_eq!(refused_at(&limit), (0, 540_672), "{limit}");
 }
 
 /// With `strict` off, a tile with no tile-part is left out of the decode, so
@@ -1028,7 +1050,20 @@ fn a_tile_past_the_address_space_is_not_adjustable() {
         assert!(!limit.kind().is_adjustable(), "{noun}: {limit}");
         assert_eq!(limit.retry_with(), None, "{noun}: {limit}");
         assert!(limit.message().starts_with("tile 0 holds "), "{limit}");
+        // This pins today's behavior, not a promise: a later release may
+        // set `refused_at` for this kind.
+        assert_eq!(limit.refused_at(), None, "{noun}: {limit}");
     }
+}
+
+/// A sample limit refusal names no tile: it counts the whole image.
+#[test]
+fn a_sample_limit_refusal_names_no_tile() {
+    let small = blocks_tile(64, 64, 0);
+    let under = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(100));
+    let limit = refusal(&small, &under);
+    assert_eq!(limit.kind(), LimitKind::Samples, "{limit}");
+    assert_eq!(limit.refused_at(), None, "{limit}");
 }
 
 /// `refine` returns that refusal as an error, and every later refine returns
