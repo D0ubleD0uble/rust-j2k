@@ -1440,6 +1440,21 @@ sRGB output of three or more components before the reduction and the
 selection. A JP2 file plans the step last, from its color space and its
 channels. OpenJPEG has no sRGB refusal.
 
+The tile caps (the precincts and code-blocks a tile may have) come after
+these steps. On a JP2 file, `read_header` counts them after the sRGB step
+(`check_geometry`), and the decode counts each tile as it reads it, after that
+step too. On a raw codestream, they come right after the selection.
+
+When an input has more than one fault, which one is reported can change in
+any release. What holds is that when `read_header_with` returns an error,
+`decode_with` returns the same one, and a codestream and its JP2 wrapper
+report the same one. The exceptions are sRGB output, whose step comes in a
+different place on the two paths (above), and, for a file the decode refuses
+in its tile data, a `Limit` or `InvalidOptions` for another tile (with
+`strict` off or in a lower tile). Separately, `read_header_with` can return
+`Ok` for a fault only decoding finds. A JP2 file's box faults have no
+codestream counterpart.
+
 This order is what lets `read_header` return the same error as `decode` for
 every header fault. It differs from OpenJPEG's in these places, all between
 two faults that both refuse the file. Each is an order the decoder already

@@ -206,8 +206,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   walks it keeps from the walks built under the new cap, as a decoder made
   with it does. It used the largest walk of the old cap, so the room, and
   which walks fit, could differ from a fresh decoder's (#519).
-- A JP2 file's header is checked in OpenJPEG's order, and a codestream and
-  its JP2 wrapper give the same error for the same options (#419):
+- A JP2 file's header is checked closer to OpenJPEG's order (see
+  `docs/openjpeg-departures.md`), and a codestream and its JP2 wrapper give
+  the same error for the same options, except under sRGB output (#419):
   - The layout of the `pclr`, `cmap` and `cdef` boxes (a second box, a
     `cmap` without a `pclr` or before it, a malformed payload) is checked
     before the codestream, as OpenJPEG checks it while it reads `jp2h`. A
