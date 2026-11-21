@@ -179,10 +179,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- With `strict` off, a last tile-part with `Psot` 0 whose input does not
-  end in `FF D9` always reports `ReportEntry::MissingEoc`. It was missing
-  when the input ended inside the tile-part's data, though it was given
-  when the input ended inside its header (#588).
+- With `strict` off, a decode whose last tile-part has `Psot` 0 reports
+  `ReportEntry::MissingEoc` whenever the input does not end in `FF D9`. It
+  was left out when the input ended inside that tile-part's data (#588).
+- With `strict` off, input cut inside the header of a last tile-part with
+  `Psot` 0, where the bytes kept end in `FF D9`, no longer refuses a `PPM`
+  with one chunk for each tile-part it holds (#588).
 - A fault in a tile's own tile-part header (too few quantization steps,
   the 9/7 wavelet with no quantization, a wavelet that differs from the
   main header's) is found as the tile-part walk reads that header, and a
