@@ -756,6 +756,51 @@ target must catch that, because tile 1 decodes alone. Mutating
 `opj_decompress` 2.5.0, which has no such caps, decodes it.
 `tests/read_header.rs` checks it. It has no license restriction.
 
+`header/missing_after_over_cap.j2k` (83 bytes, SHA-256
+`6c6b7f0d01aa2ba90207c5d3b16e1d48302f4dc6792811bea16ebd4f2bd1efb2`) is the
+repro of batch critique 10 on #504, written out from the hex in the issue.
+It is a 1040 x 512 gray codestream of two 520 x 512 tiles whose `COD` gives
+1 x 1 precincts, so tile 0 is over the precinct cap; tile 0 has a
+tile-part of one data byte and tile 1 has none. With `strict` on, `decode_with` refuses it
+for the missing tile ("the codestream carries no tile-part for tile 1")
+and `read_header_with` now does too (it once refused tile 0); with `strict`
+off both refuse tile 0. `opj_decompress` 2.5.0 decodes tile 0 and writes
+the image. `tests/header_tile_parts_fault.rs` checks it. It has no license
+restriction.
+
+`header/own_cap_then_missing.j2k` (130 bytes, SHA-256
+`7edc4bb4df21b8bfc9dc4352e27303cbe8618cc33f6bb79f0108a7709d9677f3`) and
+`header/strict_off_chain_fault.j2k` (115 bytes, SHA-256
+`588ca26c6ab2896341dac88ccfec0dc4f7856ec91b08a5743a70d77b9f971081`) are
+written by `row` in `tests/header_tile_parts_fault.rs` (#504), whose tests
+rebuild them byte for byte. Each is a gray codestream with `XOsiz` 992 and
+tiles of 1000 x 1000, so tile 0 is 8 wide, whose main `COD` gives one level
+and 1x1 precincts at resolution 0, which puts the tiles 1000 wide over the
+precinct cap. Tile 0 has a tile-part `COD` of no levels and one empty
+packet; tile 1 has no data. The first is 3000 wide: tile 1's tile-part
+`COD` of 1x1 precincts and no levels keeps it over the cap, and tile 2 has
+no tile-part. With `strict` on, `decode_with` refuses it for the missing
+tile, and `read_header_with`, which refuses tile 1 first, gives that error
+too; with `strict` off both refuse tile 1. The second is 2000 wide and ends
+in `00 00` where the `EOC` should be. With `strict` off, `read_header_with`
+refuses tile 1 for its precincts while `decode_with` refuses the file for the
+chain ("expected `SOT` or `EOC` after a tile-part, found 0x0000"), a
+difference the `read_header_with` docs list and the `header` target excuses
+only with `strict` off; with `strict` on both give the chain's error.
+`opj_decompress` 2.5.0 fails to decode tile 1 of both, with
+`-allow-partial` too. They have no license restriction.
+
+`header/strict_off_one_tile_chain_fault.j2k` (82 bytes, SHA-256
+`7b0e6eede24a5aff468a3b4cd168418580fcddfcb7cd12e03efe3ed7c7f68e2b`) is
+written by `one_tile` in the same file, and its test rebuilds it byte for
+byte: one 1000 x 1000 gray tile whose main `COD` gives no levels and 1x1
+precincts, over the precinct cap, with an empty tile-part and `00 00` where
+the `EOC` should be. It is the one-tile case of
+`strict_off_chain_fault.j2k`: with `strict` off the header read refuses
+tile 0 and the decode refuses the chain, and the `header` target's excuse
+has no other tile to decode alone. `opj_decompress` 2.5.0 fails to decode
+the tile, with `-allow-partial` too. It has no license restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and
