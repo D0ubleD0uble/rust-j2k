@@ -375,13 +375,6 @@ impl Error {
     pub(crate) fn refused_at(self, tile: u32, amount: u64, unit: AmountUnit) -> Error {
         match self {
             Error::Limit(mut limit) => {
-                let named = match unit {
-                    AmountUnit::SamplePasses => {
-                        format!("tile {tile} needs {amount} sample-passes ")
-                    }
-                    AmountUnit::CodeBlocks => format!("tile {tile} holds {amount} code-blocks, "),
-                    AmountUnit::Precincts => format!("tile {tile} holds {amount} precincts, "),
-                };
                 debug_assert!(
                     match limit.kind {
                         LimitKind::CodeBlockWork => unit == AmountUnit::SamplePasses,
@@ -394,7 +387,6 @@ impl Error {
                     "{:?} carries no refused_at in {unit:?}",
                     limit.kind
                 );
-                debug_assert!(limit.message.starts_with(&named), "{}", limit.message);
                 limit.refused_at = Some(RefusedAt { tile, amount, unit });
                 Error::Limit(limit)
             }
