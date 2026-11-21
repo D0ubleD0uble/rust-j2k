@@ -192,7 +192,11 @@ fn refinement_passes_in_later_layers_fill_one_segment() {
         segments(&block),
         [(1, vec![1, 2]), (2, vec![3, 4, 5]), (1, vec![6, 7])]
     );
-    assert_eq!(block.segments.get(1).unwrap().chunks.len(), 2, "one chunk per layer");
+    assert_eq!(
+        block.segments.get(1).unwrap().chunks.len(),
+        2,
+        "one chunk per layer"
+    );
 
     // Both refinement passes in one later layer: one field of 4 bits.
     let data = packets(&[
@@ -797,7 +801,11 @@ fn a_block_empty_in_layer_0_then_part1() {
     assert_eq!(block.placeholders, 0);
     assert_eq!(block.zero_bit_planes, 2);
     assert_eq!(segments(&block), [(3, body(10))]);
-    assert_eq!(block.segments.get(0).unwrap().chunks.len(), 1, "layer 0 gave no chunk");
+    assert_eq!(
+        block.segments.get(0).unwrap().chunks.len(),
+        1,
+        "layer 0 gave no chunk"
+    );
 }
 
 /// A block whose length fields are all zero is read as HT, as the A.4 note
@@ -922,7 +930,10 @@ fn a_cut_packet_puts_back_the_coder() {
     assert_eq!(block.num_passes, 0);
     let segments = block.segments.as_deref().expect("a segment");
     assert_eq!(segments.passes, [2]);
-    assert_eq!(segments.first, SegmentKind::HtCleanup { placeholders: None });
+    assert_eq!(
+        segments.first,
+        SegmentKind::HtCleanup { placeholders: None }
+    );
     assert_eq!(segments.last, segments.first);
 }
 

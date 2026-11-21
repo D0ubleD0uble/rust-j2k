@@ -2236,7 +2236,10 @@ fn restart_splits_a_contribution_into_one_segment_per_pass() {
     }
     assert_eq!(block.segments.get(0).unwrap().bytes(), vec![0xA1]);
     assert_eq!(block.segments.get(1).unwrap().bytes(), vec![0xB1, 0xB2]);
-    assert_eq!(block.segments.get(2).unwrap().bytes(), vec![0xC1, 0xC2, 0xC3]);
+    assert_eq!(
+        block.segments.get(2).unwrap().bytes(),
+        vec![0xC1, 0xC2, 0xC3]
+    );
     assert_eq!(next, data.len());
 }
 

@@ -1578,7 +1578,11 @@ impl SegmentStates {
         self.passes.iter().enumerate().map(move |(index, &passes)| {
             let kept = self.kept_in(index, start);
             start = start.saturating_add(passes);
-            if index == 0 { kept - placeholders } else { kept }
+            if index == 0 {
+                kept - placeholders
+            } else {
+                kept
+            }
         })
     }
 
