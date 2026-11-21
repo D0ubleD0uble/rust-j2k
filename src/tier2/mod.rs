@@ -766,6 +766,10 @@ fn walk_packets<'a>(
             Ok(())
         },
     )?;
+    // The scratch holds the contributions of the largest packet read, an
+    // entry for each of its segments with bytes. Let go of it before the
+    // segments Tier-1 reads are built beside the walk's.
+    drop(scratch);
 
     let mut components = Vec::with_capacity(states.len());
     for (comp, (component_states, component_geoms)) in states.iter().zip(&geoms).enumerate() {
