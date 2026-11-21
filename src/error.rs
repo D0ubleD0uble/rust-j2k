@@ -109,10 +109,11 @@ pub enum Error {
     /// (text, another image format) is this variant, since it has no `SOC`
     /// marker.
     ///
-    /// A tile-part header's segments are read before its end is checked
-    /// against `Psot`, as OpenJPEG reads them, so a segment that runs past
-    /// `Psot` and has a bad field gives that field's [`Error::Marker`]. A
-    /// later tile-part that restates `COD`, `COC`, `QCD` or `QCC` with
+    /// A tile-part header is read no further than its `Psot`, so a segment
+    /// that runs past `Psot` is this variant, whatever its fields hold; a
+    /// bad field in a segment within `Psot` is [`Error::Marker`], unless the
+    /// header runs past its `Psot`, which is refused first. A later
+    /// tile-part that restates `COD`, `COC`, `QCD` or `QCC` with
     /// values other than those in force for the tile is out of place, so it
     /// is this variant too.
     ///

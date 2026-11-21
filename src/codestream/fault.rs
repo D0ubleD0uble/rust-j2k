@@ -31,8 +31,8 @@ use std::collections::hash_map::Entry;
 use super::{
     Cursor, Error, FaultSite, Overrides, ParsedHeader, Restated, Result, both_packed_headers,
     check_first_tile_part, check_poc_budget, check_restatement, count_is_one_short, decode_sot,
-    fault_may_be_cut, marker, part_end, read_tile_part_header, read_tile_part_header_at, read_u16,
-    segment, sot_at,
+    fault_may_be_cut, marker, part_end, read_part_header, read_tile_part_header, read_u16, segment,
+    sot_at,
 };
 
 impl ParsedHeader {
@@ -382,13 +382,14 @@ impl Walk {
             let mut site = FaultSite::default();
             // A header of `SOD` alone, as most later tile-parts have, reads as
             // nothing: no marker of its own, no `POC` volume and no packed
-            // header. It is stepped over rather than read.
-            let read = if read_u16(bytes, header_at) == Some(marker::SOD) {
+            // header. It is stepped over rather than read, where the `SOD`
+            // ends within the tile-part, as `read_part_header` reads it.
+            let end = part_end(bytes.len(), *part_offset, sot.psot);
+            let read = if read_u16(&bytes[..end], header_at) == Some(marker::SOD) {
                 cur.pos += 2;
                 Ok(None)
             } else {
-                let end = part_end(bytes.len(), *part_offset, sot.psot);
-                read_tile_part_header_at(&mut cur, end, main, first_part, &mut site).map(Some)
+                read_part_header(bytes, &mut cur, *part_offset, &sot, main, &mut site).map(Some)
             };
             let read = match read {
                 Ok(read) => read,
@@ -531,15 +532,8 @@ impl Walk {
                         )));
                     }
                 };
-                if end < data_start {
-                    return Err(Error::codestream(format!(
-                        "tile {} tile-part {} declares `Psot` {}, shorter than its {}-byte header",
-                        sot.tile_index,
-                        sot.tile_part_index,
-                        sot.psot,
-                        data_start - *part_offset
-                    )));
-                }
+                // `read_part_header` read the header within `end`.
+                debug_assert!(data_start <= end);
                 end
             };
             let tile = &mut seen[index];
