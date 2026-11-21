@@ -135,6 +135,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now holds none, and the decoder is 464 bytes, not 896. Each call
   parses the main header again, so it costs the main header plus the
   tile-parts fed since (#556).
+- A marker fault gets the same error variant in the main header and in a
+  tile-part header, and a file the standard forbids is no longer reported
+  as a feature not decoded. Each of these files was refused before and
+  still is, with a new variant; one file that decoded before is now
+  refused (#563):
+  - A Part 2 marker (`MCT`, `MCC`, `NLT`, `MCO`, `CBD`) or an unrecognized
+    marker in a tile-part header is `Error::Unsupported`, as in the main
+    header. It was `Error::Codestream`. A code read where a damaged length
+    led into the packet data is still `Error::Codestream`: a code is taken
+    for a marker only when the header's markers go on from it to `SOD`
+    within the tile-part.
+  - A reserved marker 0xFF30 to 0xFF3F in a tile-part header is
+    `Error::Unsupported`, on the same condition. It was
+    `Error::Codestream`. The main header still skips one.
+  - `PPT`, `SOP` or `EPH` in the main header is `Error::Codestream`, as
+    `PLT` there is. It was `Error::Unsupported`.
+  - A `PPT` marker in a codestream that has a `PPM` is `Error::Codestream`.
+    It was `Error::Unsupported`. A `PPT` that holds no packet-header bytes
+    (only its `Zppt`) beside a `PPM` decoded before, and is now refused
+    too, as the standard (A.7.4) and OpenJPEG 2.5.0 refuse it.
+  - A color transform over components 0 to 2 that do not share a wavelet is
+    `Error::Marker`, naming the tile where a tile's markers cause it. It was
+    `Error::Unsupported`.
+  - Bytes that are not a marker where a tile-part header needs one stay
+    `Error::Codestream`, with a message that says so.
 
 ### Fixed
 

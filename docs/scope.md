@@ -19,7 +19,7 @@ refused or handled partly. The text under each table names them.
 | COC / QCC (per-component coding and quantization overrides) | Yes, with limits |
 | RGN (region of interest) | Yes, with limits |
 | POC (progression order change) | Yes |
-| PPM / PPT (packed packet headers) | Yes, with limits |
+| PPM / PPT (packed packet headers) | Yes |
 | PLM / PLT (packet-length markers) | Yes |
 | TLM (tile-part-length marker) | Yes |
 | CRG (component registration) | Yes, with limits |
@@ -41,7 +41,8 @@ Limits inside the decoded rows:
   code-block be an HT or a Part 1 block; it is refused with bypass or
   termination on each pass, and under a CAP whose `Ccap15` bits 15-14 are
   `10`.
-- A codestream that carries both PPM and PPT packed headers is refused.
+- A reserved marker 0xFF30 to 0xFF3F, which carries no segment, is skipped in
+  the main header but refused in a tile-part header, as OpenJPEG refuses it.
 - A tile-part COD or COC that gives a component a different wavelet from the
   main header is refused: tiles must agree on each component's wavelet.
 - CRG is read and checked, but its offsets are not applied to the samples and
