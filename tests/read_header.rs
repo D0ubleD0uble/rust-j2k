@@ -346,14 +346,16 @@ fn shape_of_header(header: &Header) -> Shape<'_> {
     (header.width, header.height, channels, header.jp2.as_ref())
 }
 
-#[test]
-fn read_header_agrees_with_decode_on_every_committed_file() {
+/// Every committed file, at one resolution reduction: each decoded component
+/// is as large as its header entry says. The two reductions are two tests,
+/// which keeps each under 20 s in a debug build.
+fn sweep_agrees_with_decode(reduction: u8) {
     let root = fixtures();
     let mut all = Vec::new();
     files(&root, &mut all);
     all.sort();
     let mut seen = [0usize; 4];
-    let mut compared = [0usize; 2];
+    let mut compared = 0usize;
     let mut differing = Vec::new();
     let mut lower_first = Vec::new();
     let mut names = Vec::new();
@@ -374,9 +376,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
         seen[3] += 1;
         names.push(name.clone());
         let bytes = std::fs::read(path).unwrap();
-        // At the default options, and at one level of resolution reduction:
-        // each decoded component is as large as its header entry says.
-        for reduction in [0, 1] {
+        {
             let options = DecodeOptions::default().with_resolution_reduction(reduction);
             let header = read_header_with(&bytes, &options);
             let decoded = decode_with(&bytes, &options);
@@ -394,7 +394,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                         shape_of_image(image),
                         "{name} at reduction {reduction}"
                     );
-                    compared[reduction as usize] += 1;
+                    compared += 1;
                 }
                 (Err(Error::Limit(_) | Error::InvalidOptions(_)), Err(Error::Codestream(_)))
                     if LOWER_TILE_FAULTS.iter().any(|(listed, ..)| *listed == name) =>
@@ -422,20 +422,22 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
             }
         }
     }
-    assert!(
-        compared[0] > 100 && compared[1] > 50,
-        "{compared:?} files compared"
-    );
+    let least = if reduction == 0 { 100 } else { 50 };
+    assert!(compared > least, "{compared} files compared");
     assert_eq!(seen[0], 9, "the nine Part 4 JP2 files");
     assert_eq!(seen[1], 9, "the nine jp2_real files");
     assert_eq!(seen[2], 23, "the 23 Part 1 codestreams");
     // Every listed tile fault really differs.
     let listed: Vec<String> = TILE_FAULTS.iter().map(|(n, _)| n.to_string()).collect();
-    assert_eq!(differing, listed);
+    if reduction == 0 {
+        assert_eq!(differing, listed);
+    }
     let listed: Vec<String> = LOWER_TILE_FAULTS
         .iter()
+        .filter(|(_, _, at, _)| *at == reduction)
         .map(|(n, ..)| n.to_string())
         .collect();
+    // Each listed file is refused by the header at the one reduction it names.
     assert_eq!(lower_first, listed);
     // Files whose `cdef` reorders the channels are in the sweep. Their
     // channels share one format, so the placement of the formats is pinned by
@@ -443,6 +445,16 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     for name in ["jp2_cdef_reversed.jp2", "conformance/jp2/files/file2.jp2"] {
         assert!(names.iter().any(|n| n == name), "{name} is swept");
     }
+}
+
+#[test]
+fn read_header_agrees_with_decode_on_every_committed_file() {
+    sweep_agrees_with_decode(0);
+}
+
+#[test]
+fn read_header_agrees_with_decode_on_every_committed_file_at_a_reduction() {
+    sweep_agrees_with_decode(1);
 }
 
 fn part4(n: u32) -> Vec<u8> {
