@@ -235,6 +235,12 @@ const LOWER_TILE_FAULTS: &[(&str, &str, u8, u32)] = &[
         1,
         1,
     ),
+    (
+        "header/sycc_422_lower_tile_data_fault.jp2",
+        "a byte after tile 0's last packet",
+        0,
+        1,
+    ),
 ];
 
 /// The `header` fuzz target excuses a header refusal of tile T, where the

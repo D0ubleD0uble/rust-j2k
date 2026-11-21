@@ -132,7 +132,9 @@ the header refuses, over a cap or for a reduction its own header has too
 few levels for, where the decode first finds a fault or a work bound in a
 lower tile's data, which only decoding sees. The target accepts that pair
 only when three things hold: the decode of the refused tile alone
-(`Region::Tile`), under the same options, gives exactly the header's error,
+(`Region::Tile`), under the same options but with the color as coded (a
+tile alone cannot give sRGB from sub-sampled sYCC chroma), gives exactly
+the header's error,
 so the refusal is real and not a header bug that a fault in another tile
 hides (a tile-part `COD` that brings the tile within the caps, say); the
 decode gives the same error with the header's refusal lifted (by the cap's

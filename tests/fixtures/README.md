@@ -816,6 +816,21 @@ give it. `a_strict_only_fault_can_come_before_the_tile_parts_fault` in
 2.5.0 fails to decode tile 2 of 2, with `-allow-partial` too. It has no
 license restriction.
 
+`header/sycc_422_lower_tile_data_fault.jp2` (195 bytes, SHA-256
+`c932fbb4d4785a25b1b925e2ae8a2bef87dab34ce29ac30da46e13099e676bb0`) is the
+repro of #538, built by hand (a Python script over the same 8400 x 8192
+layout as `lower_tile_data_long.j2k`, in a JP2 wrapper with `EnumCS` 18).
+It has 3 components with `XRsiz` 1, 2, 2 (sYCC 4:2:2), `YOsiz` 3584 and
+tiles of 8400 x 4096, so tile 0 is 512 tall and within the caps and tile 1
+is over the code-block cap. Tile 0's tile-part has one byte after its three
+empty packets, and tile 1's has its three empty packets. `read_header_with`
+refuses tile 1 for its code-blocks and `decode_with` refuses the file for
+tile 0's byte ("tile 0 has 1 byte(s) left after the last packet"). Under
+sRGB output every `Region::Tile` decode of this file refuses sub-sampled
+chroma on an area smaller than the image, so the `header` target must
+decode that tile alone as coded for the excuse to hold. `opj_decompress`
+2.5.0 decodes it (exit 0, 8400 x 4608). It has no license restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and
