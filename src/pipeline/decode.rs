@@ -2131,6 +2131,69 @@ pub(crate) mod tests {
         assert!(kept <= parts + 2 * calls, "{kept} reads in {calls} calls");
     }
 
+    /// The same where tile 0 is refused and tile 1's own header is at
+    /// fault: a `COD` of one level under a main `QCD` of one step, which
+    /// the decode's parse refuses for the tile-parts. The walk that gathers
+    /// tile 1's header is kept with the fault walk, so the calls still read
+    /// each `SOT` about once in all. A walk from the start for that header
+    /// on each call read 1,566,568 here.
+    #[test]
+    fn header_after_each_feed_of_a_tile_header_at_fault_walks_about_once() {
+        use crate::synth;
+        let mut cod = synth::cod_body(1, 0, 4, 0);
+        cod[0] = 1;
+        cod.push(0x00);
+        let siz = synth::siz_body([520 * 64, 512, 0, 0, 520, 512, 0, 0], &[[7, 1, 1]]);
+        let mut bytes = [
+            vec![0xFF, 0x4F],
+            synth::seg(0xFF51, &siz),
+            synth::seg(0xFF52, &cod),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+        ]
+        .concat();
+        let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
+        let at_fault = synth::seg(0xFF52, &synth::cod_body(1, 1, 4, 0));
+        for tile in 0..64u16 {
+            let header: &[u8] = match tile {
+                0 => &[],
+                1 => &at_fault,
+                _ => &own,
+            };
+            bytes.extend(synth::tile_part(tile, 0, 16, header, &[0]));
+            for part in 1..16 {
+                bytes.extend(synth::tile_part(tile, part, 16, &[], &[]));
+            }
+        }
+        bytes.extend([0xFF, 0xD9]);
+        let lenient = DecodeOptions::default().with_strict(false);
+        assert!(
+            matches!(read_header(&bytes, &lenient), Err(Error::Marker(_))),
+            "{:?}",
+            read_header(&bytes, &lenient)
+        );
+        let mut decoder =
+            crate::IncrementalDecoder::new(DecodeOptions::default()).expect("valid options");
+        let (mut kept, mut calls, mut faults) = (0, 0u64, 0);
+        for chunk in bytes.chunks(5) {
+            decoder.feed(chunk);
+            codestream::tests::SOT_READS.with(|reads| reads.set(0));
+            let header = decoder.header();
+            kept += codestream::tests::SOT_READS.with(std::cell::Cell::get);
+            calls += 1;
+            faults += u64::from(matches!(header, Err(Error::Marker(_))));
+            let alone = match read_header(decoder.bytes(), &lenient) {
+                Ok(header) => Ok(Some(header)),
+                Err(Error::Incomplete(_)) => Ok(None),
+                Err(error) => Err(error),
+            };
+            assert_eq!(format!("{header:?}"), format!("{alone:?}"));
+        }
+        let parts = 64 * 16;
+        eprintln!("{kept} reads in {calls} calls, {faults} at fault");
+        assert!(faults * 10 > calls * 9, "{faults} of {calls}");
+        assert!(kept <= parts + 2 * calls, "{kept} reads in {calls} calls");
+    }
+
     /// The calls of `IncrementalDecoder::header` after each feed walk the
     /// tile-parts about once in all for a tile whose counts under its own
     /// header are at fault, where the parse finds no fault, as each call

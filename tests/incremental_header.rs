@@ -541,6 +541,65 @@ fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
         }
         cases.push((name, tile_parts(8, &[], &parts), want));
     }
+    // Tile 1's own `COD` of two levels, under the main `QCD`'s steps for
+    // one: its header is gathered once and kept.
+    let at_fault = synth::seg(0xFF52, &synth::cod_body(1, 2, 4, 0));
+    let parts: Vec<_> = two_each(&|_, _| 2, &nothing)
+        .into_iter()
+        .map(|(tile, part, count, markers)| match (tile, part) {
+            (1, 0) => (tile, part, count, at_fault.clone()),
+            _ => (tile, part, count, markers),
+        })
+        .collect();
+    cases.push((
+        "a tile header at fault",
+        tile_parts(8, &[], &parts),
+        "Err(Marker(\"component 0 carries 4 quantization step entries",
+    ));
+    // Tile 3's own `COD` of two levels, and tile 1's of three, whose
+    // tile-parts come last: the first tile at fault turns from tile 3 to
+    // tile 1 once tile 1 is fed, and its header is gathered afresh.
+    let three = synth::seg(0xFF52, &synth::cod_body(1, 3, 4, 0));
+    let mut parts: Vec<_> = two_each(&|_, _| 2, &nothing)
+        .into_iter()
+        .map(|(tile, part, count, markers)| match (tile, part) {
+            (3, 0) => (tile, part, count, at_fault.clone()),
+            (1, 0) => (tile, part, count, three.clone()),
+            _ => (tile, part, count, markers),
+        })
+        .collect();
+    parts.sort_by_key(|&(tile, _, _, _)| tile == 1);
+    cases.push((
+        "a lower tile at fault later",
+        tile_parts(8, &[], &parts),
+        "Err(Marker(\"component 0 carries 4 quantization step entries but its 3",
+    ));
+    // 20 `POC` volumes in the main header, and 4 in each later tile-part of
+    // tile 1: the tile goes over 32 at its fourth tile-part, and the volumes
+    // the gathered header holds grow with each tile-part after.
+    let poc = |volumes: usize| {
+        let mut body = Vec::new();
+        for _ in 0..volumes {
+            body.extend([0, 0, 0, 1, 1, 1, 0]);
+        }
+        synth::seg(0xFF5F, &body)
+    };
+    let mut parts = Vec::new();
+    for tile in 0..8u16 {
+        for part in 0..6u8 {
+            let markers = match (tile, part) {
+                (_, 0) => own(tile),
+                (1, _) => poc(4),
+                _ => Vec::new(),
+            };
+            parts.push((tile, part, 6, markers));
+        }
+    }
+    cases.push((
+        "POC volumes joined",
+        tile_parts(8, &poc(20), &parts),
+        "Err(Limit(LimitDetail { kind: PocVolumes",
+    ));
     let mut junk = tile_parts(8, &[], &two_each(&|_, _| 2, &nothing));
     let end = junk.len() - 2;
     junk[end..].copy_from_slice(&[0x12, 0x34]);

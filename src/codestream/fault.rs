@@ -150,8 +150,19 @@ impl Firsts {
 /// at once.
 pub(crate) fn tile_parts_fault(bytes: &[u8], parsed: &ParsedHeader, strict: bool) -> Option<Error> {
     let mut walk = Walk::new(bytes, parsed);
-    match walk.run(bytes, parsed, strict, None, &mut None) {
-        Ok(_) => check_headers(bytes, parsed, strict, Record::Owned(walk.seen)).err(),
+    match walk.run(bytes, parsed, strict, &mut None) {
+        Ok(()) => check_headers(
+            bytes,
+            parsed,
+            strict,
+            Record::Owned(walk.seen),
+            |index, position| {
+                let mut walk = Walk::gathering(bytes, parsed, index);
+                walk.run(bytes, parsed, strict, &mut None)?;
+                check_gathered(parsed, walk.kept.as_ref(), index, position)
+            },
+        )
+        .err(),
         Err(error) => Some(error),
     }
 }
@@ -176,8 +187,11 @@ pub(crate) struct KeptWalk {
 /// The calls on an input that grows walk each tile-part about once in all:
 /// each reads the tile-parts past where the last one was kept, and the one
 /// it was kept before. The checks of each tile at the end of the walk, a
-/// step a tile, run on each call, as does the walk again for a tile whose
-/// joined header is at fault, which is not kept. With `strict` on it walks
+/// step a tile, run on each call. The header of the first tile at fault,
+/// gathered by a walk of its own, is kept with the walk, which joins on the
+/// `POC` volumes of the tile's later tile-parts as it reads them, so the
+/// tile is walked for again only when another tile is the first at fault.
+/// With `strict` on it walks
 /// from the start and leaves `kept` as it is: the `TNsot` look-ahead's
 /// answer then decides the walk's steps, and it reads the bytes past them.
 pub(crate) fn tile_parts_fault_kept(
@@ -199,12 +213,45 @@ pub(crate) fn tile_parts_fault_kept(
         _ => Walk::new(bytes, parsed),
     };
     let mut undo = None;
-    let fault = match walk.run(bytes, parsed, strict, None, &mut undo) {
-        Ok(_) => check_headers(bytes, parsed, strict, Record::Kept(&walk.seen)).err(),
+    // A tile header gathered on this call, with the step the walk stopped in
+    // taken back, to keep once the walk's own step is taken back.
+    let mut gathered = None;
+    let fault = match walk.run(bytes, parsed, strict, &mut undo) {
+        Ok(()) => {
+            let (keep, kept) = (walk.keep, walk.kept.as_ref());
+            check_headers(
+                bytes,
+                parsed,
+                strict,
+                Record::Kept(&walk.seen),
+                |index, position| {
+                    if let Some(header) = kept.filter(|_| keep == Some(index)) {
+                        return check_gathered(parsed, Some(header), index, position);
+                    }
+                    let mut gather = Walk::gathering(bytes, parsed, index);
+                    let mut step = None;
+                    gather.run(bytes, parsed, strict, &mut step)?;
+                    // Checked as it stands, the step it stopped in included, as
+                    // a walk from the start checks it.
+                    let full = check_gathered(parsed, gather.kept.as_ref(), index, position);
+                    if let Some(step) = step {
+                        step.restore(&mut gather);
+                    }
+                    gathered = Some((index, gather.kept));
+                    full
+                },
+            )
+            .err()
+        }
         Err(error) => Some(error),
     };
     if let Some(undo) = undo {
         undo.restore(&mut walk);
+    }
+    if let Some((index, kept)) = gathered {
+        // Gathered up to where the walk now stands.
+        walk.keep = Some(index);
+        walk.kept = kept;
     }
     *kept = Some(KeptWalk {
         len: bytes.len(),
@@ -234,28 +281,45 @@ struct Walk {
     ppm_seq: usize,
     /// Where the next tile-part starts.
     part_offset: usize,
+    /// The tile whose header the walk gathers, if any.
+    keep: Option<usize>,
+    /// That tile's header as the tile record holds it, once its first
+    /// tile-part is read: that tile-part's header, with the `POC` volumes of
+    /// the later ones read since joined on.
+    kept: Option<TileHeader>,
 }
 
 /// What a step of [`Walk::run`] changed, to take back where the walk stops
 /// in that step, so that a call on a longer input reads that tile-part
 /// again. With `strict` off a step changes only these, and what it notes
-/// of a first tile-part's header, which reads the same again.
+/// of a first tile-part's header, which reads the same again. It does not
+/// move where the next tile-part starts, which moves only once the step is
+/// done. Where it takes the `TNsot` look-ahead it also notes where that
+/// starts, which the step taken again notes afresh, as `count_checked` is
+/// taken back.
 struct Undo {
-    part_offset: usize,
     index: usize,
     tile: Seen,
     count_checked: bool,
-    look_ahead: Option<(usize, u16)>,
     ppm_seq: usize,
+    /// How many `POC` volumes the gathered header held, or `None` where it
+    /// was not yet gathered.
+    kept_poc: Option<usize>,
 }
 
 impl Undo {
     fn restore(self, walk: &mut Walk) {
-        walk.part_offset = self.part_offset;
         walk.seen[self.index] = self.tile;
         walk.count_checked = self.count_checked;
-        walk.look_ahead = self.look_ahead;
         walk.ppm_seq = self.ppm_seq;
+        match self.kept_poc {
+            None => walk.kept = None,
+            Some(volumes) => {
+                if let Some(kept) = walk.kept.as_mut() {
+                    kept.poc.truncate(volumes);
+                }
+            }
+        }
     }
 }
 
@@ -271,23 +335,33 @@ impl Walk {
             look_ahead: None,
             ppm_seq: 0,
             part_offset: parsed.sot_offset,
+            keep: None,
+            kept: None,
+        }
+    }
+
+    /// A walk from the first `SOT` of `bytes` that gathers tile `index`'s
+    /// header.
+    fn gathering(bytes: &[u8], parsed: &ParsedHeader, index: usize) -> Self {
+        Walk {
+            keep: Some(index),
+            ..Walk::new(bytes, parsed)
         }
     }
 
     /// [`walk_tiles`](super::walk_tiles) without the tile records, from
     /// where the walk stands: each step it takes, and each error it gives,
-    /// in the same order. With `keep`, it also gives that tile's header as
-    /// the tile record would hold it, its `POC` volumes joined over its
-    /// tile-parts. `undo` is left holding what to take back of the step the
-    /// walk stopped in, or `None` if it stopped before one.
+    /// in the same order. Where it gathers a tile's header, it also holds
+    /// that header as the tile record would, its `POC` volumes joined over
+    /// its tile-parts. `undo` is left holding what to take back of the step
+    /// the walk stopped in, or `None` if it stopped before one.
     fn run(
         &mut self,
         bytes: &[u8],
         parsed: &ParsedHeader,
         strict: bool,
-        keep: Option<usize>,
         undo: &mut Option<Undo>,
-    ) -> Result<Option<TileHeader>> {
+    ) -> Result<()> {
         let main = &parsed.header;
         let ppm = &parsed.ppm;
         let Walk {
@@ -299,9 +373,11 @@ impl Walk {
             look_ahead,
             ppm_seq,
             part_offset,
+            keep,
+            kept,
         } = self;
+        let keep = *keep;
         let tile_count = seen.len();
-        let mut kept: Option<TileHeader> = None;
         let uniform = OnceCell::new();
         let summary = OnceCell::new();
         // Whether the walk ended where the input did, with `strict` off:
@@ -337,12 +413,11 @@ impl Walk {
                 ))
             })?;
             *undo = Some(Undo {
-                part_offset: *part_offset,
                 index,
                 tile: *tile,
                 count_checked: *count_checked,
-                look_ahead: *look_ahead,
                 ppm_seq: *ppm_seq,
+                kept_poc: kept.as_ref().map(|kept| kept.poc.len()),
             });
 
             if usize::from(sot.tile_part_index) != usize::from(tile.parts) {
@@ -421,7 +496,7 @@ impl Walk {
                     // `decode_poc` holds a header to `MAX_POC_VOLUMES`.
                     tile.poc = tile_header.poc.len() as u8;
                     if keep == Some(index) {
-                        kept = Some(tile_header);
+                        *kept = Some(tile_header);
                     }
                 } else {
                     if tile_header.overrides.codes_or_quantizes() {
@@ -476,7 +551,7 @@ impl Walk {
                     }
                 }
             } else if first_part && keep == Some(index) {
-                kept = Some(TileHeader::default());
+                *kept = Some(TileHeader::default());
             }
             // A tile-part with no `POC` volume adds none to the tile's, which
             // passed the budget, so the budget is not checked again.
@@ -603,7 +678,7 @@ impl Walk {
                 )));
             }
         }
-        Ok(kept)
+        Ok(())
     }
 }
 
@@ -616,15 +691,16 @@ enum Record<'s> {
 
 /// [`check_tile_headers`](super::check_tile_headers) over the tiles a walk
 /// found: each tile's markers were checked as its first tile-part was read,
-/// and its `POC` volumes are counted here. The first tile at fault is walked
-/// for again, to gather its header as the tile record holds it, and checked
-/// in full, so that the fault is reported in the full check's words. Like
-/// that check, it numbers a tile by its place among the tiles found.
+/// and its `POC` volumes are counted here. The first tile at fault is
+/// handed to `check` with its place among the tiles found, to be checked in
+/// full on its header as the tile record holds it (see [`check_gathered`]),
+/// so that the fault is reported in the full check's words.
 fn check_headers(
     bytes: &[u8],
     parsed: &ParsedHeader,
     strict: bool,
     record: Record<'_>,
+    mut check: impl FnMut(usize, usize) -> Result<()>,
 ) -> Result<()> {
     let main = &parsed.header;
     let mut record = Some(record);
@@ -636,7 +712,7 @@ fn check_headers(
             Some(Record::Kept(tiles)) => flagged(main, tiles, after),
             None => {
                 let mut walk = Walk::new(bytes, parsed);
-                walk.run(bytes, parsed, strict, None, &mut None)?;
+                walk.run(bytes, parsed, strict, &mut None)?;
                 flagged(main, &walk.seen, after)
             }
         };
@@ -648,19 +724,29 @@ fn check_headers(
         if matches!(record, Some(Record::Owned(_))) {
             record = None;
         }
-        let header = Walk::new(bytes, parsed)
-            .run(bytes, parsed, strict, Some(index), &mut None)?
-            .ok_or_else(|| Error::inconsistent(format!("tile {index} was not found again")))?;
-        let full = check_tile_in_full(main, &header, position);
-        debug_assert!(
-            full.is_err(),
-            "tile {index}: the quick check refused a valid tile"
-        );
-        full?;
+        check(index, position)?;
         // Not reached while the quick check is exact: an owned record is
         // walked again to go on past the tile.
         after = position + 1;
     }
+}
+
+/// The full check of tile `index`, at `position` among the tiles found, on
+/// its header as a walk gathered it.
+fn check_gathered(
+    parsed: &ParsedHeader,
+    header: Option<&TileHeader>,
+    index: usize,
+    position: usize,
+) -> Result<()> {
+    let header =
+        header.ok_or_else(|| Error::inconsistent(format!("tile {index} was not found again")))?;
+    let full = check_tile_in_full(&parsed.header, header, position);
+    debug_assert!(
+        full.is_err(),
+        "tile {index}: the quick check refused a valid tile"
+    );
+    full
 }
 
 /// The position among the tiles found, and the index, of the first tile
