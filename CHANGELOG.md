@@ -39,17 +39,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `read_header` too. The decode refused it at the first tile as
   `Error::Codestream` ("tile N has an empty area on component C"), and
   `read_header` read it.
-- `DecodeOptions::sample_limit` is a `SampleLimit` (`Default`, `Raised`,
-  `Unlimited`, `AtMost`), and `packet_work_limit` and
-  `code_block_work_limit` stay a `WorkLimit`, which loses `AtMost`.
-  `AtMost` on a work bound no longer compiles, where it was
-  `InvalidOptions`. Write `SampleLimit::` for the sample limit.
-  `LimitDetail::retry_with` returns a `Raise` (`Raised` or `Unlimited`),
-  which converts into either type with `From`: match on
-  `Raise::Raised(n)` where you matched `WorkLimit::Raised(n)`, and pass
-  `raise.into()` to the builder. `DecodeOptions::with_retry` is unchanged.
-  The `with_*_limit` builders store `Raised(1)` as `Default`. A refusal by
-  the sample limit or a tile cap names `SampleLimit::` in its message
+- `DecodeOptions::sample_limit` is now a `SampleLimit`, with the same
+  `Default`, `Raised` and `Unlimited` as before plus the new `AtMost`.
+  Write `SampleLimit::` where you wrote `WorkLimit::` for the sample limit;
+  `packet_work_limit` and `code_block_work_limit` stay a `WorkLimit`.
+  `LimitDetail::retry_with` returns `Option<Raise>`: replace
+  `Some(WorkLimit::Raised(n))` with `Some(Raise::Raised(n))`, and pass
+  `.into()` to the builder. `DecodeOptions::with_retry` is unchanged.
+  The `with_*_limit` builders store `Raised(1)` as `Default`, so a field
+  set through one and compared to `Raised(1)` no longer matches. A refusal
+  by the sample limit or a tile cap names `SampleLimit::` in its message
   (#611).
 
 ### Added

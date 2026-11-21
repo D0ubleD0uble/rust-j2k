@@ -463,7 +463,7 @@ fn a_retry_converts_into_both_limit_types() {
             SampleLimit::Unlimited,
         ),
     ] {
-        assert_eq!(WorkLimit::from(raise.clone()), work);
+        assert_eq!(WorkLimit::from(raise), work);
         assert_eq!(SampleLimit::from(raise), samples);
     }
 }

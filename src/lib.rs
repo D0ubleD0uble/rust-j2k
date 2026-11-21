@@ -174,7 +174,7 @@
 //! The other guards have no option; the list is on [`Error::Limit`]. The
 //! error's [`LimitDetail`] says which guard the file hit, as a
 //! [`LimitKind`]. For one of the three it also gives the [`Raise`] to
-//! retry with (see [`WorkLimit`] for how far to trust it).
+//! retry with (see [`Raise`] for how far to trust it).
 //!
 //! For a file from a source you trust, lift all three. [`WorkLimit`] and
 //! [`LimitDetail`] have examples that retry after an `Error::Limit`.
@@ -335,8 +335,8 @@ mod readme_examples {}
 /// [`DecodeOptions::code_block_work_limit`]. An [`Error::Limit`] from one
 /// of them names the option, as [`LimitDetail::kind`], and the
 /// [`Raise`] to retry with, as [`LimitDetail::retry_with`]; its message
-/// names both too. [`WorkLimit`] shows a retry and how far to trust the
-/// factor. The guards with no option are listed on [`Error::Limit`].
+/// names both too. [`WorkLimit`] shows a retry, and [`Raise`] how far to
+/// trust the factor. The guards with no option are listed on [`Error::Limit`].
 ///
 /// Decoding is strict by default: damaged or truncated data is an
 /// [`Error`], not a partial image. With [`DecodeOptions::strict`] off,
@@ -1170,21 +1170,7 @@ impl Default for DecodeOptions {
 /// few bytes or is very large. The decode then fails with [`Error::Limit`]. Its
 /// [`LimitDetail::kind`] names the option, and [`LimitDetail::retry_with`]
 /// gives a [`Raise`], a [`Raised`](Raise::Raised) factor, which the message
-/// names too. Treat the factor as a hint, not a measure of the file:
-///
-/// - For the sample limit it is exact for the check it names: the image's
-///   samples are known from its header. Palette expansion or sRGB output is
-///   checked later, against the same limit, and may need a higher factor.
-/// - For the two work bounds it is the larger of what the tiles seen so far
-///   need and twice the factor that failed, so it can be more than the file
-///   needs, and the file may need more: a packet walk stops as soon as it
-///   runs out, so it does not know the total, and later tiles are not
-///   counted. The doubling is for a loop of retries: each costs more than
-///   the last, and a file can need a factor of dozens, so a ladder that
-///   doubles ends in about log2 of the factor the file needs, where one that
-///   stepped up by one, or to each tile's need, would take a step for each
-///   tile. Following [`DecodeOptions::with_retry`] does that. If you pick the
-///   next factor yourself, double it too.
+/// names too. [`Raise`] says how far to trust the factor.
 ///
 /// Which value to pick:
 ///
@@ -1276,8 +1262,8 @@ pub enum WorkLimit {
 /// and precincts a tile may hold.
 ///
 /// It takes the settings of a [`WorkLimit`], and [`AtMost`](Self::AtMost), a
-/// fixed ceiling. [`WorkLimit`] says how far to trust the factor a refusal
-/// names and which setting to pick.
+/// fixed ceiling. [`Raise`] says how far to trust the factor a refusal
+/// names, and [`WorkLimit`] which setting to pick.
 ///
 /// [`DecodeOptions::with_sample_limit`] stores `Raised(1)` as `Default`, as
 /// the two set the same limit. Compared as bare values,
@@ -1324,7 +1310,24 @@ pub enum SampleLimit {
 /// It converts into the type of the option [`LimitDetail::kind`] names: a
 /// [`SampleLimit`] for the sample limit and the tile caps it sets, a
 /// [`WorkLimit`] for a work bound. [`DecodeOptions::with_retry`] does that
-/// for you. [`WorkLimit`] says how far to trust the factor.
+/// for you. Every variant converts into both [`WorkLimit`] and
+/// [`SampleLimit`].
+///
+/// Treat the factor as a hint, not a measure of the file:
+///
+/// - For the sample limit it is exact for the check it names: the image's
+///   samples are known from its header. Palette expansion or sRGB output is
+///   checked later, against the same limit, and may need a higher factor.
+/// - For the two work bounds it is the larger of what the tiles seen so far
+///   need and twice the factor that failed, so it can be more than the file
+///   needs, and the file may need more: a packet walk stops as soon as it
+///   runs out, so it does not know the total, and later tiles are not
+///   counted. The doubling is for a loop of retries: each costs more than
+///   the last, and a file can need a factor of dozens, so a ladder that
+///   doubles ends in about log2 of the factor the file needs, where one that
+///   stepped up by one, or to each tile's need, would take a step for each
+///   tile. Following [`DecodeOptions::with_retry`] does that. If you pick the
+///   next factor yourself, double it too.
 ///
 /// ```
 /// use rust_j2k::{Raise, SampleLimit, WorkLimit};
@@ -1332,7 +1335,7 @@ pub enum SampleLimit {
 /// assert_eq!(WorkLimit::from(Raise::Raised(2)), WorkLimit::Raised(2));
 /// assert_eq!(SampleLimit::from(Raise::Unlimited), SampleLimit::Unlimited);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Raise {
     /// The default times this factor, as [`WorkLimit::Raised`] and

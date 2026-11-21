@@ -215,7 +215,7 @@ fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, 
     // The option the kind names is set to `retry_with` and every other
     // option is as it was: compared by `Debug`, so the check covers every
     // field, a new one included (`DecodeOptions` has no `PartialEq`).
-    let expected = with_field(options, kind, raised.clone());
+    let expected = with_field(options, kind, raised);
     assert_eq!(
         format!("{next:?}"),
         format!("{expected:?}"),

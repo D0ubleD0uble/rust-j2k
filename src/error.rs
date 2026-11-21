@@ -237,8 +237,8 @@ pub enum Error {
     /// the last two with a [`WorkLimit`](crate::WorkLimit). For one of them,
     /// [`LimitDetail::kind`] names the limit, and
     /// [`LimitDetail::retry_with`] gives the [`Raise`] to retry with, which
-    /// the message names too. It is a hint (see
-    /// [`WorkLimit`](crate::WorkLimit)), not a measure of the file. A
+    /// the message names too. It is a hint (see [`Raise`]), not a measure of
+    /// the file. A
     /// refusal under a sample limit of
     /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost) gives none: the
     /// caller set that ceiling.
@@ -525,7 +525,7 @@ impl LimitDetail {
     /// [`WorkLimit`](crate::WorkLimit).
     /// It is worked out from what the refusal shows, so a retry with it can
     /// still be refused, by this limit later in the file or by another
-    /// limit (see [`WorkLimit`](crate::WorkLimit)), or fail with another
+    /// limit (see [`Raise`]), or fail with another
     /// error once past it,
     /// such as damage the limit stopped the decode before. A work bound
     /// refusal names at least twice the factor it ran under, so retries in a
@@ -541,7 +541,7 @@ impl LimitDetail {
     /// limit, so a retry raises the limit on the whole image's samples, not
     /// only the tile's count.
     pub fn retry_with(&self) -> Option<Raise> {
-        self.retry_with.clone()
+        self.retry_with
     }
 
     /// The tile the limit refused and the amount it needs, where the refusal
