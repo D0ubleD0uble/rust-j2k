@@ -1987,10 +1987,14 @@ pub(crate) mod tests {
             matches!(&refused, Err(Error::Limit(limit)) if limit.message().starts_with("tile 0 ")),
             "{refused:?}"
         );
-        let raised = lenient.clone().with_sample_limit(WorkLimit::Raised(4));
-        assert!(read_header(&narrow_first, &raised).is_ok());
+        // On a 32-bit target the caps stop at their floor, so a raised
+        // limit does not raise them.
+        if cfg!(target_pointer_width = "64") {
+            let raised = lenient.clone().with_sample_limit(WorkLimit::Raised(4));
+            assert!(read_header(&narrow_first, &raised).is_ok());
+            check(&narrow_first, &[raised, lenient.clone()]);
+        }
         let tile = lenient.clone().with_region(Region::Tile(1));
-        check(&narrow_first, &[raised, lenient.clone()]);
         check(&narrow_first, &[tile, lenient.clone()]);
 
         let mut cod = synth::cod_body(1, 1, 4, 0);
