@@ -4,7 +4,8 @@
 //! grid, 255 tile-parts a tile (16.7 million tile-parts), each tile over the
 //! precinct cap under the main header and brought within by its first
 //! tile-part's `COD`, except the last, which is refused. The tile read is
-//! the last one alone, so the walk runs to the end.
+//! the last one alone, so the walk runs to the end. Other files restate
+//! long and short first tile-part headers in every later tile-part.
 //!
 //! The test is ignored, as it builds that file. Run it in release with
 //! `cargo test --release --test tile_parts_fault_cost -- --ignored
@@ -124,9 +125,74 @@ fn a_refusal_on_the_235_mb_file_walks_the_tile_parts_once() {
             over.push("long first headers restated");
         }
     }
+    // A first tile-part header of a `COD` and 143 `QCC`s, under 1 KiB, in
+    // each of 2048 tiles of 256 components, and 254 later tile-parts a tile
+    // that restate the main `QCD`, all alike or two headers in turn: the
+    // walk reads each first header again at most twice, so the refusal
+    // costs about what the decode's does.
+    let options = DecodeOptions::default().with_region(Region::Tile(0));
+    for turns in [1, 2] {
+        let bytes = restated_over_qccs(turns);
+        for strict in [true, false] {
+            let options = options.clone().with_strict(strict);
+            let (spent, _, error) = refusal(&bytes, &options);
+            let start = Instant::now();
+            let decoded = rust_j2k::decode_with(&bytes, &options);
+            let decode = start.elapsed();
+            let name = format!(
+                "short first headers of `QCC`s, {turns} later headers, strict {strict}"
+            );
+            eprintln!(
+                "{name} ({} MB): {spent:?}, the decode {decode:?}: {error:?}",
+                bytes.len() / 1_000_000
+            );
+            let decoded = decoded.map(|_| ()).expect_err("the decode refuses the file");
+            assert_eq!(format!("{decoded:?}"), format!("{error:?}"), "{name}");
+            if spent > decode * 3 {
+                over.push("short first headers of `QCC`s");
+            }
+        }
+    }
     // Times are kept to a release build.
     #[cfg(not(debug_assertions))]
     assert!(over.is_empty(), "over its time or 1 MiB: {over:?}");
+}
+
+/// 2048 tiles of 64 x 64 in a row, of 256 components, over the precinct cap
+/// under the main `COD` and under their own, each in 255 tile-parts: the
+/// first's header is that `COD` and a `QCC` for each of components 0 to
+/// 142, 1018 bytes, and the later ones' restate the main `QCD`, with an
+/// empty `COM` after it in every `turns`-th.
+fn restated_over_qccs(turns: u8) -> Vec<u8> {
+    let (side, tiles) = (64, 2048);
+    let mut cod = synth::cod_body(1, 0, 4, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let siz = synth::siz_body([side * tiles, side, 0, 0, side, side, 0, 0], &[[7, 1, 1]; 256]);
+    let cod = synth::seg(0xFF52, &cod);
+    let qcd = synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8]));
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        cod.clone(),
+        qcd.clone(),
+    ]
+    .concat();
+    let mut first = cod;
+    for component in 0..143 {
+        let body = [&[component][..], &synth::qcd_none_body(2, &[8])].concat();
+        first.extend(synth::seg(0xFF5D, &body));
+    }
+    let other = [&qcd[..], &[0xFF, 0x64, 0, 2]].concat();
+    for tile in 0..tiles as u16 {
+        bytes.extend(synth::tile_part(tile, 0, PARTS, &first, &[0]));
+        for part in 1..PARTS {
+            let later = if part % turns == 0 { &other } else { &qcd };
+            bytes.extend(synth::tile_part(tile, part, PARTS, later, &[]));
+        }
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
 }
 
 /// `tiles` tiles of 1024 x 1024 in a row, over the precinct cap under the

@@ -459,11 +459,13 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// tile-parts, under a millisecond with no tile over a cap, and 63 ms for
 /// 1000 tiles of 4096 components, each with a tile-part `COD`. A refusal
 /// or a stop at the budget costs that walk of the tile-parts on top, with
-/// up to 10 bytes of heap a tile (14 on an input of 4 GiB or more), and,
-/// for each tile whose first tile-part header is over 1 KiB and has a
-/// coding value a later tile-part restates, the coding it gives, up to
-/// about 13 times the bytes of those headers: 240 ms and 640 KiB in
-/// release on that 235 MB file with the tile read left out.
+/// up to 18 bytes of heap a tile (30 on an input of 4 GiB or more), and,
+/// for each tile whose later tile-parts restate the coding of its first
+/// with headers that differ, that coding, up to about 14 times the bytes
+/// of those tiles' tile-parts: 240 ms and 640 KiB in release on that
+/// 235 MB file with the tile read left out, and 150 ms, about what the
+/// decode takes to refuse it, on a 13 MB file of 2048 tiles whose first
+/// tile-part headers of 143 `QCC`s each 254 later tile-parts restate.
 /// The decode can also refuse the file before it
 /// gets to that tile, for what only decoding finds, and then names another
 /// tile, kind or factor, or another error: a fault or a work bound in the

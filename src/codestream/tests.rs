@@ -5666,46 +5666,129 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
     }
 }
 
-/// The fault walk reads a tile's first tile-part header of over 1 KiB
-/// again once, at the tile's first later tile-part that restates a coding
-/// value, however many restate it and in whatever order the tiles'
-/// tile-parts come: here tiles 0 and 1, each with its own `COD` and `QCD`
-/// and 200 more tile-parts that restate them, interleaved 0, 1, 0, 1, and a
-/// tile whose later tile-parts restate the main header's, which is not read
-/// again. A tile with no restatement is not read again either. A shorter
-/// first header is read again for each tile-part that restates it, as
-/// keeping it would cost more heap than its bytes.
+/// The fault walk reads a tile's first tile-part header again at most
+/// twice, however many later tile-parts restate its coding values and in
+/// whatever order the tiles' tile-parts come: once at the first that
+/// restates them, and once more at the first whose header holds other
+/// bytes, after which that coding is kept. Here tiles 0 and 1 each have
+/// their own `COD` and `QCD`, short or over 1 KiB, and 200 later
+/// tile-parts that restate them, interleaved 0, 1, 2, 0, 1, 2, with every
+/// later header the same or two headers in turn. Tile 2's later tile-parts
+/// restate the main header's, which is not read again, and tile 3 has no
+/// restatement. The same holds for the walk kept from call to call on an
+/// input fed a byte at a time, where a step stopped by the input's end is
+/// taken back and taken again on the next call.
 #[test]
-fn the_fault_walk_reads_a_long_first_header_again_once_a_tile() {
+fn the_fault_walk_reads_a_first_header_again_at_most_twice_a_tile() {
     use synth::tile_part as part;
-    let own = [
-        seg(0xFF52, &synth::cod_body(1, 0, 0, 0)),
-        seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
-    ]
-    .concat();
+    let cod = seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
+    let qcd = seg(0xFF5C, &synth::qcd_none_body(2, &[8]));
+    let own = [cod.clone(), qcd.clone()].concat();
     // 256 empty `COM`s take the first header over 1 KiB.
     let long = [own.clone(), [0xFF, 0x64, 0, 2].repeat(256)].concat();
     let parts = 201u8;
-    for (first, rereads) in [(&long, 2), (&own, 2 * 200)] {
-        let mut tile_parts = vec![
-            part(0, 0, parts, first, &[]),
-            part(1, 0, parts, first, &[]),
-            part(2, 0, parts, &[], &[]),
-            part(3, 0, 1, first, &[]),
-        ];
-        for at in 1..parts {
-            for tile in 0..3 {
-                tile_parts.push(part(tile, at, parts, &own, &[]));
+    for first in [&own, &long] {
+        for (turns, rereads) in [(1, 2), (2, 4)] {
+            let mut tile_parts = vec![
+                part(0, 0, parts, first, &[]),
+                part(1, 0, parts, first, &[]),
+                part(2, 0, parts, &[], &[]),
+                part(3, 0, 1, first, &[]),
+            ];
+            for at in 1..parts {
+                let later = if usize::from(at) % turns == 0 { &own } else { &qcd };
+                for tile in 0..3 {
+                    tile_parts.push(part(tile, at, parts, later, &[0]));
+                }
             }
+            let bytes = grid_of_four(&[], &tile_parts, &[0xFF, 0xD9]);
+            let parsed = parse_header(&bytes).expect("the main header");
+            let name = format!("{} bytes, {turns} later headers", first.len());
+            for strict in [true, false] {
+                FIRST_REREADS.with(|reads| reads.set(0));
+                assert!(fault::tile_parts_fault(&bytes, &parsed, strict).is_none());
+                let found = FIRST_REREADS.with(std::cell::Cell::get);
+                assert_eq!(found, rereads, "{name}, {strict}");
+            }
+            FIRST_REREADS.with(|reads| reads.set(0));
+            let mut kept = None;
+            for len in parsed.main_header_len()..=bytes.len() {
+                let fault = fault::tile_parts_fault_kept(&bytes[..len], &parsed, false, &mut kept);
+                assert!(fault.is_none(), "{name}, {len} bytes: {fault:?}");
+            }
+            let found = FIRST_REREADS.with(std::cell::Cell::get);
+            assert_eq!(found, rereads, "{name}, fed a byte at a time");
+            crate::fuzz::tile_parts_walks_agree(&bytes);
         }
+    }
+}
+
+/// A later tile-part's header of the same bytes as one found to restate a
+/// tile's coding is taken to restate it only within that tile, and a later
+/// header of other bytes is still checked, so each is refused as the
+/// decode's parse refuses it, by a walk from the start and by the walk kept
+/// from call to call on an input fed a byte at a time.
+#[test]
+fn the_fault_walk_checks_a_restatement_for_each_tile_and_header() {
+    use synth::tile_part as part;
+    let qcd = |step| seg(0xFF5C, &synth::qcd_none_body(2, &[step]));
+    let error = "Codestream(\"a later tile-part of tile 1 carries a `QCD` that differs from the \
+                 one in force";
+    let cases = [
+        (
+            "the same bytes in another tile",
+            vec![
+                part(0, 0, 3, &qcd(9), &[]),
+                part(1, 0, 3, &qcd(10), &[]),
+                part(0, 1, 3, &qcd(9), &[0]),
+                part(1, 1, 3, &qcd(10), &[0]),
+                part(1, 2, 3, &qcd(9), &[0]),
+            ],
+        ),
+        (
+            "other bytes in the same tile",
+            vec![
+                part(0, 0, 3, &qcd(9), &[]),
+                part(1, 0, 3, &qcd(10), &[]),
+                part(1, 1, 3, &qcd(10), &[0]),
+                part(1, 2, 3, &qcd(11), &[0]),
+            ],
+        ),
+        (
+            "other bytes after a kept coding",
+            vec![
+                part(1, 0, 4, &qcd(10), &[]),
+                part(1, 1, 4, &qcd(10), &[0]),
+                part(1, 2, 4, &[qcd(10), seg(0xFF64, &[0, 1])].concat(), &[0]),
+                part(1, 3, 4, &qcd(11), &[0]),
+            ],
+        ),
+        (
+            "the first restatement",
+            vec![
+                part(1, 0, 3, &qcd(10), &[]),
+                part(1, 1, 3, &qcd(11), &[0]),
+                part(1, 2, 3, &qcd(11), &[0]),
+            ],
+        ),
+    ];
+    for (name, tile_parts) in cases {
         let bytes = grid_of_four(&[], &tile_parts, &[0xFF, 0xD9]);
+        crate::fuzz::tile_parts_walks_agree(&bytes);
         let parsed = parse_header(&bytes).expect("the main header");
         for strict in [true, false] {
-            FIRST_REREADS.with(|reads| reads.set(0));
-            assert!(fault::tile_parts_fault(&bytes, &parsed, strict).is_none());
-            let found = FIRST_REREADS.with(std::cell::Cell::get);
-            assert_eq!(found, rereads, "{} bytes, {strict}", first.len());
+            let found = format!("{:?}", fault::tile_parts_fault(&bytes, &parsed, strict));
+            assert!(found.starts_with(&format!("Some({error}")), "{name}: {found}");
         }
-        crate::fuzz::tile_parts_walks_agree(&bytes);
+        let mut kept = None;
+        let mut last = None;
+        for len in parsed.main_header_len()..=bytes.len() {
+            let fault = fault::tile_parts_fault_kept(&bytes[..len], &parsed, false, &mut kept);
+            let afresh = fault::tile_parts_fault(&bytes[..len], &parsed, false);
+            assert_eq!(format!("{fault:?}"), format!("{afresh:?}"), "{name}, {len} bytes");
+            last = fault;
+        }
+        let last = format!("{last:?}");
+        assert!(last.starts_with(&format!("Some({error}")), "{name}: {last}");
     }
 }

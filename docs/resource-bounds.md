@@ -502,13 +502,18 @@ tile-part header that holds more than `SOD`, but keeps 6 bytes a tile in
 place of the decode's tile records (up to about 52 times the input plus
 128 KiB, above), and, once any tile's first tile-part has its own coding,
 4 more for every tile (8 on an input of 4 GiB or more). Where a later
-tile-part restates a coding value, it reads the tile's first tile-part
-header again. A header of 1 KiB or less is read again for each tile-part
-that restates it, which is at least 14 bytes long, so that work stays
-within about 73 times the input. A longer header is read again once for
-the tile, and the coding it gives is kept for the tile's later
-restatements: about a kilobyte of heap for each such tile, and more for
-each `COC` or `QCC`, up to about 13 times the bytes of those headers.
+tile-part restates a coding value of the tile's first tile-part, it reads
+that header again, at most twice a tile. The first time, it notes where
+the restating header lies, 8 more bytes for every tile (16 on an input of
+4 GiB or more), and a later header of the same bytes is not checked
+again. The second time, at a restating header of other bytes, the coding
+it reads is kept for the tile's later restatements: about a kilobyte of
+heap for each such tile, and more for each `COC` or `QCC`, up to about
+14 times the bytes of those tiles' tile-parts. So the walk's work stays
+within a small multiple of the input: on a 13 MB file of 2048 tiles
+whose first tile-part headers of 143 `QCC`s each 254 later tile-parts
+restate, the refusal takes 150 ms in release, about what the decode's
+takes.
 It checks each tile's own header as it reads the tile's first tile-part,
 from the header in hand, as the parse does. It reads the main header in
 place and keeps no tile record, so it copies no `PPM`
@@ -530,9 +535,9 @@ a tile for the tiles the selection reads, and 8 bytes a tile for the
 offsets, except where the count refuses a tile, stops at a budget, or with
 `strict` on finds a tile with no tile-part: that costs the walk for the
 decode's error too: one more pass over the tile-parts, each restated
-tile's first header read once more where it is over 1 KiB and for each
-restating tile-part where it is not, and up to 10 bytes a tile (14 on an input of 4 GiB or more) plus the
-coding kept for the restated tiles of long first headers. Where each of
+tile's first header read at most twice more, and up to 18 bytes a tile
+(30 on an input of 4 GiB or more) plus the coding kept for the tiles
+restated with headers that differ. Where each of
 254 later tile-parts
 restates a `COD` over a first tile-part header of 2^18 empty `COM`s, a
 refusal takes 3.4 ms on a 1 MB file of one such tile and 10 ms on 4 MB of
