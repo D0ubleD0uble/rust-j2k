@@ -54,6 +54,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The refusal of a Part 2 marker names `DCO`, `VMS`, `DFS`, `ADS` and `ATK`
+  (0xFF70 to 0xFF73 and 0xFF79) as it does the others, where it called them
+  unrecognized. The error variant is unchanged (`Unsupported`).
+- `docs/openjpeg-departures.md` records two refusals OpenJPEG does not make:
+  an unknown marker in the main header, and a color transform over mixed
+  wavelets.
 - `IncrementalDecoder::refine` returns `Result<Refined>` in place of
   `Result<Option<Image>>`. To migrate, call `.image()`:
   `decoder.refine()?.image()` is the `Option<Image>` it returned before.

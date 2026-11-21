@@ -1,0 +1,61 @@
+//! Two refusals OpenJPEG 2.5.0 does not make, pinned through `decode`
+//! (docs/openjpeg-departures.md: "An unknown marker in the main header" and
+//! "A color transform over mixed wavelets"). Both start from
+//! `multicomponent_lossless.j2k`; `opj_decompress` decodes each edit, and this
+//! decoder refuses it. The refusals are this decoder's choice, so a change of
+//! either variant is a decision, not a fix.
+
+use rust_j2k::{Error, decode};
+
+fn fixture() -> Vec<u8> {
+    std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/multicomponent_lossless.j2k"
+    ))
+    .unwrap()
+}
+
+fn find(bytes: &[u8], marker: [u8; 2]) -> usize {
+    bytes.windows(2).position(|w| w == marker).unwrap()
+}
+
+#[test]
+fn the_fixture_decodes_before_any_edit() {
+    decode(&fixture()).unwrap();
+}
+
+#[test]
+fn an_unknown_marker_in_the_main_header_is_unsupported() {
+    let bytes = fixture();
+    let cod = find(&bytes, [0xFF, 0x52]);
+    let mut edited = bytes[..cod].to_vec();
+    edited.extend_from_slice(&[0xFF, 0x7F, 0x00, 0x02]);
+    edited.extend_from_slice(&bytes[cod..]);
+    match decode(&edited) {
+        Err(Error::Unsupported(m)) => assert!(
+            m.message()
+                .contains("unrecognized marker 0xFF7F in the main header"),
+            "{m}"
+        ),
+        other => panic!("expected Unsupported, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_color_transform_over_mixed_wavelets_is_marker() {
+    let mut bytes = fixture();
+    let cod = find(&bytes, [0xFF, 0x52]);
+    bytes[cod + 8] = 1; // SGcod's MCT byte
+    let qcd = find(&bytes, [0xFF, 0x5C]);
+    let end = qcd + 2 + 0x0A;
+    // A COC for component 1 with the 9/7, then a QCC with the derived step.
+    let mut inserted = vec![
+        0xFF, 0x53, 0x00, 0x09, 0x01, 0x00, 0x02, 0x02, 0x02, 0x00, 0x00,
+    ];
+    inserted.extend_from_slice(&[0xFF, 0x5D, 0x00, 0x06, 0x01, 0x41, 0x40, 0x00]);
+    bytes.splice(end..end, inserted);
+    match decode(&bytes) {
+        Err(Error::Marker(m)) => assert!(m.message().contains("different wavelet"), "{m}"),
+        other => panic!("expected Marker, got {other:?}"),
+    }
+}

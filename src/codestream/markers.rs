@@ -30,17 +30,22 @@ pub mod marker {
     pub const COM: u16 = 0xFF64; // comment
 
     // JPEG 2000 Part 2 (ISO/IEC 15444-2) codestream markers, the contiguous
-    // 0xFF74..=0xFF78 block. Outside the Part 1 subset this decoder reads: a
+    // 0xFF70..=0xFF79 block (Annex A.3). Outside the Part 1 subset this decoder reads: a
     // codestream carrying one is rejected — named, so the report says which
     // Part 2 feature blocks it — rather than half-parsed as Part 1.
+    pub const DCO: u16 = 0xFF70; // variable DC offset
+    pub const VMS: u16 = 0xFF71; // visual masking
+    pub const DFS: u16 = 0xFF72; // downsampling factor styles
+    pub const ADS: u16 = 0xFF73; // arbitrary decomposition styles
     pub const MCT: u16 = 0xFF74; // multiple-component transformation
     pub const MCC: u16 = 0xFF75; // multiple-component collection
     pub const NLT: u16 = 0xFF76; // non-linearity point transformation
     pub const MCO: u16 = 0xFF77; // multiple-component transformation ordering
     pub const CBD: u16 = 0xFF78; // component bit depth definition
+    pub const ATK: u16 = 0xFF79; // arbitrary transformation kernels
 
     /// The Part 2 codestream markers, rejected as a block.
-    pub const PART2: std::ops::RangeInclusive<u16> = MCT..=CBD;
+    pub const PART2: std::ops::RangeInclusive<u16> = DCO..=ATK;
 
     /// Reserved markers that carry no segment (ISO Table A-1). A walker that
     /// reads a length after one of these consumes the bytes that follow it;
@@ -76,11 +81,16 @@ pub mod marker {
             SOP => "`SOP`",
             EPH => "`EPH`",
             COM => "`COM`",
+            DCO => "`DCO`",
+            VMS => "`VMS`",
+            DFS => "`DFS`",
+            ADS => "`ADS`",
             MCT => "`MCT`",
             MCC => "`MCC`",
             NLT => "`NLT`",
             MCO => "`MCO`",
             CBD => "`CBD`",
+            ATK => "`ATK`",
             _ => return None,
         })
     }
