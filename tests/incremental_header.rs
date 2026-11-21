@@ -455,7 +455,10 @@ fn tile_parts(tiles: u32, main: &[u8], parts: &[(u16, u8, u8, Vec<u8>)]) -> Vec<
 /// - a first tile-part header over 1 KiB, whose coding is kept for the
 ///   later tile-parts that restate it, and a short one, read again for
 ///   each, with a later `COD` that differs;
-/// - bytes after a tile-part that are neither `SOT` nor `EOC`.
+/// - bytes after a tile-part that are neither `SOT` nor `EOC`;
+/// - tile headers at fault: one, one under a lower tile at fault fed
+///   later, and one whose `POC` volumes, joined over its tile-parts, take
+///   it in place of another, gathered on a call whose step is taken back.
 #[test]
 fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
     let rescue = synth::seg(0xFF52, &synth::cod_body(1, 1, 4, 0));
@@ -600,6 +603,41 @@ fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
         tile_parts(8, &poc(20), &parts),
         "Err(Limit(LimitDetail { kind: PocVolumes",
     ));
+    // 25 `POC` volumes in the main header; tile 2 refused; tile 1's own
+    // `QCD` at fault, of one step for one level; tile 0's later tile-parts
+    // with 4, 3, 2 and 1 volumes of its own, which take it over 32 at the
+    // third and make it the first tile at fault in place of tile 1. Its
+    // header is gathered on the call that stops in that tile-part, which
+    // that call's own step then takes back.
+    let orders = |volumes: usize| {
+        let mut body = Vec::new();
+        for order in 0..volumes {
+            body.extend([0, 0, 0, 1, 2, 1, (order % 5) as u8]);
+        }
+        synth::seg(0xFF5F, &body)
+    };
+    let one_step = [
+        rescue.clone(),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+    ]
+    .concat();
+    let parts = [
+        (1, 0, 3, one_step),
+        (2, 0, 1, Vec::new()),
+        (0, 0, 5, rescue.clone()),
+        (0, 1, 5, orders(4)),
+        (1, 1, 3, Vec::new()),
+        (0, 2, 5, orders(3)),
+        (0, 3, 5, orders(2)),
+        (1, 2, 3, Vec::new()),
+        (0, 4, 5, orders(1)),
+    ];
+    cases.push((
+        "the first at fault moves to a tile of POC volumes",
+        tile_parts(3, &orders(25), &parts),
+        "Err(Limit(LimitDetail { kind: PocVolumes, retry_with: None, refused_at: None, \
+         message: \"the `POC` markers declare 35",
+    ));
     let mut junk = tile_parts(8, &[], &two_each(&|_, _| 2, &nothing));
     let end = junk.len() - 2;
     junk[end..].copy_from_slice(&[0x12, 0x34]);
@@ -617,9 +655,11 @@ fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
             let seen = check(name, bytes, &options, |_| rng.up_to(most), &[]);
             let last = seen.last().expect("a call");
             assert!(last.starts_with(want), "{name}: {last}");
-            // The walk is kept over many calls that refuse tile 0.
+            // The walk is kept over many calls that refuse a tile, of
+            // those with the main header whole.
+            let read = seen.iter().filter(|s| *s != "Ok(None)").count();
             let refusals = seen.iter().filter(|s| s.starts_with("Err(")).count();
-            assert!(refusals * 2 > seen.len(), "{name}: {seen:?}");
+            assert!(refusals * 2 > read, "{name}: {seen:?}");
             if *name == "look-ahead" {
                 // Before tile 0's third tile-part is in, the counts stand.
                 assert!(
