@@ -20,8 +20,8 @@
 //!   header has fewer levels than the reduction, and the decode finds a
 //!   fault or a work bound in a lower tile's data first, which only decoding
 //!   can see (`decode_finds_first_in_a_lower_tile`). That excuse holds only
-//!   if decoding that tile alone (`Region::Tile`) gives the header's error
-//!   too, so a header that refuses a tile the decode accepts is still caught;
+//!   if decoding that tile alone (`Region::Tile`, in the color the file
+//!   codes) gives the header's error too, so a header that refuses a tile the decode accepts is still caught;
 //! - with `strict` off, also where the header refuses that tile and the
 //!   decode refuses the file first for a fault in the tile-parts, which the
 //!   decode's parse finds before it counts any tile and the header read does
@@ -211,16 +211,23 @@ fn decode_finds_first_in_a_lower_tile(
     // The decode of T alone, under the options as given, refuses T as the
     // header does: the header's refusal is real, and not a bug of its own
     // (such as ignoring a tile-part `COD` that brings T within the caps).
-    let region = rust_j2k::Region::Tile(tile);
-    let refused = debug(rust_j2k::decode_with(
-        data,
-        &options.clone().with_region(region.clone()),
-    ));
+    let refused = debug(rust_j2k::decode_with(data, &tile_alone(options, tile)));
     if refused != Some(format!("{header:?}")) {
         return false;
     }
-    let alone = lifted.with_region(region);
-    debug(rust_j2k::decode_with(data, &alone)) != expected
+    debug(rust_j2k::decode_with(data, &tile_alone(&lifted, tile))) != expected
+}
+
+/// `options` for the decode of one tile alone, in the color the file codes.
+/// A decode of a tile alone refuses sRGB output from sub-sampled sYCC chroma
+/// ("an area smaller than the image") before it reads the tile, which hides
+/// what these checks look for. The tile caps and a tile's own reduction
+/// refusal do not depend on the color output.
+fn tile_alone(options: &rust_j2k::DecodeOptions, tile: u32) -> rust_j2k::DecodeOptions {
+    options
+        .clone()
+        .with_color(rust_j2k::ColorOutput::AsCoded)
+        .with_region(rust_j2k::Region::Tile(tile))
 }
 
 /// Whether, with `strict` off, `decode` is a fault in the tile-parts that the
@@ -263,7 +270,7 @@ fn decode_finds_a_tile_parts_fault_first(
     header: &rust_j2k::Error,
     decode: &rust_j2k::Error,
 ) -> bool {
-    use rust_j2k::{Error, Region};
+    use rust_j2k::Error;
     if options.strict || from_own_header(decode) {
         return false;
     }
@@ -280,16 +287,11 @@ fn decode_finds_a_tile_parts_fault_first(
     if strict_header != expected && strict_header != debug(rust_j2k::decode_with(data, &strict)) {
         return false;
     }
-    if debug(rust_j2k::decode_with(
-        data,
-        &lifted.with_region(Region::Tile(tile)),
-    )) != expected
-    {
+    if debug(rust_j2k::decode_with(data, &tile_alone(&lifted, tile))) != expected {
         return false;
     }
     let other = u32::from(tile == 0);
-    let alone = options.clone().with_region(Region::Tile(other));
-    match rust_j2k::decode_with(data, &alone) {
+    match rust_j2k::decode_with(data, &tile_alone(options, other)) {
         Err(Error::InvalidOptions(detail))
             if other == 1
                 && detail
