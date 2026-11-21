@@ -1030,6 +1030,38 @@ fn what_only_decoding_finds_in_a_lower_tile_comes_first_in_the_decode() {
     assert_same_error(&bytes, &DecodeOptions::default());
 }
 
+/// The same, for a work bound: `tier1_work_bound/lower_tile_t1bomb_over_cap.j2k`
+/// has two tiles of 1024 x 1024. Tile 0 is a tier-1 bomb (9.2e7 sample-passes
+/// in 1.3 KB, past the code-block work bound) that a tile-part `COD` of the
+/// maximal precincts brings within the caps; the main header's 1x1 precincts
+/// put tile 1 over the precinct cap. The header read never decodes a block,
+/// so it names tile 1; the decode counts tile 0's work first.
+/// Tile 1 alone gives the header's error, as the `header` fuzz target's
+/// excuse needs.
+#[test]
+fn a_work_bound_in_a_lower_tile_comes_first_in_the_decode() {
+    let bytes = include_bytes!("fixtures/tier1_work_bound/lower_tile_t1bomb_over_cap.j2k");
+    let options = DecodeOptions::default();
+    let header = read_header_with(bytes, &options).unwrap_err();
+    assert!(
+        matches!(&header, Error::Limit(l) if l.kind() == OVER_PRECINCTS && l.message().starts_with("tile 1 ")),
+        "{header:?}"
+    );
+    let decoded = decode_with(bytes, &options).unwrap_err();
+    assert!(
+        matches!(&decoded, Error::Limit(l) if l.kind() == LimitKind::CodeBlockWork && l.message().starts_with("tile 0 ")),
+        "{decoded:?}"
+    );
+    let alone = decode_with(bytes, &options.clone().with_region(Region::Tile(1))).unwrap_err();
+    assert_eq!(format!("{alone:?}"), format!("{header:?}"));
+    // Lifting the bound lets the decode reach tile 1, which both refuse.
+    let unbounded = options.with_code_block_work_limit(WorkLimit::Unlimited);
+    assert_eq!(
+        format!("{:?}", decode_with(bytes, &unbounded).unwrap_err()),
+        format!("{header:?}")
+    );
+}
+
 /// A JP2 file is held to the same caps, and its header read refuses as its
 /// decode does.
 #[test]

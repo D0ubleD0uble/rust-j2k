@@ -219,7 +219,8 @@ const TILE_FAULTS: &[(&str, &str)] = &[
 
 /// Files where `read_header` refuses a tile, over a cap or under a reduction
 /// its own header cannot take, while `decode` first refuses the file for a
-/// fault in a lower tile's data, which `read_header` never reads. Each entry
+/// fault or a work bound in a lower tile's data, which `read_header` never
+/// reads. Each entry
 /// gives why, the resolution reduction at which the header refuses, and the
 /// refused tile, which
 /// `the_tile_a_header_refuses_is_refused_alone_by_the_decode` pins for every
@@ -246,6 +247,12 @@ const LOWER_TILE_FAULTS: &[(&str, &str, u8, u32)] = &[
     (
         "header/sycc_422_lower_tile_data_fault.jp2",
         "a byte after tile 0's last packet",
+        0,
+        1,
+    ),
+    (
+        "tier1_work_bound/lower_tile_t1bomb_over_cap.j2k",
+        "tile 0 is past the code-block work bound",
         0,
         1,
     ),
@@ -400,9 +407,10 @@ fn sweep_agrees_with_decode(reduction: u8) {
                     );
                     compared += 1;
                 }
-                (Err(Error::Limit(_) | Error::InvalidOptions(_)), Err(Error::Codestream(_)))
-                    if LOWER_TILE_FAULTS.iter().any(|(listed, ..)| *listed == name) =>
-                {
+                (
+                    Err(Error::Limit(_) | Error::InvalidOptions(_)),
+                    Err(Error::Codestream(_) | Error::Limit(_)),
+                ) if LOWER_TILE_FAULTS.iter().any(|(listed, ..)| *listed == name) => {
                     if lower_first.last() != Some(&name) {
                         lower_first.push(name.clone());
                     }
