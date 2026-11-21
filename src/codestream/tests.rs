@@ -2787,6 +2787,13 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
         in_tile(be16(0xFF30).to_vec()),
         Variant::Unsupported,
     ));
+    // An unrecognized marker whose chain to `SOD` steps over a segment-less
+    // code on the way: still a whole header, so `Unsupported`.
+    rows.push((
+        "unrecognized marker, then a reserved one, then SOD",
+        in_tile([seg(0xFF7F, &[]), be16(0xFF30).to_vec()].concat()),
+        Variant::Unsupported,
+    ));
 
     // Every code-block style flag that is not yet decoded, individually. Each
     // changes how Tier-1 reads a code-block, so none may be ignored. `bypass`,
