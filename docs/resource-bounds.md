@@ -359,11 +359,16 @@ almost all of it the offsets of tiles 0 to 65280; 63 ms for 1000 tiles of
 4096 components each with a tile-part `COD`; and under a millisecond for
 1024 tiles whose `Psot` ends inside a `COM` that holds the next tile-part,
 followed by 4 MiB of `COM`.
-On a file the decode refuses for a fault in its tile-parts,
-`read_header_with` may still give a `Limit` or a reduction refusal
-(`InvalidOptions`) instead of the decode's error
+With `strict` off, on a file the decode refuses for a fault in its
+tile-parts, `read_header_with` may still give a `Limit` or a reduction
+refusal (`InvalidOptions`) instead of the decode's error
 where it refuses a tile it found a tile-part for, as it does not check the
-tile-parts it passes nor walk past that tile. The decode can also refuse
+tile-parts it passes nor walk past that tile. The decode's parse would find
+the fault, but at the cost of the `strict` on refusal above (1.75 s and
+281 MiB at 255 tile-parts a tile); with `strict` off that refusal takes
+45 ms and 65 KiB of heap. `tests/header_tile_parts_fault.rs`
+shows the difference, and the `header` fuzz target excuses it only with
+`strict` off. The decode can also refuse
 the file before it gets to the tile refused, for what only decoding finds,
 and so name another tile, kind or factor, or give another error: a fault or
 a work bound in the packets or code-blocks of a lower tile (with `strict`
