@@ -131,7 +131,10 @@ fn lenient() -> DecodeOptions {
 /// Files whose header reads only because a tile-part `COD` brings a tile
 /// over a cap under the main header within the caps, so it does not read
 /// from the prefix through the first `SOT`.
-const RESCUED_BY_A_TILE_PART: &[&str] = &["header/own_reduction_after_lower_data_fault.j2k"];
+const RESCUED_BY_A_TILE_PART: &[&str] = &[
+    "header/own_reduction_after_lower_data_fault.j2k",
+    "header/rescued_lower_tile_then_data_fault.j2k",
+];
 
 /// Every prefix of `bytes` that ends before the whole first `SOT` marker of
 /// the codestream which starts at `cs_at`, with that `SOT` at `cs_at + sot`,

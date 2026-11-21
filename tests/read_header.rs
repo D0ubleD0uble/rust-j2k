@@ -13,8 +13,8 @@
 use std::path::{Path, PathBuf};
 
 use rust_j2k::{
-    ColorSpace, DecodeOptions, Error, Header, Image, Jp2Metadata, Ratio, decode_with, read_header,
-    read_header_with,
+    ColorSpace, DecodeOptions, Error, Header, Image, Jp2Metadata, Ratio, Region, decode_with,
+    read_header, read_header_with,
 };
 
 /// `result` with its error as its `Debug` text, so that two results compare
@@ -57,6 +57,8 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// with no `EOC`, which only the decode reads.
 /// `header/own_reduction_after_lower_data_fault.j2k` holds too little data
 /// for tile 0's packets, which only the decode reads.
+/// `header/rescued_lower_tile_then_data_fault.j2k` has a byte after tile 2's
+/// last packet, which only the decode reads.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
@@ -65,6 +67,10 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     (
         "header/own_reduction_after_lower_data_fault.j2k",
         "tile 0's data ends before its last packet",
+    ),
+    (
+        "header/rescued_lower_tile_then_data_fault.j2k",
+        "a byte after tile 2's last packet",
     ),
     (
         "incremental/segsym_tiles_flipped.j2k",
@@ -205,18 +211,69 @@ const TILE_FAULTS: &[(&str, &str)] = &[
 
 /// Files where `read_header` refuses a tile, over a cap or under a reduction
 /// its own header cannot take, while `decode` first refuses the file for a
-/// fault in a lower tile's data, which `read_header` never reads, and why.
-const LOWER_TILE_FAULTS: &[(&str, &str)] = &[
+/// fault in a lower tile's data, which `read_header` never reads. Each entry
+/// gives why, the resolution reduction at which the header refuses, and the
+/// refused tile, which
+/// `the_tile_a_header_refuses_is_refused_alone_by_the_decode` pins for every
+/// file listed.
+const LOWER_TILE_FAULTS: &[(&str, &str, u8, u32)] = &[
     (
         "header/lower_tile_data_long.j2k",
         "a byte after tile 0's last packet",
+        0,
+        2,
     ),
-    ("header/lower_tile_data_short.j2k", "no data in tile 0"),
+    (
+        "header/lower_tile_data_short.j2k",
+        "no data in tile 0",
+        0,
+        2,
+    ),
     (
         "header/own_reduction_after_lower_data_fault.j2k",
         "tile 0's data ends before its last packet",
+        1,
+        1,
     ),
 ];
+
+/// The `header` fuzz target excuses a header refusal of tile T, where the
+/// decode first finds a fault in another tile's data, only if decoding T
+/// alone gives the header's error. Pin that here for every listed file, at
+/// the options where the header refuses.
+#[test]
+fn the_tile_a_header_refuses_is_refused_alone_by_the_decode() {
+    for &(name, _, reduction, tile) in LOWER_TILE_FAULTS {
+        let options = DecodeOptions::default().with_resolution_reduction(reduction);
+        let bytes = std::fs::read(fixtures().join(name)).unwrap();
+        let header = read_header_with(&bytes, &options).unwrap_err();
+        let alone = decode_with(&bytes, &options.with_region(Region::Tile(tile)));
+        assert_eq!(
+            keyed(alone.map(|_| ())).unwrap_err(),
+            format!("{header:?}"),
+            "{name}: tile {tile} alone"
+        );
+    }
+}
+
+/// Tile 1 is over the code-block cap under the main header and within it
+/// under its own tile-part `COD`; tile 2 has a byte after its last packet.
+/// The header reads, and decoding tile 1 alone succeeds, so a header that
+/// refused tile 1 (ignoring its `COD`) would be a bug that the `header` fuzz
+/// target must not excuse by the fault in tile 2.
+#[test]
+fn a_tile_part_cod_rescues_a_tile_the_header_reads_past_a_later_fault() {
+    let bytes =
+        std::fs::read(fixtures().join("header/rescued_lower_tile_then_data_fault.j2k")).unwrap();
+    let options = DecodeOptions::default();
+    assert!(read_header_with(&bytes, &options).is_ok());
+    let error = decode_with(&bytes, &options).unwrap_err();
+    assert!(
+        matches!(&error, Error::Codestream(d) if d.message() == "tile 2 has 1 byte(s) left after the last packet"),
+        "{error:?}"
+    );
+    decode_with(&bytes, &options.with_region(Region::Tile(1))).expect("tile 1 alone decodes");
+}
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -330,7 +387,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                     compared[reduction as usize] += 1;
                 }
                 (Err(Error::Limit(_) | Error::InvalidOptions(_)), Err(Error::Codestream(_)))
-                    if LOWER_TILE_FAULTS.iter().any(|(listed, _)| *listed == name) =>
+                    if LOWER_TILE_FAULTS.iter().any(|(listed, ..)| *listed == name) =>
                 {
                     if lower_first.last() != Some(&name) {
                         lower_first.push(name.clone());
@@ -367,7 +424,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     assert_eq!(differing, listed);
     let listed: Vec<String> = LOWER_TILE_FAULTS
         .iter()
-        .map(|(n, _)| n.to_string())
+        .map(|(n, ..)| n.to_string())
         .collect();
     assert_eq!(lower_first, listed);
     // Files whose `cdef` reorders the channels are in the sweep. Their
