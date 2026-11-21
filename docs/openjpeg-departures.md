@@ -52,6 +52,7 @@ refusal under `ColorOutput::Srgb`).
 | [MIXED code-blocks](#mixed-code-blocks) | decodes; OpenJPEG refuses the code-block style | 1 |
 | [Set stuffing bits in the HT VLC and MagRef streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams) | skips the bit; OpenJPEG ORs it into the next byte | 1 |
 | [The `NLT` marker](#the-nlt-marker) | refuses as `Unsupported`; OpenJPEG skips it and decodes | 3 |
+| [An unknown marker in the main header](#an-unknown-marker-in-the-main-header) | refuses as `Unsupported`; OpenJPEG warns, skips it and decodes | 3 |
 | [A tile size that overflows OpenJPEG's tile count](#a-tile-size-that-overflows-openjpegs-tile-count) | decodes one tile; OpenJPEG refuses | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
@@ -511,9 +512,9 @@ passes cost the same against the code-block work bound as passes with bytes.
 | - | - |
 | This decoder | refuses each stream below |
 | OpenJPEG 2.5.0 | decodes it, with a warning or none, or with invented values |
-| Standard | B.11 (only whole packets may be missing), Table A-33 (POC ranges), the step count a decomposition needs, T.814 7.1 and 7.6 (HT cleanup segments), T.814 7.1.5 (HT refinement segments) |
+| Standard | B.11 (only whole packets may be missing), Table A-33 (POC ranges), G.2 and G.3 (the color transform's wavelet), the step count a decomposition needs, T.814 7.1 and 7.6 (HT cleanup segments), T.814 7.1.5 (HT refinement segments) |
 | Rule | 3 |
-| Tests and fixtures | the reject matrix in `src/codestream/tests.rs`; `tests/fixtures/partial/tp_r.j2k`; the refusal tests in `src/tier1/ht/tests.rs` |
+| Tests and fixtures | the reject matrix in `src/codestream/tests.rs`; `tests/fixtures/partial/tp_r.j2k`; the refusal tests in `src/tier1/ht/tests.rs`; `tests/openjpeg_departures_579.rs` |
 | Decided | the interop rules: 2026-11-12, and #269 |
 
 Three tier-2 checks reject streams OpenJPEG decodes with a warning: an `Nsop`
@@ -531,7 +532,9 @@ malformed, or the codestream is missing data the standard requires and
 OpenJPEG fills the gap with invented values. Four checks on HT cleanup
 segments and one on HT refinement segments are of the same kind ([HT cleanup
 segments](#ht-cleanup-segments), [HT refinement
-segments](#ht-refinement-segments)).
+segments](#ht-refinement-segments)). A color transform over mixed wavelets is
+One check is of a third kind: OpenJPEG decodes it to a wrong image with no warning ([A color
+transform over mixed wavelets](#a-color-transform-over-mixed-wavelets)).
 The entries below give each one.
 
 ### SOP sequence numbers
@@ -717,6 +720,29 @@ stuffing bit ([Set stuffing bits in the HT VLC and MagRef
 streams](#set-stuffing-bits-in-the-ht-vlc-and-magref-streams)). Both decode a
 block's cleanup pass alone when its refinement segment is empty
 (`Z_blk = 1`, B.3) or when the cleanup pass codes the block's last bit-plane.
+
+### A color transform over mixed wavelets
+
+`SGcod`'s MCT byte set, and the first three components not all on one
+wavelet (a `COC` or tile `COC` moves one to the 9/7 or the 5/3 against the
+others). G.2 defines the reversible transform (RCT) for the 5/3 and G.3 the
+irreversible one (ICT) for the 9/7, so over a mix neither is defined. This
+decoder refuses the file as `Marker`, "the color transform applies but
+component 1 uses a different wavelet than component 0", in the main header
+or a tile. OpenJPEG decodes it with no warning. It picks the transform from
+component 0's wavelet (`tcd.c:2161`), here the integer RCT, and runs it over
+component 1's floating-point samples. The image saturates (component 0 holds
+only 0 and 255, component 1 only 0 and 128) and matches no RCT, ICT or
+no-transform reference: a wrong image, which is why this is rule 3.
+
+Repro, from `tests/fixtures/multicomponent_lossless.j2k`: set the MCT byte of
+`COD` to 1, then add a `COC` for component 1 with the 9/7
+(`FF53 0009 01 00 02 02 02 00 00`) and a `QCC` with the derived step
+(`FF5D 0006 01 41 4000`) after the `QCD`. `opj_decompress` (2.5.0) prints only
+`[INFO]` lines, no warning or error, and writes that image. This decoder returns
+`Marker`. Pinned by `a_color_transform_over_mixed_wavelets_is_marker` and, for
+a tile `COC`, `a_tile_coc_that_mixes_the_wavelets_under_mct_names_the_tile`
+(`tests/openjpeg_departures_579.rs`), and in `src/codestream/tests.rs`.
 
 ### Two faults in one file
 
@@ -1368,8 +1394,47 @@ bits that T.814 says to drop.
 that are not the image the encoder meant, with no error. OpenJPEG does that:
 a Part 1 codestream with an `NLT` segment added to the main header decodes to
 the same bytes as without it. This decoder
-refuses the file, as it does the other Part 2 markers (`MCT`, `MCC`, `MCO`,
-`CBD`).
+refuses the file, as it does every Part 2 marker (`DCO`, `VMS`, `DFS`, `ADS`,
+`MCT`, `MCC`, `MCO`, `CBD`, `ATK`; 0xFF70 to 0xFF79), in either header. The
+message names the marker. OpenJPEG defines only `MCT`, `MCC`, `MCO` and `CBD`
+in `j2k.h`. It reads those four (`j2k.c:1426-1431`), and skips the other six (`DCO`, `VMS`,
+`DFS`, `ADS`, `NLT`, `ATK`) with "[WARNING] Unknown marker"
+([below](#an-unknown-marker-in-the-main-header)).
+
+## An unknown marker in the main header
+
+| | |
+| - | - |
+| This decoder | refuses a marker it does not know in the main header as `Unsupported` |
+| OpenJPEG 2.5.0 | warns "Unknown marker", skips the segment and decodes |
+| Standard | A marker code belongs to some part of the standard; Part 1 does not say how to read one a decoder does not know |
+| Rule | 3 (an error over a wrong image) |
+| Tests and fixtures | `an_unknown_marker_in_the_main_header_is_unsupported` (`tests/openjpeg_departures_579.rs`); `unknown_marker_segments_are_walked_then_reported_unsupported` and the reject matrix (`src/codestream/tests.rs`) |
+| Decided | the refusal began in #84 (5ed9748); no decision recorded; entry added in #579 |
+
+A marker this decoder does not know may change what the packet data means, as
+`NLT` does, and the walk cannot tell. So it refuses, where OpenJPEG skips it
+by its length. Reserved segment-less markers
+(0xFF30 to 0xFF3F) are skipped in the main header, as A.1.3 says.
+
+Repro: add `FF7F 0002` (an unassigned code, length 2, no body) before the
+`COD` of `tests/fixtures/multicomponent_lossless.j2k`. `opj_decompress`
+(2.5.0) prints
+
+```text
+[INFO] Start to read j2k main header (0).
+[WARNING] Unknown marker
+[INFO] Main header has been correctly decoded.
+```
+
+and writes an image byte-identical to the one it writes for the unedited file.
+This decoder returns `Unsupported`: "unrecognized marker 0xFF7F in the main
+header".
+
+The Part 2 markers OpenJPEG does not define (`DCO`, `VMS`, `DFS`, `ADS`,
+`NLT`, `ATK`; codes in ITU-T T.801, Table A.19) get the same outcome from
+OpenJPEG, and `Unsupported` here, with the marker named ([The `NLT`
+marker](#the-nlt-marker)).
 
 ## A tile size that overflows OpenJPEG's tile count
 

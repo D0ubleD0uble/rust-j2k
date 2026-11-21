@@ -644,8 +644,7 @@ pub enum LimitKind {
     /// allows a tile: one for each 2048 samples it allows, and at least 2^18.
     TilePrecincts,
     /// A tile's progression order change (`POC`) volumes past a fixed cap:
-    /// more than 32 of them, or more packets than the decoder tracks for
-    /// them.
+    /// more than 32 of them.
     PocVolumes,
     /// A code-block of more than 30 bit-planes.
     BitPlanes,

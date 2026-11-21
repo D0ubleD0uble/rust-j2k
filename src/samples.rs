@@ -199,20 +199,32 @@ pub(crate) fn over(what: &str, total: u64, cap: Cap) -> Error {
     )
 }
 
-/// The [`Error::Limit`] for tile `tile`, whose geometry holds `count`
-/// code-blocks ([`LimitKind::TileCodeBlocks`](crate::LimitKind)) or precincts
-/// ([`LimitKind::TilePrecincts`](crate::LimitKind)), more than `cap` allows a
-/// tile ([`Cap::tile_blocks`], [`Cap::tile_precincts`]).
+/// The [`Error::Limit`] for tile `tile`, whose geometry holds the
+/// `(precincts, code-blocks)` of `counts`, more than `cap` allows a tile in
+/// the count `kind` names: the precincts for
+/// [`LimitKind::TilePrecincts`](crate::LimitKind) ([`Cap::tile_precincts`]),
+/// the code-blocks for [`LimitKind::TileCodeBlocks`](crate::LimitKind)
+/// ([`Cap::tile_blocks`]).
 ///
-/// The cap grows with the sample limit, so the refusal names the
-/// `WorkLimit::Raised` factor of the cap's default that admits the tile, or
-/// twice the factor it ran under when that is more, as the work bounds do:
-/// the tiles after it may need more. Under [`WorkLimit::AtMost`] it names
-/// that ceiling and no retry. Where the sample limit that would admit the tile
-/// is past what the target can address, it is
-/// [`LimitKind::AddressSpace`](crate::LimitKind), which no option raises, as
-/// [`over`] gives for the samples.
-pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap) -> Error {
+/// The caps grow with the sample limit, so the refusal names the
+/// `WorkLimit::Raised` factor of the cap's default that admits both the
+/// tile's counts, or twice the factor it ran under when that is more, as the
+/// work bounds do: the tiles after it may need more. A factor that admitted
+/// only the count `kind` names could be refused again for the other. Under
+/// [`WorkLimit::AtMost`] it names that ceiling and no retry. Where the sample
+/// limit that would admit the tile is past what the target can address, it
+/// is [`LimitKind::AddressSpace`](crate::LimitKind), which no option raises,
+/// as [`over`] gives for the samples.
+pub(crate) fn over_tile(
+    kind: crate::LimitKind,
+    tile: u32,
+    (precincts, blocks): (u64, u64),
+    cap: Cap,
+) -> Error {
+    let count = match kind {
+        crate::LimitKind::TilePrecincts => precincts,
+        _ => blocks,
+    };
     let (noun, limit, per, floor) = match kind {
         crate::LimitKind::TilePrecincts => (
             "precincts",
@@ -228,8 +240,7 @@ pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap)
         ),
     };
     let head = format!("tile {tile} holds {count} {noun}, more than the {limit} a tile may hold");
-    let needed = count.saturating_mul(per);
-    if needed > ADDRESSABLE_SAMPLES {
+    if count.saturating_mul(per) > ADDRESSABLE_SAMPLES {
         // No sample limit lifts this one, so it is not the tile cap's kind:
         // it is the address space's, as `over` reports it.
         let most = floor.max(ADDRESSABLE_SAMPLES / per);
@@ -247,21 +258,50 @@ pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap)
             ),
         );
     }
+    // The precincts are checked first, so only a precinct refusal can find
+    // the code-blocks over their cap too.
+    let blocks_over = kind == crate::LimitKind::TilePrecincts && blocks > cap.tile_blocks();
+    if blocks_over && blocks.saturating_mul(SAMPLES_PER_BLOCK) > ADDRESSABLE_SAMPLES {
+        // No sample limit admits the code-blocks, so none admits the tile.
+        let most = TILE_BLOCKS_FLOOR.max(ADDRESSABLE_SAMPLES / SAMPLES_PER_BLOCK);
+        return Error::limit_fixed(
+            crate::LimitKind::AddressSpace,
+            format!(
+                "{head}, and its {blocks} code-blocks need a sample limit past what this \
+                 target can address (at most {most} code-blocks a tile)"
+            ),
+        );
+    }
+    let other = if blocks_over {
+        format!(
+            ", and its {blocks} code-blocks are more than the {} a tile may hold too",
+            cap.tile_blocks()
+        )
+    } else {
+        String::new()
+    };
     if let Some(n) = cap.at_most {
         return Error::limit_unhinted(
             kind,
-            format!("{head} under `WorkLimit::AtMost({n})` (see `DecodeOptions::sample_limit`)"),
+            format!(
+                "{head} under `WorkLimit::AtMost({n})` (see `DecodeOptions::sample_limit`){other}"
+            ),
         )
         .refused_at(tile, count);
     }
+    // The sample limit that admits the code-blocks too: within what the
+    // target addresses, as both counts are by here.
+    let both = precincts
+        .saturating_mul(SAMPLES_PER_PRECINCT)
+        .max(blocks.saturating_mul(SAMPLES_PER_BLOCK));
     let refusal = crate::limit_hint::tile_geometry(
         kind,
         &format!(
             "{head} under the sample limit of {} samples, one for each {per} samples it \
-             allows (see `DecodeOptions::sample_limit`)",
+             allows (see `DecodeOptions::sample_limit`){other}",
             cap.allowed
         ),
-        needed,
+        both,
         cap.allowed,
         cap.default,
     );
@@ -637,22 +677,29 @@ mod tests {
     #[test]
     fn a_tile_refusal_names_a_factor_of_the_sample_limit() {
         use crate::LimitKind::{AddressSpace, TileCodeBlocks, TilePrecincts};
-        let hint = |kind, count, cap| match over_tile(kind, 7, count, cap) {
-            Error::Limit(limit) => {
-                // Past the address space it is that kind, which no option
-                // raises, whichever tile cap it was counted against.
-                let past = count.saturating_mul(if kind == TilePrecincts {
-                    SAMPLES_PER_PRECINCT
-                } else {
-                    SAMPLES_PER_BLOCK
-                }) > ADDRESSABLE_SAMPLES;
-                let expected = if past { AddressSpace } else { kind };
-                assert_eq!(limit.kind(), expected, "{limit}");
-                assert_eq!(limit.kind().is_adjustable(), !past, "{limit}");
-                assert!(limit.message().starts_with("tile 7 holds "), "{limit}");
-                limit.retry_with()
+        let hint = |kind, count: u64, cap| {
+            let counts = if kind == TilePrecincts {
+                (count, 0)
+            } else {
+                (0, count)
+            };
+            match over_tile(kind, 7, counts, cap) {
+                Error::Limit(limit) => {
+                    // Past the address space it is that kind, which no option
+                    // raises, whichever tile cap it was counted against.
+                    let past = count.saturating_mul(if kind == TilePrecincts {
+                        SAMPLES_PER_PRECINCT
+                    } else {
+                        SAMPLES_PER_BLOCK
+                    }) > ADDRESSABLE_SAMPLES;
+                    let expected = if past { AddressSpace } else { kind };
+                    assert_eq!(limit.kind(), expected, "{limit}");
+                    assert_eq!(limit.kind().is_adjustable(), !past, "{limit}");
+                    assert!(limit.message().starts_with("tile 7 holds "), "{limit}");
+                    limit.retry_with()
+                }
+                other => panic!("{other:?}"),
             }
-            other => panic!("{other:?}"),
         };
         let floor = cap(&WorkLimit::Default, 0);
         assert_eq!(
@@ -680,6 +727,127 @@ mod tests {
             None
         );
         assert_eq!(hint(TilePrecincts, u64::MAX, floor), None);
+    }
+
+    /// A refusal for one count names a factor that admits the tile's other
+    /// count too, whichever of the two needs more, and keeps the kind of the
+    /// count it is for. A tile within the precinct cap is refused for its
+    /// code-blocks, whose need is then the larger.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_tile_refusal_names_a_factor_for_both_counts() {
+        use crate::LimitKind::{TileCodeBlocks, TilePrecincts};
+        let hint = |kind, counts, cap| match over_tile(kind, 7, counts, cap) {
+            Error::Limit(limit) => {
+                assert_eq!(limit.kind(), kind, "{limit}");
+                (limit.retry_with(), limit.message().to_owned())
+            }
+            other => panic!("{other:?}"),
+        };
+        let floor = cap(&WorkLimit::Default, 0);
+        // The code-blocks need three times the default, the precincts
+        // twice.
+        let (retry, message) = hint(TilePrecincts, ((1 << 18) + 1, 3 << 20), floor);
+        assert_eq!(retry, Some(WorkLimit::Raised(3)), "{message}");
+        assert!(
+            message.contains(
+                ", and its 3145728 code-blocks are more than the 1048576 a tile may hold too;"
+            ),
+            "{message}"
+        );
+        // The precincts need five times the default, the code-blocks twice.
+        let (retry, message) = hint(TilePrecincts, (5 << 18, (1 << 20) + 1), floor);
+        assert_eq!(retry, Some(WorkLimit::Raised(5)), "{message}");
+        assert!(
+            message.contains(" code-blocks are more than the "),
+            "{message}"
+        );
+        // Only the precincts over: the code-blocks need less.
+        let (retry, message) = hint(TilePrecincts, (5 << 18, 1 << 20), floor);
+        assert_eq!(retry, Some(WorkLimit::Raised(5)), "{message}");
+        assert!(!message.contains(", and its "), "{message}");
+        // Under `Raised(2)` the doubling still holds as the floor of the
+        // hint, and the larger need passes it.
+        let raised = cap(&WorkLimit::Raised(2), 0);
+        let (retry, _) = hint(TilePrecincts, ((1 << 19) + 1, 6 << 20), raised);
+        assert_eq!(retry, Some(WorkLimit::Raised(6)));
+        let (retry, _) = hint(TileCodeBlocks, (1 << 19, (1 << 21) + 1), raised);
+        assert_eq!(retry, Some(WorkLimit::Raised(4)));
+        // Under `AtMost` it names no factor, but still says the code-blocks
+        // are over.
+        let at_most = cap(&WorkLimit::AtMost(1 << 29), 0);
+        let (retry, message) = hint(TilePrecincts, ((1 << 18) + 1, 3 << 20), at_most);
+        assert_eq!(retry, None, "{message}");
+        assert!(
+            message.contains(
+                ", and its 3145728 code-blocks are more than the 1048576 a tile may hold too"
+            ),
+            "{message}"
+        );
+    }
+
+    /// A tile whose code-blocks need a sample limit within the address space
+    /// but past `u32::MAX` times the default names `Unlimited`, not the
+    /// largest `Raised` factor, which would not admit it. Just within that
+    /// factor, it names it.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_tile_past_every_raised_factor_names_unlimited() {
+        use crate::LimitKind::{TileCodeBlocks, TilePrecincts};
+        let raised = cap(&WorkLimit::Raised(1 << 27), 0);
+        let blocks = (1u64 << 52) - 1;
+        assert!(blocks * SAMPLES_PER_BLOCK <= ADDRESSABLE_SAMPLES);
+        for kind in [TilePrecincts, TileCodeBlocks] {
+            let precincts = if kind == TilePrecincts { 1 << 46 } else { 1 };
+            let Error::Limit(limit) = over_tile(kind, 7, (precincts, blocks), raised) else {
+                unreachable!()
+            };
+            assert_eq!(limit.kind(), kind, "{limit}");
+            assert_eq!(limit.retry_with(), Some(WorkLimit::Unlimited), "{limit}");
+            assert!(cap(&WorkLimit::Unlimited, 0).tile_blocks() >= blocks);
+            assert!(cap(&WorkLimit::Raised(u32::MAX), 0).tile_blocks() < blocks);
+        }
+        // Code-blocks that `Raised(u32::MAX)` just admits.
+        let blocks = u64::from(u32::MAX) * MAX_IMAGE_SAMPLES / SAMPLES_PER_BLOCK;
+        let Error::Limit(limit) = over_tile(TileCodeBlocks, 7, (1, blocks), raised) else {
+            unreachable!()
+        };
+        assert_eq!(
+            limit.retry_with(),
+            Some(WorkLimit::Raised(u32::MAX)),
+            "{limit}"
+        );
+    }
+
+    /// A tile refused for its precincts whose code-blocks need a sample limit
+    /// past what the target addresses is refused as `AddressSpace`, as no
+    /// factor admits the tile.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_tile_whose_other_count_is_past_the_address_space_is_not_adjustable() {
+        let raised = cap(&WorkLimit::Raised(1 << 28), 0);
+        let counts = (1 << 47, 1 << 53);
+        let Error::Limit(limit) = over_tile(crate::LimitKind::TilePrecincts, 7, counts, raised)
+        else {
+            unreachable!()
+        };
+        assert_eq!(limit.kind(), crate::LimitKind::AddressSpace, "{limit}");
+        assert_eq!(limit.retry_with(), None, "{limit}");
+        assert!(
+            limit.message().starts_with(
+                "tile 7 holds 140737488355328 precincts, more than the 70368744177664 a tile \
+                 may hold, and its 9007199254740992 code-blocks need a sample limit past what \
+                 this target can address (at most 4503599627370495 code-blocks a tile)"
+            ),
+            "{limit}"
+        );
+        // One code-block fewer than the most is not.
+        let counts = (1 << 47, (1 << 52) - 1);
+        let Error::Limit(limit) = over_tile(crate::LimitKind::TilePrecincts, 7, counts, raised)
+        else {
+            unreachable!()
+        };
+        assert_eq!(limit.kind(), crate::LimitKind::TilePrecincts, "{limit}");
     }
 
     /// A refusal under a raised limit names a factor of the default, not of

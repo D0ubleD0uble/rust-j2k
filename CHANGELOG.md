@@ -54,6 +54,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The refusal of a Part 2 marker names `DCO`, `VMS`, `DFS`, `ADS` and `ATK`
+  (0xFF70 to 0xFF73 and 0xFF79) as it does the others, where it called them
+  unrecognized. The error variant is unchanged (`Unsupported`) (#579).
+- `docs/openjpeg-departures.md` records two refusals OpenJPEG does not make:
+  an unknown marker in the main header, and a color transform over mixed
+  wavelets (#579).
 - `IncrementalDecoder::refine` returns `Result<Refined>` in place of
   `Result<Option<Image>>`. To migrate, call `.image()`:
   `decoder.refine()?.image()` is the `Option<Image>` it returned before.
@@ -179,7 +185,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SOD` within the input. Each was refused with `strict` on, and is now
   refused with `strict` off too, as `opj_decompress -allow-partial` refuses
   it (#574).
-
+- A tile over both the precinct and the code-block cap is still refused for
+  its precincts (`LimitKind::TilePrecincts`), but `retry_with` now names a
+  `WorkLimit::Raised` factor that admits its code-blocks too, and the
+  message says the code-blocks are over. It named the factor for the
+  precincts alone, so a tile whose code-blocks need more took a second
+  refusal and retry. Where the code-blocks need a sample limit past what
+  the target can address, the tile is refused as `LimitKind::AddressSpace`
+  at once. A tile refusal that needs more than `Raised(u32::MAX)` allows
+  names `WorkLimit::Unlimited`, where it named `Raised(u32::MAX)`, which
+  did not admit the tile. `read_header_with`, `decode_with` and
+  `IncrementalDecoder` name the same factor (#575).
+- The `LimitKind::PocVolumes` docs no longer name a case no caller sees
+  (more packets than the decoder tracks): the kind is for more than 32
+  `POC` volumes in a tile (#575).
 - With `strict` on, `read_header_with` gives the decode's error for a file
   where a tile over a code-block or precinct cap under the main header has
   no tile-part: the decode's error for the tile-parts, which is the first
