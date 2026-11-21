@@ -6,7 +6,9 @@
 //! main header puts over them back within (the tile-part headers are read,
 //! but no tile data is joined or copied). Where every tile of many
 //! components has a tile-part `COD` that brings it within, the peak is one
-//! tile's coding parameters, however many tiles there are.
+//! tile's coding parameters, however many tiles there are. Where a tile is
+//! refused, the read walks every tile-part for the fault the decode gives
+//! first, and holds about 10 bytes a tile for that walk.
 //!
 //! The peak is measured with a counting global allocator, so this file holds a
 //! single test: a second one running in parallel would count into the same
@@ -24,7 +26,7 @@ mod synth;
 use alloc::{CURRENT, PEAK};
 use std::sync::atomic::Ordering;
 
-use rust_j2k::{DecodeOptions, Region, Window, read_header_with};
+use rust_j2k::{DecodeOptions, Error, Region, Window, read_header_with};
 
 #[global_allocator]
 static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
@@ -91,12 +93,26 @@ fn peak_of_header_read(bytes: &[u8]) -> usize {
 
 /// The same under `options`.
 fn peak_of_header_read_with(bytes: &[u8], options: &DecodeOptions) -> usize {
+    let (peak, header) = peak_and_result(bytes, options);
+    header.expect("the header is admitted");
+    peak
+}
+
+/// The same, for a read that refuses the file, with its error.
+fn peak_of_refusal(bytes: &[u8], options: &DecodeOptions) -> (usize, rust_j2k::Error) {
+    let (peak, header) = peak_and_result(bytes, options);
+    (peak, header.expect_err("the read refuses the file"))
+}
+
+fn peak_and_result(
+    bytes: &[u8],
+    options: &DecodeOptions,
+) -> (usize, rust_j2k::Result<rust_j2k::Header>) {
     let before = CURRENT.load(Ordering::SeqCst);
     PEAK.store(before, Ordering::SeqCst);
-    let header = read_header_with(bytes, options).expect("the header is admitted");
+    let header = read_header_with(bytes, options);
     let peak = PEAK.load(Ordering::SeqCst) - before;
-    drop(header);
-    peak
+    (peak, header)
 }
 
 #[test]
@@ -139,12 +155,51 @@ fn the_header_read_holds_no_tile_data() {
     let peak = peak_of_header_read_with(&most_tiles(), &last);
     eprintln!("{tiles} tiles, the last read: {peak} bytes at the peak");
     assert!(peak < PEAK_BYTES + tiles, "{peak} bytes");
+
+    // The last tile refused, as it has no tile-part `COD`, and read alone:
+    // the read then walks every tile-part for the fault the decode would
+    // give first, with 6 bytes a tile, and 4 more for each tile whose first
+    // tile-part has its own `COD`. With `00 00` where the `EOC` should be,
+    // that fault is the read's error.
+    for (end, strict) in [
+        (EOC, true),
+        (EOC, false),
+        (&[0, 0][..], true),
+        (&[0, 0], false),
+    ] {
+        let options = last.clone().with_strict(strict);
+        let (peak, error) = peak_of_refusal(&most_tiles_last_refused(end), &options);
+        eprintln!("{tiles} tiles, the last refused, strict {strict}: {peak} bytes at the peak");
+        assert!(peak < PEAK_BYTES + 11 * tiles, "{peak} bytes");
+        let fault = end != EOC;
+        assert_eq!(
+            matches!(&error, Error::Codestream(d)
+                if d.message() == "expected `SOT` or `EOC` after a tile-part, found 0x0000"),
+            fault,
+            "{error:?}"
+        );
+        assert_eq!(matches!(error, Error::Limit(_)), !fault, "{error:?}");
+    }
 }
+
+const EOC: &[u8] = &[0xFF, 0xD9];
 
 /// 65535 tiles of 520 x 512 in a 255 x 257 grid, in 1x1 precincts under the
 /// main header (266,240 a tile, over the 2^18 cap), each with a tile-part
 /// `COD` of the maximal precincts and one empty packet.
 fn most_tiles() -> Vec<u8> {
+    most_tiles_with(u16::MAX, EOC)
+}
+
+/// [`most_tiles`], but the last tile has no tile-part `COD`, so it is
+/// refused, and `end` closes the codestream.
+fn most_tiles_last_refused(end: &[u8]) -> Vec<u8> {
+    most_tiles_with(u16::MAX - 1, end)
+}
+
+/// [`most_tiles`], with a tile-part `COD` in tiles 0 to `own - 1` only, and
+/// `end` after the last tile-part.
+fn most_tiles_with(own_up_to: u16, end: &[u8]) -> Vec<u8> {
     let mut cod = synth::cod_body(1, 0, 4, 0);
     cod[0] = 1;
     cod.push(0x00);
@@ -158,8 +213,9 @@ fn most_tiles() -> Vec<u8> {
     .concat();
     let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
     for tile in 0..u16::MAX {
-        bytes.extend(synth::tile_part(tile, 0, 1, &own, &[0]));
+        let header: &[u8] = if tile < own_up_to { &own } else { &[] };
+        bytes.extend(synth::tile_part(tile, 0, 1, header, &[0]));
     }
-    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes.extend_from_slice(end);
     bytes
 }

@@ -13,6 +13,7 @@
 //! ([`crate::fuzz::tile_parts_walks_agree`]).
 //!
 //! [`parse_tiles_with`]: super::parse_tiles_with
+//! [`walk_tiles`]: super::walk_tiles
 
 use std::cell::OnceCell;
 

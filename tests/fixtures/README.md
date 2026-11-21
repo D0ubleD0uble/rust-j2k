@@ -782,11 +782,11 @@ packet; tile 1 has no data. The first is 3000 wide: tile 1's tile-part
 no tile-part. With `strict` on, `decode_with` refuses it for the missing
 tile, and `read_header_with`, which refuses tile 1 first, gives that error
 too; with `strict` off both refuse tile 1. The second is 2000 wide and ends
-in `00 00` where the `EOC` should be. With `strict` off, `read_header_with`
-refuses tile 1 for its precincts while `decode_with` refuses the file for the
-chain ("expected `SOT` or `EOC` after a tile-part, found 0x0000"), a
-difference the `read_header_with` docs list and the `header` target excuses
-only with `strict` off; with `strict` on both give the chain's error.
+in `00 00` where the `EOC` should be. `read_header_with` and `decode_with`
+both refuse it for the chain ("expected `SOT` or `EOC` after a tile-part,
+found 0x0000"), with `strict` on and off. Before #545, with `strict` off,
+`read_header_with` refused tile 1 for its precincts instead, a difference
+the `header` target then excused.
 `opj_decompress` 2.5.0 fails to decode tile 1 of both, with
 `-allow-partial` too. They have no license restriction.
 
@@ -796,9 +796,9 @@ written by `one_tile` in the same file, and its test rebuilds it byte for
 byte: one 1000 x 1000 gray tile whose main `COD` gives no levels and 1x1
 precincts, over the precinct cap, with an empty tile-part and `00 00` where
 the `EOC` should be. It is the one-tile case of
-`strict_off_chain_fault.j2k`: with `strict` off the header read refuses
-tile 0 and the decode refuses the chain, and the `header` target's excuse
-has no other tile to decode alone. `opj_decompress` 2.5.0 fails to decode
+`strict_off_chain_fault.j2k`: both reads refuse the chain, with `strict`
+on and off (before #545 the strict-off header read refused tile 0).
+`opj_decompress` 2.5.0 fails to decode
 the tile, with `-allow-partial` too. It has no license restriction.
 
 `header/strict_off_tnsot_then_chain.j2k` (129 bytes, SHA-256
@@ -807,14 +807,30 @@ written by hand in the review of #504 (PR #542), from the main header `row`
 writes for two tiles. Tile 1's one tile-part, with no data, comes first;
 then tile 0's two tile-parts, each with `TNsot` 1, the first carrying a
 `COD` of no levels and one empty packet; then `00 00` where the `EOC` should
-be. With `strict` off, `read_header_with` refuses tile 1 for its precincts
-and `decode_with` refuses the chain. With `strict` on both refuse tile 0's
-second tile-part, which a strict walk finds first. The `header` target's
-strict-off excuse accepts that strict-on fault when both strict-on reads
-give it. `a_strict_only_fault_can_come_before_the_tile_parts_fault` in
+be. With `strict` off, `read_header_with` and `decode_with` refuse the
+chain. With `strict` on both refuse tile 0's second tile-part, which a
+strict walk finds first.
+`a_strict_only_fault_can_come_before_the_tile_parts_fault` in
 `tests/header_tile_parts_fault.rs` pins these results. `opj_decompress`
 2.5.0 fails to decode tile 2 of 2, with `-allow-partial` too. It has no
 license restriction.
+
+`header/s_three_or_hole.j2k` (153 bytes, SHA-256
+`f7691268d8429084efa0d9ab31ae0dc883103b9b7b20475584f142aee329adf9`) was
+written by hand in the confirm round of PR #542 (#504), as a probe of the
+`header` target's strict-off excuse, and committed as a seed in #545. It is a
+gray 3000 x 1000 codestream of three 1000 x 1000 tiles, each over the
+precinct cap under the main `COD`. Tiles 0 and 1 each have a tile-part
+`COD` that brings them within and turns on `SOP`, and data that opens with
+an `SOP` of `Lsop` 5; tile 2 has none. Tile 0 declares two tile-parts and
+carries one. With `strict` on, `read_header_with` and `decode_with` refuse
+the count ("tile 0 declares 2 tile-parts but carries 1"). With `strict`
+off, `read_header_with` refuses tile 2 for its precincts and `decode_with`
+refuses the `SOP` in tile 0's data first, which only decoding reads.
+`a_count_fault_with_strict_on_and_a_data_fault_with_it_off` in
+`tests/header_tile_parts_fault.rs` pins these results. `opj_decompress`
+2.5.0 decodes all three tiles with no warning. It has no license
+restriction.
 
 `header/sycc_422_lower_tile_data_fault.jp2` (195 bytes, SHA-256
 `c932fbb4d4785a25b1b925e2ae8a2bef87dab34ce29ac30da46e13099e676bb0`) is the

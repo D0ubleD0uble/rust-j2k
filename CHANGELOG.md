@@ -140,6 +140,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   any tile. To find the error it parses the tile-parts as the decode does,
   which on that refusal costs as much time and heap as the decode's parse:
   1.75 s and 281 MiB on a 235 MB file of 16.7 million tile-parts (#498).
+- With `strict` off, `read_header_with` gives the decode's error for the
+  tile-parts where it refuses a tile or stops at a budget and the
+  tile-parts hold a fault, as it does with `strict` on. It gave the tile's
+  `Error::Limit` or `Error::InvalidOptions`, while `decode_with` refuses
+  the file for the fault first. To find that error, with `strict` on or
+  off, the read now walks the tile-parts keeping up to 10 bytes a tile in
+  place of the decode's tile records: on the 235 MB file above the refusal
+  takes 240 ms and 640 KiB, where it took 1.75 s and 281 MiB (#545).
 - `read_header_with` refuses the tile the decode refuses where a tile-part
   `COD` or `COC` takes a lower tile over a code-block or precinct cap. It
   refused the first tile over a cap under the main header instead, so its

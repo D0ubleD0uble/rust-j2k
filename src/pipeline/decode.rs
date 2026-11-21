@@ -162,8 +162,10 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// it counts any. Such
 /// a tile with no tile over a cap after it is left to the decode, so a file
 /// with no tile over a cap under the main header is still read no further
-/// than the first `SOT`. With `strict` on, a refusal or a stop at a budget
-/// gives the decode's error for the tile-parts where its parse finds one.
+/// than the first `SOT`. A refusal or a stop at a budget gives the decode's
+/// error for the tile-parts where its parse would find one, with `strict`
+/// on or off ([`codestream::tile_parts_fault`], a walk that keeps no tile
+/// record).
 ///
 /// `kept` is what an earlier call on the start of the same input left, with
 /// where the codestream `bytes` starts in that input (see [`HeaderCache`]).

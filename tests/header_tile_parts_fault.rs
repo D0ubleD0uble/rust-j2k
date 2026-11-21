@@ -2,12 +2,9 @@
 //! tile-parts hold a fault.
 //!
 //! The decode parses every tile-part before it counts any tile, so a fault
-//! in the tile-parts comes before a tile over a cap. With `strict` on the
-//! header read runs that parse where it refuses a tile, and gives its error.
-//! With `strict` off it does not, as the parse keeps a record of every
-//! tile-part, so it can give the tile's refusal where the decode gives the
-//! fault. The `read_header_with` rustdoc lists that difference, and the
-//! `header` fuzz target excuses it only with `strict` off.
+//! in the tile-parts comes before a tile over a cap. Where the header read
+//! refuses a tile, it looks for that fault with a walk of the tile-parts that
+//! keeps no tile record, and gives it, with `strict` on and off.
 
 #[path = "support/synth.rs"]
 mod synth;
@@ -129,23 +126,18 @@ fn one_tile(end: &[u8]) -> Vec<u8> {
     .concat()
 }
 
-/// With `strict` off, a tile refused under the main header and a fault in
-/// the tile-parts: the header read refuses the tile, while the decode
-/// refuses the file for the fault, found when it parses the tile-parts
-/// before it counts any tile. Decoding the tile alone gives the fault too.
-/// With `strict` on both give the fault. The faults: the chain does not end
-/// in `SOT` or `EOC` (the seeds
-/// `tests/fixtures/header/strict_off_chain_fault.j2k` and
+/// A tile refused under the main header and a fault in the tile-parts: the
+/// decode refuses the file for the fault, found when it parses the
+/// tile-parts before it counts any tile, and the header read gives the
+/// fault too, with `strict` on and off. Decoding the tile alone gives the
+/// fault as well. The faults: the chain does not end in `SOT` or `EOC` (the
+/// seeds `tests/fixtures/header/strict_off_chain_fault.j2k` and
 /// `tests/fixtures/header/strict_off_one_tile_chain_fault.j2k`, the shape of
 /// the `header` fuzz finds of #504), or tile 0's header holds a `COD` cut
 /// short, a `COD` too short for its length field, or a `COM` that runs past
-/// the tile-part.
-///
-/// This pins the current strict-off behavior, not a promise: a strict-off
-/// walk that finds these faults (#545) would make the header read give the
-/// fault too, and this test would then assert that instead.
+/// the tile-part. Without the fault, the header read refuses the tile.
 #[test]
-fn with_strict_off_a_tile_parts_fault_can_follow_a_tile_refused() {
+fn a_tile_parts_fault_comes_before_a_tile_refused() {
     let mut cut_cod = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
     cut_cod.truncate(6);
     let mut long_com = vec![0xFF, 0x64, 0xFF, 0xF0, 0, 1];
@@ -184,19 +176,25 @@ fn with_strict_off_a_tile_parts_fault_can_follow_a_tile_refused() {
         ),
     ];
     for (bytes, tile, fault) in &cases {
-        let lenient = DecodeOptions::default().with_strict(false);
-        let header = read_header_with(bytes, &lenient);
-        assert_tile_refused(&header, *tile, fault);
-        assert_eq!(keyed(decode_with(bytes, &lenient)), Err(fault.to_string()));
-        let alone = lenient.clone().with_region(Region::Tile(*tile));
-        assert_eq!(keyed(decode_with(bytes, &alone)), Err(fault.to_string()));
-
-        let strict = DecodeOptions::default();
-        assert_eq!(
-            keyed(read_header_with(bytes, &strict)),
-            Err(fault.to_string())
-        );
-        assert_eq!(keyed(decode_with(bytes, &strict)), Err(fault.to_string()));
+        for strict in [false, true] {
+            let options = DecodeOptions::default().with_strict(strict);
+            let fault = Err(fault.to_string());
+            assert_eq!(keyed(read_header_with(bytes, &options)), fault, "{strict}");
+            assert_eq!(keyed(decode_with(bytes, &options)), fault, "{strict}");
+            let alone = options.clone().with_region(Region::Tile(*tile));
+            assert_eq!(keyed(decode_with(bytes, &alone)), fault, "{strict}");
+        }
+    }
+    // The same shapes with the fault mended: the header read refuses the
+    // tile.
+    let mended = [(row(2, &[], &[(1, vec![])], EOC), 1), (one_tile(EOC), 0)];
+    for (bytes, tile) in &mended {
+        for strict in [false, true] {
+            let options = DecodeOptions::default().with_strict(strict);
+            let header = read_header_with(bytes, &options);
+            assert_tile_refused(&header, *tile, "mended");
+            assert_eq!(keyed(header), keyed(decode_with(bytes, &options)));
+        }
     }
 }
 
@@ -226,18 +224,17 @@ fn a_missing_tile_after_a_tile_over_a_cap_comes_first() {
 /// `tests/fixtures/header/strict_off_tnsot_then_chain.j2k`, with the main
 /// header of `row` for two tiles): tile 1's one tile-part comes first, then
 /// tile 0 has two tile-parts that each declare one, and `00 00` stands where
-/// the `EOC` should be. With `strict` off the header read refuses tile 1 and the
-/// decode, of the file or of either tile alone, gives the chain's fault.
-/// With `strict` on both give the extra tile-part's fault, which only a
-/// strict walk refuses. Like the test above, this pins current behavior
-/// that #545 may change.
+/// the `EOC` should be. With `strict` off the header read and the decode, of
+/// the file or of either tile alone, give the chain's fault, as a tile-part
+/// past its `TNsot` is read. With `strict` on both give the extra
+/// tile-part's fault, which only a strict walk refuses.
 #[test]
 fn a_strict_only_fault_can_come_before_the_tile_parts_fault() {
     let bytes = include_bytes!("fixtures/header/strict_off_tnsot_then_chain.j2k");
     let chain = "Codestream(\"expected `SOT` or `EOC` after a tile-part, found 0x0000\")";
     let lenient = DecodeOptions::default().with_strict(false);
     let header = read_header_with(bytes, &lenient);
-    assert_tile_refused(&header, 1, "strict off");
+    assert_eq!(keyed(header), Err(chain.to_string()));
     assert_eq!(keyed(decode_with(bytes, &lenient)), Err(chain.to_string()));
     for tile in 0..2 {
         let alone = lenient.clone().with_region(Region::Tile(tile));
@@ -251,4 +248,33 @@ fn a_strict_only_fault_can_come_before_the_tile_parts_fault() {
         "{header:?}"
     );
     assert_eq!(keyed(header), keyed(decode_with(bytes, &strict)));
+}
+
+/// The seed `tests/fixtures/header/s_three_or_hole.j2k`, from the confirm
+/// round of #542: three tiles over the precinct cap under the main `COD`. Tiles 0
+/// and 1 are brought within by a tile-part `COD` that turns on `SOP`, and
+/// each has an `SOP` of `Lsop` 5. Tile 2 is over the cap. Tile 0 declares
+/// two tile-parts and carries one. With `strict` on, the header read and
+/// the decode give the count's fault. With `strict` off the count is
+/// advisory: the header read refuses tile 2, and the decode refuses the
+/// file first for the `SOP` in tile 0's data, which only decoding reads.
+/// Decoding tile 2 alone gives the header's refusal.
+#[test]
+fn a_count_fault_with_strict_on_and_a_data_fault_with_it_off() {
+    let bytes = include_bytes!("fixtures/header/s_three_or_hole.j2k");
+    let count = "Codestream(\"tile 0 declares 2 tile-parts but carries 1\")";
+    let strict = DecodeOptions::default();
+    assert_eq!(
+        keyed(read_header_with(bytes, &strict)),
+        Err(count.to_string())
+    );
+    assert_eq!(keyed(decode_with(bytes, &strict)), Err(count.to_string()));
+
+    let lenient = strict.with_strict(false);
+    let header = read_header_with(bytes, &lenient);
+    assert_tile_refused(&header, 2, "strict off");
+    let sop = "Codestream(\"`SOP` declares `Lsop` 5, expected 4\")";
+    assert_eq!(keyed(decode_with(bytes, &lenient)), Err(sop.to_string()));
+    let alone = lenient.with_region(Region::Tile(2));
+    assert_eq!(keyed(header), keyed(decode_with(bytes, &alone)));
 }

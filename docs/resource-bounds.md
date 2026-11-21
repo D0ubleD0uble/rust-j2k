@@ -312,19 +312,25 @@ the decode, so a file with no tile over a cap under the main header is
 still read no further than the first `SOT`. A
 tile-part `COD` or `COC` that brings the tile within the caps admits it,
 and so does `strict` off when the tile has no tile-part, as the decode then
-leaves it out. With `strict` on, the decode parses every tile-part before
-it counts a tile, whatever the selection, so it refuses a file where a
-tile has no tile-part, or a tile-part is at fault, with its error for the
-tile-parts: the first fault its parse finds, or the missing tile. So where
-the count finds a tile with no tile-part, refuses a tile, or stops at a
-budget (below), the header read runs that parse too and gives its error
-where it finds one. The
-walk has reached the end of the chain by then, so the parse follows it no
-further, but it reads every tile-part header and keeps the decode's tile
-records, up to about 52 times the input plus 128 KiB (above). It reads the
-main header in place, so it copies no `PPM` data. A tile-part header the
-decode finds at fault is left to the decode, or with `strict` on to that
-parse. The count has a budget of 2^22 steps under the
+leaves it out. The decode parses every tile-part before it counts a tile,
+whatever the selection, so it refuses a file where a tile-part is at
+fault, or with `strict` on where a tile has no tile-part, with its error
+for the tile-parts: the first fault its parse finds, or the missing tile.
+So where the count refuses a tile, stops at a budget (below), or with
+`strict` on finds a tile with no tile-part, the header read looks for
+that error too, with a walk of its own (`codestream::tile_parts_fault`).
+It follows the parse step for step, reading every `SOT` and every
+tile-part header that holds more than `SOD`, but keeps 6 bytes a tile in
+place of the decode's tile records (up to about 52 times the input plus
+128 KiB, above), and 4 more for each tile whose first tile-part has its
+own coding. Where a later tile-part restates a coding value, it reads the
+first tile-part's header again to compare, and it reads the tile's
+headers again for the one tile whose joined header is at fault. It reads
+the main header in place, so it copies no `PPM` data. Where the read
+refuses no tile, a tile-part header the decode finds at fault is left to
+the decode. A differential test over every committed codestream, cut and
+with its `SOT`s changed, and the `header` fuzz target keep that walk's
+error the same as the parse's. The count has a budget of 2^22 steps under the
 main header, a step for each resolution of each tile-component, and as many
 under the tiles' own headers, where reading a header that copies the main
 header's coding parameters costs 11 steps a component. It leaves any tile
@@ -334,12 +340,10 @@ return a header for a file the decode refuses. The walk takes no step of a
 budget, as it reads one `SOT` a tile-part. So the time is one walk of the
 tile-parts at most plus the budgets, and the heap one tile's header, a byte
 a tile for the tiles the selection reads, and 8 bytes a tile for the
-offsets, except with `strict` on where the count finds a tile with no
-tile-part, refuses a tile or stops at a budget: that costs the decode's
-parse of the tile-parts too, as much time and heap as the decode spends
-before it refuses the file. On 3800 tiles, refused at the first of 1900
-tiles over the precinct cap, that refusal takes 0.81 ms in release, 0.07 ms
-without the parse. Measured in release on
+offsets, except where the count refuses a tile, stops at a budget, or with
+`strict` on finds a tile with no tile-part: that costs the walk for the
+decode's error too, one more pass over the tile-parts and up to 10 bytes
+a tile. Measured in release on
 65535 tiles of 1024 x 1024, each over the
 precinct cap under the main header and brought within by its first
 tile-part's `COD`, with 255 tile-parts a tile (16.7 million tile-parts,
@@ -348,9 +352,11 @@ tile-parts come together and the window is the last rows, so the walk runs
 to the end; 1.8 ms where the first tile-parts all come first; and under a
 millisecond with nothing over a cap. With 16 tile-parts a tile (15.7 MB)
 the same reads take 4.4 ms and 1.9 ms. With the last tile left out and
-`Region::Tile` of it, the refusal takes 1.75 s and 281 MiB of heap at 255
-tile-parts a tile, 123 ms and 41 MiB at 16, and 21 ms and 29 MiB at one
-(0.9 MB), about what the decode takes on each. Measured in
+`Region::Tile` of it, the refusal takes 240 ms and 704 KiB of heap at 255
+tile-parts a tile, with `strict` on or off, where the decode's own parse
+takes 1.7 s and 290 MiB (`tests/tile_parts_fault_cost.rs`). With one
+tile-part a tile and the last tile refused (0.9 MB), the heap is 641 KiB.
+Measured in
 `tests/tile_geometry_header_alloc.rs` and the tests of
 `tests/tile_geometry_cap.rs`: 300 bytes of heap within the caps and 968 B
 for a tile rescued; 704 KiB, one header, for 4096 components whether 4 or
@@ -359,16 +365,8 @@ almost all of it the offsets of tiles 0 to 65280; 63 ms for 1000 tiles of
 4096 components each with a tile-part `COD`; and under a millisecond for
 1024 tiles whose `Psot` ends inside a `COM` that holds the next tile-part,
 followed by 4 MiB of `COM`.
-With `strict` off, on a file the decode refuses for a fault in its
-tile-parts, `read_header_with` may still give a `Limit` or a reduction
-refusal (`InvalidOptions`) instead of the decode's error
-where it refuses a tile it found a tile-part for, as it does not check the
-tile-parts it passes nor walk past that tile. The decode's parse would find
-the fault, but at the cost of the `strict` on refusal above (1.75 s and
-281 MiB at 255 tile-parts a tile); with `strict` off that refusal takes
-45 ms and 65 KiB of heap. `tests/header_tile_parts_fault.rs`
-shows the difference, and the `header` fuzz target excuses it only with
-`strict` off. The decode can also refuse
+`tests/header_tile_parts_fault.rs` shows a tile refused behind a fault in
+the tile-parts, with `strict` on and off. The decode can also refuse
 the file before it gets to the tile refused, for what only decoding finds,
 and so name another tile, kind or factor, or give another error: a fault or
 a work bound in the packets or code-blocks of a lower tile (with `strict`
