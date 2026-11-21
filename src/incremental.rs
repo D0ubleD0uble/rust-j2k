@@ -333,8 +333,7 @@ impl IncrementalDecoder {
     /// read's budget besides. The header of a tile-part not yet fed in full, or
     /// of a last tile-part whose `Psot` is 0, is read again on each call. A
     /// call that refuses a tile, stops at a budget, or meets a tile whose
-    /// precincts and code-blocks under its own tile-part header are at
-    /// fault (a component with no sample in the tile) also looks for the
+    /// own tile-part header is at fault also looks for the
     /// error the decode would give for the tile-parts first, as
     /// `read_header_with` does. That walk is kept too: a call walks the
     /// tile-parts fed since the last, checking each tile's header as it

@@ -37,11 +37,11 @@ use rust_j2k::{DecodeOptions, WorkLimit, decode_with};
 static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
 
 /// The most heap an empty code-block may take at its peak, over the
-/// output: `docs/resource-bounds.md` gives about 80 bytes, measured.
+/// output: `docs/resource-bounds.md` gives 88 bytes, measured.
 const BYTES_PER_BLOCK: usize = 96;
 
 /// The most heap a precinct of one empty code-block may take at its peak,
-/// over the output, its code-block included: about 260 bytes, measured.
+/// over the output, its code-block included: 252 bytes, measured.
 const BYTES_PER_PRECINCT: usize = 300;
 
 /// The heap a decode of `bytes` under `AtMost(n)` holds at its peak over

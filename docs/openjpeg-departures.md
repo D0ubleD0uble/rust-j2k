@@ -1501,7 +1501,7 @@ with `YTsiz` patched to the image height.
 | | |
 | - | - |
 | This decoder | decodes the file: the tile-component has no precinct, no packet and no sample |
-| OpenJPEG 2.5.0 | decodes most such files to the same image; fails some ("failed to decode image") |
+| OpenJPEG 2.5.0 | decodes some such files to the same image; fails others ("failed to decode image"). On random small subsampled grids it failed 153 of 184 whole decodes (2.5.0) |
 | Standard | Eq. B-12 gives `tcx0 == tcx1` or `tcy0 == tcy1`; B-15 and B.6 give such a tile-component no precinct, so no packet |
 | Rule | 1 |
 | Tests and fixtures | `tests/empty_tile_component.rs`; `tests/fixtures/empty_tile_component/opjfail_l1_lrcp.j2k`, `probe_none_l1.j2k` |
