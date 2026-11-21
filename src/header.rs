@@ -37,7 +37,7 @@ pub struct Header {
     /// every component the codestream codes, mapped or not. To bound a
     /// decode's samples, set
     /// [`sample_limit`](crate::DecodeOptions::sample_limit) to
-    /// [`WorkLimit::AtMost`](crate::WorkLimit::AtMost) rather than summing
+    /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost) rather than summing
     /// these.
     pub components: Vec<ComponentInfo>,
     /// The largest

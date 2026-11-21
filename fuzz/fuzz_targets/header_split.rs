@@ -39,8 +39,8 @@ use libfuzzer_sys::fuzz_target;
 mod inconsistent;
 use inconsistent::checked;
 use rust_j2k::{
-    read_header_with, ColorOutput, DecodeOptions, Error, IncrementalDecoder, Region, Window,
-    WorkLimit,
+    read_header_with, ColorOutput, DecodeOptions, Error, IncrementalDecoder, Region, SampleLimit,
+    Window,
 };
 
 /// splitmix64: the same stream on every platform, from a seed in the input.
@@ -103,10 +103,10 @@ fuzz_target!(|input: &[u8]| {
         .with_strict(c[1] & 1 == 1)
         .with_region(region(c[2], c[3], data.len()));
     options = options.with_sample_limit(match c[1] >> 1 & 3 {
-        0 => WorkLimit::Default,
-        1 => WorkLimit::Raised(1 + u32::from(c[4] % 8)),
-        2 => WorkLimit::Unlimited,
-        _ => WorkLimit::AtMost(1 + (u64::from(c[4]) << 16)),
+        0 => SampleLimit::Default,
+        1 => SampleLimit::Raised(1 + u32::from(c[4] % 8)),
+        2 => SampleLimit::Unlimited,
+        _ => SampleLimit::AtMost(1 + (u64::from(c[4]) << 16)),
     });
     if c[5] & 1 == 1 {
         options = options.with_color(ColorOutput::Srgb);

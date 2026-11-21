@@ -1269,7 +1269,7 @@ fn chroma_replication_past_the_sample_budget_is_a_limit() {
     // A raised limit admits the replicated chroma: the header reads.
     let raised = crate::DecodeOptions::default()
         .with_color(crate::ColorOutput::Srgb)
-        .with_sample_limit(crate::WorkLimit::Raised(2));
+        .with_sample_limit(crate::SampleLimit::Raised(2));
     assert!(crate::read_header_with(&bytes, &raised).is_ok());
     // As coded, the same file is under the limit and fails only later, on
     // its (now too short) tile data.
@@ -1286,7 +1286,7 @@ fn chroma_replication_past_the_sample_budget_is_a_limit() {
     let bytes = file(&codestream, &colr_enum(18), &[]);
     let srgb = crate::DecodeOptions::default().with_color(crate::ColorOutput::Srgb);
     assert!(crate::read_header_with(&bytes, &srgb).is_ok());
-    let ceiling = crate::WorkLimit::AtMost(1 << 28);
+    let ceiling = crate::SampleLimit::AtMost(1 << 28);
     let capped = srgb.with_sample_limit(ceiling.clone());
     for result in [
         crate::read_header_with(&bytes, &capped).map(|_| ()),
@@ -1300,7 +1300,7 @@ fn chroma_replication_past_the_sample_budget_is_a_limit() {
         assert!(
             limit.message().starts_with(
                 "sRGB output with the sYCC chroma replicated needs 432000000 samples, over \
-                 the ceiling of `WorkLimit::AtMost(268435456)`"
+                 the ceiling of `SampleLimit::AtMost(268435456)`"
             ),
             "{limit}"
         );

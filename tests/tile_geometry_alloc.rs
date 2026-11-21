@@ -1,5 +1,5 @@
 //! A tile at the scaled caps holds about what `docs/resource-bounds.md`
-//! says a code-block and a precinct cost: under `WorkLimit::AtMost(n)` a
+//! says a code-block and a precinct cost: under `SampleLimit::AtMost(n)` a
 //! tile of `n / 512` empty code-blocks, and one of `n / 2048` precincts of a
 //! code-block each, decode within the documented bytes a code-block and a
 //! precinct over their output. At the caps that is a small part of the
@@ -31,7 +31,7 @@ mod synth;
 use alloc::{CURRENT, PEAK};
 use std::sync::atomic::Ordering;
 
-use rust_j2k::{DecodeOptions, WorkLimit, decode_with};
+use rust_j2k::{DecodeOptions, SampleLimit, decode_with};
 
 #[global_allocator]
 static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
@@ -48,7 +48,7 @@ const BYTES_PER_PRECINCT: usize = 300;
 /// what was live before, less its output, after checking the decode
 /// returned `samples` samples.
 fn peak_over_output(bytes: &[u8], n: u64, samples: usize) -> usize {
-    let options = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(n));
+    let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(n));
     let before = CURRENT.load(Ordering::SeqCst);
     PEAK.store(before, Ordering::SeqCst);
     let image = decode_with(bytes, &options).expect("a tile at the caps decodes");

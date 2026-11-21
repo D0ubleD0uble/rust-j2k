@@ -50,7 +50,7 @@ does again on each refine.
   reduction, so a viewer that wants a preview sooner can set a resolution
   reduction first. The tile caps on code-blocks and precincts are not counted
   at the reduction, so a reduction does not shorten a wait on them. A sample
-  limit of `WorkLimit::AtMost(n)` does not grow with the bytes, so a refusal
+  limit of `SampleLimit::AtMost(n)` does not grow with the bytes, so a refusal
   under it is not a wait: `refine` returns it as an error (except in the
   later-tile case in the table above), `header` returns it too, and it sticks
   however many bytes come after, until a change of options. A server that

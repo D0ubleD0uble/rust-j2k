@@ -1334,7 +1334,7 @@ impl Meter {
             first,
             left: Cell::new(first),
             refusal: Cell::new(None),
-            cap: crate::samples::cap(&crate::WorkLimit::Default, 0),
+            cap: crate::samples::cap(&crate::SampleLimit::Default, 0),
         }
     }
 
