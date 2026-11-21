@@ -58,10 +58,12 @@ pub type Result<T> = core::result::Result<T, Error>;
 ///   and for a JP2 file.
 /// - The sample limit and the tile caps, which count a JP2 file's own bytes.
 ///   Past 64 MiB the wrapper can admit what the bare codestream refuses, or
-///   name a smaller factor to retry with.
+///   refuse it with a different message: a different sample count, or a
+///   smaller factor to retry with.
 /// - A [`Error::Limit`] or [`Error::InvalidOptions`] the header read gives for
-///   a tile, where the decode first refuses the file for a fault in a lower
-///   tile's data.
+///   a tile, where the decode first refuses the file for something only it
+///   checks: a fault or a work bound in a lower tile's data, or, with
+///   `strict` off, the work charged for tiles that have no tile-part.
 ///
 /// Separately, the header read can return `Ok` for a fault only decoding
 /// finds.

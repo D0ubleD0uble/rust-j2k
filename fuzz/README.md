@@ -131,8 +131,9 @@ since a decode costs far more than the header: a
 `read_header_with` error must be `decode_with`'s error too, and a successful
 decode must match the header field for field. The one exception is a tile
 the header refuses, over a cap or for a reduction its own header has too
-few levels for, where the decode first finds a fault or a work bound in a
-lower tile's data, which only decoding sees. The target accepts that pair
+few levels for, where the decode first finds something only it checks: a
+fault or a work bound in a lower tile's data, or, with `strict` off, the
+packet work charged for tiles that have no tile-part. The target accepts that pair
 only when three things hold: the decode of the refused tile alone
 (`Region::Tile`), under the same options but with the color as coded (a
 tile alone cannot give sRGB from sub-sampled sYCC chroma), gives exactly
@@ -560,7 +561,7 @@ cargo +nightly fuzz run retry_ladder -- -dict=fuzz/j2k.dict -max_total_time=60 -
 # piece sizes). `-max_len` must be over the largest seed, 36,832 bytes.
 mkdir -p fuzz/corpus/header_split
 python3 scripts/gen-header-split-seeds.py fuzz/corpus/header_split
-for f in tests/fixtures/*.j2k tests/fixtures/header/*.j2k tests/fixtures/*.jp2; do
+for f in tests/fixtures/*.j2k tests/fixtures/header/*.j2k tests/fixtures/header/*.jp2 tests/fixtures/*.jp2; do
   { printf '\0\0\0\0\0\0\1\2\0\0\0\0'; cat "$f"; } > "fuzz/corpus/header_split/fx_$(basename "$f")"
 done
 cargo +nightly fuzz run header_split -- -dict=fuzz/j2k.dict -max_len=65536 -max_total_time=60 -rss_limit_mb=4096 -timeout=30
