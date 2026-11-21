@@ -260,9 +260,10 @@ pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap)
         return Error::limit_unhinted(
             kind,
             format!("{head} under `WorkLimit::AtMost({n})` (see `DecodeOptions::sample_limit`)"),
-        );
+        )
+        .refused_at(tile, count);
     }
-    crate::limit_hint::tile_geometry(
+    let refusal = crate::limit_hint::tile_geometry(
         kind,
         &format!(
             "{head} under the sample limit of {} samples, one for each {per} samples it \
@@ -272,7 +273,8 @@ pub(crate) fn over_tile(kind: crate::LimitKind, tile: u32, count: u64, cap: Cap)
         needed,
         cap.allowed,
         cap.default,
-    )
+    );
+    refusal.refused_at(tile, count)
 }
 
 /// " at resolution reduction `reduction`", or nothing at full resolution:

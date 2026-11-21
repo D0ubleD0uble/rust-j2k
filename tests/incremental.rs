@@ -1399,7 +1399,7 @@ fn a_count_refused_where_decode_with_is_names_its_tile_and_work() {
         "{limit}, where the decode gives {expected}"
     );
     // The messages name the same figures as text.
-    let named = format!("tile 15 needs {} sample-passes ", at.work());
+    let named = format!("tile 15 needs {} sample-passes ", at.amount());
     assert!(limit.message().starts_with(&named), "{limit}");
     assert!(expected.message().starts_with(&named), "{expected}");
     check_waiting("segsym_tiles", &why, &bytes, &options);

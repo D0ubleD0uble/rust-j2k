@@ -9,8 +9,10 @@ allocates, the packet-header walk (tier 2) and the code-block decoding
 (tier 1). A file past a cap is refused with `Error::Limit` before the work
 is done. The error's `LimitDetail` says which cap it was (`kind()`, a
 `LimitKind`) and gives a `WorkLimit::Raised(n)` to retry with
-(`retry_with()`), and its message names both. A code-block work refusal
-also gives the tile refused and its work (`refused_at()`). Under a sample
+(`retry_with()`), and its message names both. A code-block work refusal, and
+a refusal of a tile over the cap on code-blocks or precincts, also gives the
+tile refused and the amount it needs (`refused_at()`: sample-passes,
+code-blocks or precincts by `kind()`). Under a sample
 limit of `WorkLimit::AtMost` it gives no factor to retry with (see
 [A fixed ceiling](#a-fixed-ceiling)).
 For the samples it is the smallest factor that admits the image. For the two

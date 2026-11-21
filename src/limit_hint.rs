@@ -236,7 +236,7 @@ mod tests {
             panic!();
         };
         let at = limit.refused_at().expect("the tile and its work");
-        assert_eq!((at.tile(), at.work()), (7, 400));
+        assert_eq!((at.tile(), at.amount()), (7, 400));
         assert!(
             limit
                 .message()

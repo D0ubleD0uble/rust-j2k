@@ -317,20 +317,24 @@ impl Error {
         })
     }
 
-    /// This code-block work [`Error::Limit`] with the tile it refused and
-    /// the work that tile needs as data: the figures its message names.
-    pub(crate) fn refused_at(self, tile: u32, work: u64) -> Error {
+    /// This [`Error::Limit`] of a kind that carries it, with the tile it
+    /// refused and the amount that tile needs as data: the figures its
+    /// message names. An error of another kind is returned as it is.
+    pub(crate) fn refused_at(self, tile: u32, amount: u64) -> Error {
         match self {
             Error::Limit(mut limit) => {
-                debug_assert_eq!(limit.kind, LimitKind::CodeBlockWork);
-                debug_assert!(
-                    limit
-                        .message
-                        .starts_with(&format!("tile {tile} needs {work} sample-passes ")),
-                    "{}",
-                    limit.message
-                );
-                limit.refused_at = Some(RefusedAt { tile, work });
+                let named = match limit.kind {
+                    LimitKind::CodeBlockWork => {
+                        format!("tile {tile} needs {amount} sample-passes ")
+                    }
+                    LimitKind::TileCodeBlocks => {
+                        format!("tile {tile} holds {amount} code-blocks, ")
+                    }
+                    LimitKind::TilePrecincts => format!("tile {tile} holds {amount} precincts, "),
+                    _ => return Error::Limit(limit),
+                };
+                debug_assert!(limit.message.starts_with(&named), "{}", limit.message);
+                limit.refused_at = Some(RefusedAt { tile, amount });
                 Error::Limit(limit)
             }
             other => other,
@@ -480,17 +484,48 @@ impl LimitDetail {
         self.retry_with.clone()
     }
 
-    /// The tile the limit refused and the work it needs, where the refusal
+    /// The tile the limit refused and the amount it needs, where the refusal
     /// knows both exactly; `None` otherwise.
     ///
-    /// The refusals that carry it are the code-block work bound's
-    /// ([`LimitKind::CodeBlockWork`]) refusals of one tile: the one
-    /// [`decode_with`](crate::decode_with) gives, and the one an
-    /// [`IncrementalDecoder`](crate::IncrementalDecoder) waits on as
-    /// [`Waiting::WorkLimit`](crate::Waiting::WorkLimit), or as
-    /// [`Waiting::BoundSpent`](crate::Waiting::BoundSpent) where the whole
-    /// bound refuses a tile it counted. Other refusals give `None`, a
-    /// `BoundSpent` whose count ended within the whole bound included.
+    /// The refusals that carry it, by [`kind`](Self::kind):
+    ///
+    /// - [`CodeBlockWork`](LimitKind::CodeBlockWork): the refusals of one
+    ///   tile by the code-block work bound, the one
+    ///   [`decode_with`](crate::decode_with) gives, and the one an
+    ///   [`IncrementalDecoder`](crate::IncrementalDecoder) waits on as
+    ///   [`Waiting::WorkLimit`](crate::Waiting::WorkLimit), or as
+    ///   [`Waiting::BoundSpent`](crate::Waiting::BoundSpent) where the whole
+    ///   bound refuses a tile it counted. The amount is in sample-passes.
+    /// - [`TileCodeBlocks`](LimitKind::TileCodeBlocks): the tile that holds
+    ///   more code-blocks than a tile may. The amount is its code-blocks.
+    /// - [`TilePrecincts`](LimitKind::TilePrecincts): the tile that holds
+    ///   more precincts than a tile may. The amount is its precincts.
+    ///
+    /// Other refusals give `None`, a `BoundSpent` whose count ended within
+    /// the whole bound included.
+    ///
+    /// The tile pairs with [`TileGrid::tile`](crate::TileGrid::tile) and
+    /// [`Region::Tile`](crate::Region::Tile), so a caller can decode around
+    /// the tile refused:
+    ///
+    /// ```
+    /// use rust_j2k::{DecodeOptions, Error, Region, decode_with};
+    ///
+    /// fn decode_tiles_but_the_refused(
+    ///     bytes: &[u8],
+    ///     tile_count: u32,
+    /// ) -> Result<Vec<rust_j2k::Image>, Error> {
+    ///     let options = DecodeOptions::default();
+    ///     let refused = match decode_with(bytes, &options) {
+    ///         Err(Error::Limit(limit)) => limit.refused_at().map(|at| at.tile()),
+    ///         _ => None,
+    ///     };
+    ///     (0..tile_count)
+    ///         .filter(|&tile| Some(tile) != refused)
+    ///         .map(|tile| decode_with(bytes, &options.clone().with_region(Region::Tile(tile))))
+    ///         .collect()
+    /// }
+    /// ```
     pub fn refused_at(&self) -> Option<RefusedAt> {
         self.refused_at
     }
@@ -511,12 +546,12 @@ impl fmt::Display for LimitDetail {
 }
 
 /// Where a limit refused the input, from
-/// [`LimitDetail::refused_at`]: the tile, and the work it needs.
+/// [`LimitDetail::refused_at`]: the tile, and the amount it needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct RefusedAt {
     tile: u32,
-    work: u64,
+    amount: u64,
 }
 
 impl RefusedAt {
@@ -526,11 +561,15 @@ impl RefusedAt {
         self.tile
     }
 
-    /// The work the tile needs, in sample-passes: the work of the
-    /// code-blocks this decode reads under its options (the reduction,
-    /// region and components), not of the whole tile.
-    pub fn work(&self) -> u64 {
-        self.work
+    /// The amount the tile needs, in the unit of the limit's
+    /// [`kind`](LimitDetail::kind): sample-passes for
+    /// [`CodeBlockWork`](LimitKind::CodeBlockWork) (the work of the
+    /// code-blocks this decode reads under its options, the reduction,
+    /// region and components, not of the whole tile), code-blocks for
+    /// [`TileCodeBlocks`](LimitKind::TileCodeBlocks) and precincts for
+    /// [`TilePrecincts`](LimitKind::TilePrecincts).
+    pub fn amount(&self) -> u64 {
+        self.amount
     }
 }
 
