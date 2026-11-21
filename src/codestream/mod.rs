@@ -767,9 +767,12 @@ impl<'b, 'm> FirstPart<'b, 'm> {
     /// short, which the tile walk with `strict` off reads as the end of the
     /// codestream ([`fault_may_be_cut`]). False for a header it reads
     /// without a fault where the tile walk reads the markers, and for a
-    /// tile-part whole in the input. It reads the header's markers again.
+    /// tile-part whole in the input: [`header`](Self::header) reads no
+    /// further than its `Psot`, where the tile walk reads a header that runs
+    /// past it on to the end of the input, so the walk's own result stands
+    /// for it. It reads the header's markers again.
     pub(crate) fn header_fault_may_be_cut(&self) -> bool {
-        let Some(part) = self.part else {
+        let Some(part) = self.part.filter(|_| !self.is_whole()) else {
             return false;
         };
         let mut site = FaultSite::default();
@@ -1698,23 +1701,32 @@ pub(super) fn part_end(len: usize, offset: usize, psot: u32) -> usize {
 
 /// Whether a fault in the header of the tile-part at `offset`, at `site`,
 /// may be the input cut short, which a walk with `strict` off reads as the
-/// end of the codestream. The tile-part must run to the end of the input
-/// (its `Psot` is 0 or runs past it), and the input must end inside what
-/// the error depends on: the marker segment it failed at, or, for a code
-/// judged by the markers after it ([`reaches_sod`]), the chain of marker
-/// segments from there. Otherwise every longer input fails at the same
-/// marker with the same error, so it is refused now.
+/// end of the codestream. The input must end inside what the error depends
+/// on. For most markers that is the marker segment the read failed at,
+/// whatever the tile-part's `Psot`: the segments are read before their end
+/// is checked against it, so a segment that runs past `Psot` and past the
+/// end of the input may yet hold a bad field. For a code judged by the
+/// markers after it ([`reaches_sod`]), it is the chain of marker segments
+/// from there, which is followed no further than the tile-part's end, so
+/// the tile-part must also run to the end of the input (its `Psot` is 0 or
+/// runs past it). Otherwise every longer input fails at the same marker
+/// with the same error, so it is refused now.
 fn fault_may_be_cut(bytes: &[u8], offset: usize, psot: u32, site: FaultSite) -> bool {
-    let to_the_end = psot == 0
+    if site.chain {
+        runs_to_the_end(bytes.len(), offset, psot)
+            && header_chain(bytes, site.at, bytes.len()) == Chain::Ends
+    } else {
+        segment_runs_out(bytes, site.at)
+    }
+}
+
+/// Whether the tile-part that starts at `offset` runs to the end of an
+/// input of `len` bytes: its `Psot` is 0 or runs past it.
+fn runs_to_the_end(len: usize, offset: usize, psot: u32) -> bool {
+    psot == 0
         || offset
             .checked_add(psot as usize)
-            .is_none_or(|end| end > bytes.len());
-    to_the_end
-        && if site.chain {
-            header_chain(bytes, site.at, bytes.len()) == Chain::Ends
-        } else {
-            segment_runs_out(bytes, site.at)
-        }
+            .is_none_or(|end| end > len)
 }
 
 /// Whether the input ends inside the marker code at `at`, or inside the
