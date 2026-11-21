@@ -701,7 +701,12 @@ impl<'a> Rescue<'a> {
         }
         let Ok(own) = part.header() else {
             self.learn(index, whole, sets_coding, Some(OwnHeader::Fault));
-            return self.own_fault(whole);
+            // With `strict` off a fault the input may yet complete is a cut,
+            // where the decode's parse ends.
+            if !self.strict && part.header_fault_may_be_cut() {
+                return Ok(true);
+            }
+            return self.own_fault(true);
         };
         let resolutions = resolutions(&own);
         if !self.charge(resolutions) {
@@ -761,17 +766,20 @@ impl<'a> Rescue<'a> {
     /// The error for a tile whose own tile-part header, or whose counts
     /// under it, are at fault: the decode's error for the tile-parts, with
     /// `strict` as the read has it ([`codestream::tile_parts_fault`]), as
-    /// the decode parses every tile-part before it counts any tile. A whole
+    /// the decode parses every tile-part before it counts any tile. A
     /// tile-part header at fault is one that parse finds, if it finds no
-    /// fault before it. Where it finds none (counts at fault that only the
+    /// fault before it, except, with `strict` off, a fault the input may
+    /// yet complete, which [`count`](Self::count) leaves to the decode
+    /// unwalked. Where the parse finds none (counts at fault that only the
     /// decode's count of the tile finds), the tile is left to the decode.
     ///
-    /// A tile-part not `whole` in the input (cut, or with a `Psot` of 0),
-    /// with `strict` off, is left to the decode unwalked. So a call on a
-    /// prefix whose last tile-part is not whole, as each call of
+    /// Counts at fault in a tile-part not `whole` in the input (cut, or
+    /// with a `Psot` of 0), with `strict` off, are left to the decode
+    /// unwalked. So a call on a prefix whose last tile-part is not whole,
+    /// as each call of
     /// [`IncrementalDecoder::header`](crate::IncrementalDecoder::header) on
-    /// a stream fed so far can be, does not walk the tile-parts again. The
-    /// tile-parts are walked once at most.
+    /// a stream fed so far can be, does not walk the tile-parts again for
+    /// a cut. The tile-parts are walked once at most.
     fn own_fault(&mut self, whole: bool) -> Result<bool> {
         if !self.fault_free && (whole || self.strict) {
             match codestream::tile_parts_fault(self.bytes, self.parsed, self.strict) {

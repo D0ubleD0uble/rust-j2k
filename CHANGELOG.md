@@ -188,10 +188,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only one over a cap under the main header, while `decode_with` refuses
   the file for the tile-parts. The same holds where the tile's precincts
   and code-blocks under that header are at fault and the decode's parse
-  of the tile-parts finds a fault. With `strict` off this holds for a
-  tile-part the input holds whole (a `Psot` of 0 is never whole), so
-  `IncrementalDecoder::header` gives the error once the tile-part is
-  whole (#578).
+  of the tile-parts finds a fault. With `strict` off, a fault the input
+  ends inside is read as a cut, as the decode reads it, so
+  `IncrementalDecoder::header` gives the error once the decode would
+  (#578).
 - With `strict` off, a fault in the header of a tile-part that runs to the
   end of the input, a last one with `Psot` 0 or one whose `Psot` runs past
   the end, is refused with the error a strict decode gives when the input

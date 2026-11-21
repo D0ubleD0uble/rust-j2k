@@ -771,14 +771,19 @@ fn a_fault_in_the_own_header_of_a_tile_over_a_cap_is_the_decode_s_error() {
 }
 
 /// `IncrementalDecoder::header`, fed the same files a byte at a time, gives
-/// what `read_header_with` gives with `strict` off on the bytes fed: the
-/// fault once the faulty tile-part is whole, and no error before.
+/// what `read_header_with` gives with `strict` off on the bytes fed, and the
+/// fault in the tile-part header wherever the strict-off decode gives it:
+/// no error before the input holds the inserted segments, and the fault
+/// once the tile-part is whole at the latest. In between, the input may
+/// still complete some of them (an `MCC` is refused only once its header
+/// reaches `SOD`).
 #[test]
 fn the_incremental_header_finds_the_fault_once_the_tile_part_is_whole() {
     for &(what, colors, insert, variant) in OWN_HEADER_FAULTS {
         let (bytes, sot) = over_cap_tile_with(colors, insert);
         let psot = u32::from_be_bytes(bytes[sot + 6..sot + 10].try_into().unwrap());
         let whole = sot + psot as usize;
+        let held = sot + 12 + insert.len();
         let lenient = DecodeOptions::default().with_strict(false);
         let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
         for fed in 1..=bytes.len() {
@@ -789,9 +794,17 @@ fn the_incremental_header_finds_the_fault_once_the_tile_part_is_whole() {
                 read => read.map(Some),
             };
             assert_eq!(got, format!("{want:?}"), "{what}: {fed} bytes");
-            if fed < whole {
+            // The decode, which is slow on tile 0, is checked from tile 1's
+            // header to its end.
+            if (sot + 12..=whole).contains(&fed) {
+                let decoded = format!("{:?}", decode_with(&bytes[..fed], &lenient).map(|_| ()));
+                if decoded.starts_with(&format!("Err({variant}")) {
+                    assert_eq!(got, decoded, "{what}: {fed} bytes, the decode's fault");
+                }
+            }
+            if fed < held {
                 assert!(got.starts_with("Ok"), "{what}: {fed} bytes, cut: {got}");
-            } else {
+            } else if fed >= whole {
                 assert!(
                     got.starts_with(&format!("Err({variant}")),
                     "{what}: {fed} bytes: {got}"
@@ -871,26 +884,26 @@ fn a_tile_whose_own_counts_are_at_fault_gives_the_decode_s_fault_for_the_tile_pa
 }
 
 /// The same faults in a tile-part whose `Psot` is 0, which runs to the end
-/// of the codestream, so it is never whole in the input. With `strict` on
-/// the read gives the decode's error. With it off the read leaves such a
-/// tile-part to the decode, as it does one the input cuts, so that a call
-/// on a stream fed so far does not walk the tile-parts for it; that case
-/// is not pinned here.
+/// of the codestream, so it is never whole in the input: the read gives
+/// the decode's error with `strict` on and off, as the input holds the
+/// whole header.
 #[test]
-fn a_fault_in_an_own_header_with_a_psot_of_0_is_the_decode_s_error_with_strict_on() {
+fn a_fault_in_an_own_header_with_a_psot_of_0_is_the_decode_s_error() {
     for &(what, colors, insert, variant) in OWN_HEADER_FAULTS {
         let (mut bytes, sot) = over_cap_tile_with(colors, insert);
         bytes[sot + 6..sot + 10].copy_from_slice(&[0; 4]);
-        let options = DecodeOptions::default();
-        let header = keyed(read_header_with(&bytes, &options).map(|_| ()));
-        assert!(
-            header.as_ref().is_err_and(|e| e.starts_with(variant)),
-            "{what}: {header:?}"
-        );
-        assert_eq!(
-            header,
-            keyed(decode_with(&bytes, &options).map(|_| ())),
-            "{what}"
-        );
+        for strict in [true, false] {
+            let options = DecodeOptions::default().with_strict(strict);
+            let header = keyed(read_header_with(&bytes, &options).map(|_| ()));
+            assert!(
+                header.as_ref().is_err_and(|e| e.starts_with(variant)),
+                "{what}, strict {strict}: {header:?}"
+            );
+            assert_eq!(
+                header,
+                keyed(decode_with(&bytes, &options).map(|_| ())),
+                "{what}, strict {strict}"
+            );
+        }
     }
 }
