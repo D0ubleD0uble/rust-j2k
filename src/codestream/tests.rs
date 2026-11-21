@@ -5338,9 +5338,10 @@ fn poc(volumes: usize) -> Vec<u8> {
 /// above and its error checked, so a shape that stops reaching its branch
 /// is seen: restated and differing values in a later tile-part, `POC`
 /// volumes joined over the tile-parts past the budget, a tile header at
-/// fault behind tiles left out with `strict` off (the full check numbers a
-/// tile by its place among those found), the two packed-header faults, the
-/// `TPsot == TNsot` count correction, and the chain's own faults.
+/// fault behind tiles left out with `strict` off (the full check names a
+/// tile by its index, not its place among those found), the two
+/// packed-header faults, the `TPsot == TNsot` count correction, and the
+/// chain's own faults.
 #[test]
 fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
     use synth::tile_part as part;
@@ -5355,6 +5356,7 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
     let qcd = seg(0xFF5C, &synth::qcd_none_body(2, &[8]));
     let other_qcd = seg(0xFF5C, &synth::qcd_none_body(1, &[8]));
     let coc = seg(0xFF53, &[0, 0, 0, 1, 1, 0, 1]);
+    let one_level = seg(0xFF52, &synth::cod_body(1, 1, 0, 0));
     let all = |tile: u16| part(tile, 0, 1, &[], &[]);
     // A last tile-part of tile 3 with `Psot` 0, `extra` in its header and
     // `data` after its `SOD`.
@@ -5582,7 +5584,7 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
                 ],
                 &eoc,
             ),
-            "Unsupported(\"tile 1 codes component 0 with the Irreversible97 wavelet",
+            "Unsupported(\"tile 3 codes component 0 with the Irreversible97 wavelet",
         ),
         (
             "the first tile's header at fault",
@@ -5614,6 +5616,35 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
                 &eoc,
             ),
             "Codestream(\"a codestream carrying both `PPM` and `PPT`",
+        ),
+        // A first tile-part header at fault, a `COD` of one level under the
+        // main `QCD`'s one step, in a tile-part a `PPM` fault is found in
+        // too: the header's fault is found first, as it is read.
+        (
+            "a tile header at fault beside a PPT under a PPM",
+            true,
+            grid_of_four(
+                &seg(0xFF60, &[0, 0, 0, 0, 1, 0]),
+                &[part(
+                    0,
+                    0,
+                    1,
+                    &[one_level.clone(), seg(0xFF61, &[0, 0])].concat(),
+                    &[],
+                )],
+                &eoc,
+            ),
+            "Marker(\"component 0 carries 1 quantization step entries but its 1",
+        ),
+        (
+            "a tile header at fault past the PPM chunks",
+            false,
+            grid_of_four(
+                &seg(0xFF60, &[0, 0, 0, 0, 1, 0]),
+                &[all(0), part(1, 0, 1, &one_level, &[])],
+                &eoc,
+            ),
+            "Marker(\"component 0 carries 1 quantization step entries but its 1",
         ),
         (
             "a Part 2 marker in a later tile-part header",

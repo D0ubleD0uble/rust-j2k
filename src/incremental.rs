@@ -336,25 +336,25 @@ impl IncrementalDecoder {
     /// precincts and code-blocks under its own tile-part header are at
     /// fault (a component with no sample in the tile) also looks for the
     /// error the decode would give for the tile-parts first, as
-    /// `read_header_with` does. That walk is kept too, with the header of
-    /// the first tile at fault once it has gathered it: a call walks the
-    /// tile-parts fed since the last, and checks each tile once. On a
-    /// window of 1530 tiles of a 235 MB file of 16.7 million tile-parts,
-    /// calls after each 256 KiB fed took 5.9 s in all and now take 66 ms;
-    /// with its tile 0 refused and read alone, calls after each 1 MiB fed
-    /// took 21.5 s and now take 170 ms, and 18 s and now 150 ms with tile
-    /// 1's own header at fault as well.
+    /// `read_header_with` does. That walk is kept too: a call walks the
+    /// tile-parts fed since the last, checking each tile's header as it
+    /// reads it. On a window of 1530 tiles of a 235 MB file of 16.7
+    /// million tile-parts, calls after each 256 KiB fed took 5.9 s in all
+    /// and now take 66 ms; with its tile 0 refused and read alone, calls
+    /// after each 1 MiB fed took 21.5 s and now take 170 ms. With tile 1's
+    /// own header at fault as well they took 18 s and now take 1.3 ms: the
+    /// walk stops at that header and is kept there, so a call reads only
+    /// the tile-part at fault.
     /// What is kept, about 140 bytes for each tile counted under its own
     /// header and a byte for each other tile, plus a key of the main
     /// header (not a copy of it), is held until the options change, which
     /// drops it. The walk for the decode's error, once it has run, is kept
     /// over a change of options, as it depends on none of them, with its
     /// heap as `read_header_with` documents it (up to 10 bytes a tile of
-    /// the grid, and the codings later tile-parts restate) and the gathered
-    /// header. Nothing is kept for a file whose tiles' sizes show them
-    /// within the caps; otherwise a few hundred bytes, plus the counts
-    /// above. A call made while another thread is in one reads from the
-    /// start.
+    /// the grid, and the codings later tile-parts restate). Nothing is
+    /// kept for a file whose tiles' sizes show them within the caps;
+    /// otherwise a few hundred bytes, plus the counts above. A call made
+    /// while another thread is in one reads from the start.
     pub fn header(&self) -> Result<Option<Header>> {
         // A call on another thread holding the lock reads from the start. A
         // call that panicked may have left the walk half done, so it is

@@ -201,6 +201,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for its fields, as OpenJPEG 2.5.0 refuses it. Such a `PPT` decoded before
   when the codestream had no `PPM`, and such a `PPM` decoded before and hid
   a `PPT` beside it (#564).
+- A fault in a tile's own tile-part header (too few quantization steps,
+  the 9/7 wavelet with no quantization, a wavelet that differs from the
+  main header's) is found as the tile-part walk reads that header, and a
+  tile's `POC` volumes are checked at the tile-part that takes them over
+  the limit, so the first fault in the input is the error given. A fault
+  later in the input, such as a broken `Psot` chain or a later tile-part
+  `COD` that differs, took its place. With `strict` off a longer prefix
+  could then turn one error into another, and `IncrementalDecoder::refine`
+  gave a different error from `finish`. Which files are refused does not
+  change. A tile refused for its `POC` volumes is refused at the
+  tile-part that takes it over the limit, so the count in the message is
+  the count at that tile-part, not the whole tile's. The error names the
+  tile by its index: with `strict` off and a lower tile missing, it named
+  the tile by its place among the tiles present (#587, #561).
 - A code-block's codeword segments cost about 15 bytes of heap each, or
   about 85 with a byte, where they cost about 130 with none. A file of
   many pass-terminated (`termall`) segments peaked at up to about 350
@@ -230,9 +244,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   count's budget, or meets a tile whose counts under its own header are at
   fault walked every tile-part fed again, so calls after each feed took
   time quadratic in the input: 21.5 s for calls after each 1 MiB of a
-  235 MB file with tile 0 refused, now 170 ms. The header of a tile whose
-  own header is at fault is kept with the walk (18 s, now 150 ms), and
-  the walk is kept over a change of options. With `strict` off the
+  235 MB file with tile 0 refused, now 170 ms; with tile 1's own header
+  at fault as well, 18 s, now 1.3 ms, as the walk stops at the faulty
+  header and is kept there.
+  The walk is kept over a change of options. With `strict` off the
   `TNsot` look-ahead is taken only where its answer changes an error's
   counts (#560).
 - With `strict` off, a fault in the header of a tile-part that runs to the

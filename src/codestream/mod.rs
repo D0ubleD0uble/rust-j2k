@@ -234,7 +234,7 @@ impl Codestream<'_> {
             .tiles
             .get(index)
             .ok_or_else(|| Error::inconsistent(format!("no tile {index}")))?;
-        resolve_tile_header(&self.header, &tile.header, index)
+        resolve_tile_header(&self.header, &tile.header, tile.index as usize)
     }
 }
 
@@ -288,41 +288,46 @@ pub fn parse_tiles_with(
     parsed: ParsedHeader,
     strict: bool,
 ) -> Result<Codestream<'_>> {
-    let codestream = split_tiles_with(bytes, parsed, strict)?;
-    check_tile_headers(&codestream.header, &codestream.tiles)?;
-    Ok(codestream)
+    split_tiles_checked(bytes, parsed, strict, true)
 }
 
 pub(crate) use fault::{KeptWalk, tile_parts_fault, tile_parts_fault_kept};
 
-/// Check every tile's header once, here, so a malformed tile-part header is
-/// a parse error rather than a surprise partway through a decode. A header is
-/// sized by the component count and a codestream can declare tens of
-/// thousands of tiles, so each tile's own markers are checked against a
-/// summary of the main header instead of resolving a header per tile. Only
-/// a tile found at fault is resolved in full, so that the fault is reported
-/// in the full check's words.
-fn check_tile_headers(main: &MainHeader, tiles: &[Tile<'_>]) -> Result<()> {
-    let summary = OnceCell::new();
-    for (index, tile) in tiles.iter().enumerate() {
-        if !tile_header_is_valid(main, &summary, &tile.header) {
-            // The two checks agree, so the full one fails here. Were it ever
-            // to pass, its verdict would stand.
-            let full = check_tile_in_full(main, &tile.header, index);
-            debug_assert!(
-                full.is_err(),
-                "tile {index}: the quick check refused a valid tile"
-            );
-            full?;
-        }
+/// Check the header of a tile's first tile-part, `tile`, as the tile walk
+/// reads it, so that a malformed tile-part header is a parse error rather
+/// than a surprise partway through a decode, and the first fault in the
+/// input is the one given. A header is sized by the component count and a
+/// codestream can declare tens of thousands of tiles, so the tile's own
+/// markers are checked against a summary of the main header instead of
+/// resolving a header per tile. Only a tile found at fault is resolved in
+/// full, so that the fault is reported in the full check's words. `index`
+/// is the tile's index in the grid.
+///
+/// The tile's later tile-parts add only `POC` volumes, which the walk
+/// counts as it reads them.
+fn check_first_tile_part(
+    main: &MainHeader,
+    summary: &OnceCell<ComponentSummary>,
+    tile: &TileHeader,
+    index: usize,
+) -> Result<()> {
+    if tile_overrides_are_valid(main, summary, &tile.overrides) {
+        return Ok(());
     }
-    Ok(())
+    // The two checks agree, so the full one fails here. Were it ever to
+    // pass, its verdict would stand.
+    let full = check_tile_in_full(main, tile, index);
+    debug_assert!(
+        full.is_err(),
+        "tile {index}: the quick check refused a valid tile"
+    );
+    full
 }
 
 /// Resolve a tile's header in full and check it: every invariant
 /// [`resolve_tile_header`] holds it to, then the wavelet rule below. This is
-/// what a valid tile header is; [`tile_header_is_valid`] decides the same
-/// without resolving one.
+/// what a valid tile header is; [`tile_overrides_are_valid`] decides the
+/// same, but for the `POC` volumes, without resolving one.
 fn check_tile_in_full(main: &MainHeader, tile: &TileHeader, index: usize) -> Result<()> {
     let resolved = resolve_tile_header(main, tile, index)?;
 
@@ -401,16 +406,11 @@ fn quant_fits(levels: u8, transform: Transform, quant: &Qcd) -> bool {
         && !(transform == Transform::Irreversible97 && quant.style == QuantStyle::None)
 }
 
-/// Whether [`check_tile_in_full`] accepts `tile` over `main`, decided in time
-/// proportional to the tile's own markers, not to the component count. `main`
-/// must be a header [`parse_main_header`] accepted, so that the components a
-/// tile leaves alone are valid already.
-///
-/// A component the tile names in a COC or QCC is resolved and checked on its
-/// own. Every other one takes the tile COD's coding if there is one, else its
-/// main-header coding, and likewise the tile QCD's quantization. So a tile COD
-/// or QCD is checked once, against the extreme of the components it lands on:
-/// the first entry of `summary` the tile does not name.
+/// Whether [`check_tile_in_full`] accepts `tile` over `main`: its own
+/// markers by [`tile_overrides_are_valid`], and its `POC` volumes. The walk
+/// counts the volumes as each tile-part adds to them, so only the tests ask
+/// this of a whole tile header.
+#[cfg(test)]
 fn tile_header_is_valid(
     main: &MainHeader,
     summary: &OnceCell<ComponentSummary>,
@@ -420,9 +420,18 @@ fn tile_header_is_valid(
         && tile_overrides_are_valid(main, summary, &tile.overrides)
 }
 
-/// [`tile_header_is_valid`] for a tile whose first tile-part carries `own`,
-/// leaving out its `POC` volumes, the one part of the check that its later
-/// tile-parts can change.
+/// Whether [`check_tile_in_full`] accepts a tile whose first tile-part
+/// carries `own` over `main`, leaving out its `POC` volumes, the one part of
+/// the check that its later tile-parts can change. It is decided in time
+/// proportional to the tile's own markers, not to the component count.
+/// `main` must be a header [`parse_main_header`] accepted, so that the
+/// components a tile leaves alone are valid already.
+///
+/// A component the tile names in a COC or QCC is resolved and checked on its
+/// own. Every other one takes the tile COD's coding if there is one, else its
+/// main-header coding, and likewise the tile QCD's quantization. So a tile COD
+/// or QCD is checked once, against the extreme of the components it lands on:
+/// the first entry of `summary` the tile does not name.
 fn tile_overrides_are_valid(
     main: &MainHeader,
     summary: &OnceCell<ComponentSummary>,
@@ -778,8 +787,19 @@ impl<'b, 'm> FirstPart<'b, 'm> {
 
 /// [`split_tiles`], strict or not (see [`walk_tiles`]).
 fn split_tiles_with(bytes: &[u8], parsed: ParsedHeader, strict: bool) -> Result<Codestream<'_>> {
+    split_tiles_checked(bytes, parsed, strict, false)
+}
+
+/// [`split_tiles_with`], checking each tile's header as the walk reads it
+/// where `check_headers` holds (see [`walk_tiles`]).
+fn split_tiles_checked(
+    bytes: &[u8],
+    parsed: ParsedHeader,
+    strict: bool,
+    check_headers: bool,
+) -> Result<Codestream<'_>> {
     let mut entries = Vec::new();
-    let tiles = walk_parsed(bytes, &parsed, strict, &mut entries)?;
+    let tiles = walk_parsed(bytes, &parsed, strict, check_headers, &mut entries)?;
     Ok(Codestream {
         header: parsed.header,
         tiles,
@@ -792,6 +812,7 @@ fn walk_parsed<'a>(
     bytes: &'a [u8],
     parsed: &ParsedHeader,
     strict: bool,
+    check_headers: bool,
     entries: &mut Vec<ReportEntry>,
 ) -> Result<Vec<Tile<'a>>> {
     // The tile-parts that start a tile, so the walk can reserve one record
@@ -807,6 +828,7 @@ fn walk_parsed<'a>(
         &parsed.header,
         &parsed.ppm,
         strict,
+        check_headers,
         first_parts,
         entries,
     )
@@ -1080,12 +1102,19 @@ struct TileParts<'a> {
 /// a tile may carry fewer or more tile-parts than it declares. Every other
 /// fault is refused as in a strict walk, including a `TPsot` out of order or
 /// with a gap, since the packets after a gap cannot be placed.
+///
+/// With `check_headers`, each tile's header is checked as its first
+/// tile-part is read ([`check_first_tile_part`]), and its `POC` volumes as
+/// each later one adds to them, so the fault refused is the first in the
+/// input, whatever the input holds after it.
+#[allow(clippy::too_many_arguments)]
 fn walk_tiles<'a>(
     bytes: &'a [u8],
     sot_offset: usize,
     main: &MainHeader,
     ppm: &[Vec<u8>],
     strict: bool,
+    check_headers: bool,
     first_parts: usize,
     entries: &mut Vec<ReportEntry>,
 ) -> Result<Vec<Tile<'a>>> {
@@ -1113,6 +1142,9 @@ fn walk_tiles<'a>(
     // Whether every main-header component codes and quantizes as the main
     // COD and QCD say, for `check_restatement`; worked out on first use.
     let uniform = OnceCell::new();
+    // The main header's components sorted for `check_first_tile_part`,
+    // worked out on first use.
+    let summary = OnceCell::new();
 
     let mut part_offset = sot_offset;
     loop {
@@ -1217,6 +1249,9 @@ fn walk_tiles<'a>(
             Err(error) => return Err(error),
         };
         if first_part {
+            if check_headers {
+                check_first_tile_part(main, &summary, &tile_header, index)?;
+            }
             tile.header = tile_header;
         } else {
             // A later tile-part may restate the coding-style values already in
@@ -1235,6 +1270,12 @@ fn walk_tiles<'a>(
             )?;
             check_poc_budget(tile.header.poc.len() + tile_header.poc.len())?;
             tile.header.poc.extend(tile_header.poc);
+            // The volumes the tile resolves to, with the main header's where
+            // its first tile-part has none, as `resolve_tile_header` counts
+            // them.
+            if check_headers {
+                check_poc_budget(resolved_poc_len(main, &tile.header))?;
+            }
         }
         // Packed packet headers append across the tile's parts in TPsot order
         // (which is arrival order, enforced above), matching the body order.

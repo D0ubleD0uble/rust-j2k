@@ -2140,10 +2140,9 @@ pub(crate) mod tests {
 
     /// The same where tile 0 is refused and tile 1's own header is at
     /// fault: a `COD` of one level under a main `QCD` of one step, which
-    /// the decode's parse refuses for the tile-parts. The walk that gathers
-    /// tile 1's header is kept with the fault walk, so the calls still read
-    /// each `SOT` about once in all. A walk from the start for that header
-    /// on each call read 1,566,568 here.
+    /// the decode's parse refuses for the tile-parts. The fault walk stops
+    /// in tile 1's first tile-part and is kept there, so the calls still
+    /// read each `SOT` about once in all.
     #[test]
     fn header_after_each_feed_of_a_tile_header_at_fault_walks_about_once() {
         use crate::synth;
