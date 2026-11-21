@@ -251,8 +251,8 @@ struct Frame {
 }
 
 /// The [`Frame`] of component `comp` of tile `tile`, or the error that
-/// refuses it: a code-block size past the standard's (an [`Error::Marker`]),
-/// or an empty tile-component.
+/// refuses it: a code-block size past the standard's (an [`Error::Marker`]).
+/// The tile-component itself can be empty.
 fn frame(header: &MainHeader, tile: u32, comp: usize) -> Result<Frame> {
     let siz = &header.siz;
     let cod = &header
@@ -271,11 +271,11 @@ fn frame(header: &MainHeader, tile: u32, comp: usize) -> Result<Frame> {
     let rect = siz.tile_component_rect(tile, comp).ok_or_else(|| {
         Error::inconsistent(format!("no tile {tile} or no component {comp} in `SIZ`"))
     })?;
-    if rect.is_empty() {
-        return Err(Error::codestream(format!(
-            "tile {tile} has an empty area on component {comp}"
-        )));
-    }
+    // A tile narrower or shorter than the component's sub-sampling holds no
+    // sample of it (ISO B.3, Eq. B-12 gives `tcx0 == tcx1`), and SIZ allows
+    // that. Every resolution of such a tile-component is empty, so it has no
+    // precinct, no packet and no sample. A component with no sample in the
+    // whole image is refused with `SIZ` (`validate_geometry`).
 
     // Code-block exponents (COD stores `log2(size) - 2`). The standard bounds
     // each at 2^10 and their sum at 2^12 (ISO Table A-18); reject anything

@@ -196,8 +196,9 @@ pub enum Error {
     /// parameter that another segment rules out. That last covers a
     /// component index past `SIZ`'s count, a `TLM` tile index past the
     /// grid, an `RGN` or a MIXED code-block style that `CAP` rules out,
-    /// quantization steps too few for the decomposition levels, and a color
-    /// transform over components that differ. A segment whose length runs
+    /// quantization steps too few for the decomposition levels, a color
+    /// transform over components that differ, and a `SIZ` whose image holds
+    /// no sample of a component. A segment whose length runs
     /// past the end of the input is [`Error::Codestream`] or
     /// [`Error::Incomplete`] instead, since the input may be cut short.
     Marker(ErrorDetail),
