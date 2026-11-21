@@ -446,7 +446,7 @@ mod tests {
         };
         assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
         assert_eq!(limit.retry_with(), Some(Raise::Raised(2)));
-        let retry = below.with_retry(&limit).unwrap();
+        let retry = below.raised_for(&limit).unwrap();
         assert_eq!(block_work(&bytes, &retry).1, Some(2 * (work - 1)));
         assert_eq!(decode_with(&bytes, &retry).unwrap(), image);
 

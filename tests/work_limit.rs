@@ -409,9 +409,9 @@ fn the_builders_store_raised_one_as_the_default() {
         .with_packet_work_limit(WorkLimit::Raised(1))
         .with_code_block_work_limit(WorkLimit::Raised(1))
         .with_sample_limit(SampleLimit::Raised(1));
-    assert_eq!(options.packet_work_limit, WorkLimit::Default);
-    assert_eq!(options.code_block_work_limit, WorkLimit::Default);
-    assert_eq!(options.sample_limit, SampleLimit::Default);
+    assert_eq!(options.packet_work_limit(), &WorkLimit::Default);
+    assert_eq!(options.code_block_work_limit(), &WorkLimit::Default);
+    assert_eq!(options.sample_limit(), &SampleLimit::Default);
     assert_eq!(
         format!("{options:?}"),
         format!("{:?}", DecodeOptions::default())
@@ -427,8 +427,8 @@ fn the_builders_store_raised_one_as_the_default() {
         let options = DecodeOptions::default()
             .with_packet_work_limit(limit.clone())
             .with_code_block_work_limit(limit.clone());
-        assert_eq!(options.packet_work_limit, limit);
-        assert_eq!(options.code_block_work_limit, limit);
+        assert_eq!(options.packet_work_limit(), &limit);
+        assert_eq!(options.code_block_work_limit(), &limit);
     }
     for limit in [
         SampleLimit::Default,
@@ -439,7 +439,7 @@ fn the_builders_store_raised_one_as_the_default() {
         SampleLimit::AtMost(1),
     ] {
         let options = DecodeOptions::default().with_sample_limit(limit.clone());
-        assert_eq!(options.sample_limit, limit);
+        assert_eq!(options.sample_limit(), &limit);
     }
 }
 
@@ -524,7 +524,7 @@ fn the_named_factor_is_the_smallest_that_admits_the_file() {
 /// with; `None` for a limit no option raises.
 fn raised(options: DecodeOptions, limit: &LimitDetail) -> Option<DecodeOptions> {
     assert!(limit.kind().is_adjustable());
-    options.with_retry(limit)
+    options.raised_for(limit)
 }
 
 /// A caller can retry a refused file from the typed data alone, without
@@ -660,8 +660,8 @@ fn rank(limit: &WorkLimit) -> u64 {
     }
 }
 
-/// Follow `with_retry` from `start` until `bytes` decodes, checking each
-/// step: `with_retry` gives options, the limit the refusal names goes up,
+/// Follow `raised_for` from `start` until `bytes` decodes, checking each
+/// step: `raised_for` gives options, the limit the refusal names goes up,
 /// and every other option is as it was (compared by `Debug`, so a new field
 /// counts). Returns the image and the steps taken.
 fn follow_ladder(
@@ -679,17 +679,17 @@ fn follow_ladder(
             Err(e) => panic!("{name}: {e}"),
         };
         let next = options
-            .with_retry(&limit)
+            .raised_for(&limit)
             .unwrap_or_else(|| panic!("{name}: no retry for {limit:?}"));
         // Both kinds here are work bounds, set with a `WorkLimit`.
-        let hint = WorkLimit::from(limit.retry_with().expect("with_retry gave options"));
+        let hint = WorkLimit::from(limit.retry_with().expect("raised_for gave options"));
         let (old, expected) = match limit.kind() {
             LimitKind::PacketWork => (
-                &options.packet_work_limit,
+                &options.packet_work_limit(),
                 options.clone().with_packet_work_limit(hint.clone()),
             ),
             LimitKind::CodeBlockWork => (
-                &options.code_block_work_limit,
+                &options.code_block_work_limit(),
                 options.clone().with_code_block_work_limit(hint.clone()),
             ),
             other => panic!("{name}: unexpected {other:?}"),
@@ -708,7 +708,7 @@ fn follow_ladder(
         assert_eq!(
             format!("{next:?}"),
             format!("{expected:?}"),
-            "{name}: with_retry changed more than the option it names"
+            "{name}: raised_for changed more than the option it names"
         );
         options = next;
         steps += 1;
@@ -719,13 +719,13 @@ fn follow_ladder(
     }
 }
 
-/// A caller that follows `with_retry` reaches the image in a few steps, from
+/// A caller that follows `raised_for` reaches the image in a few steps, from
 /// the defaults or from `Raised(2)`, with each step raising only the option
 /// the refusal names, and the image is the one with no limits.
 ///
 /// The packet bound's hint doubles the factor it ran under, so a file that
 /// needs a factor of `n` takes about log2(n) steps. Measured on a release
-/// build, a `with_retry` loop from the defaults:
+/// build, a `raised_for` loop from the defaults:
 ///
 /// | File | Stepping up by one | Doubling |
 /// |---|---|---|
@@ -738,7 +738,7 @@ fn follow_ladder(
 /// what matters.) Those files are too slow for a test, so it follows a sweep
 /// and the code-block file; the hint's arithmetic is unit tested in `limit_hint`.
 #[test]
-fn a_with_retry_ladder_ends_in_a_few_steps_at_the_unlimited_image() {
+fn a_raised_for_ladder_ends_in_a_few_steps_at_the_unlimited_image() {
     let unlimited = DecodeOptions::default()
         .with_sample_limit(SampleLimit::Unlimited)
         .with_packet_work_limit(WorkLimit::Unlimited)
@@ -808,7 +808,7 @@ fn a_tile_cap_refusal_retries_by_the_sample_limit_and_ends() {
         // promise (#529 may give the refusal more).
         assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
         assert_eq!(limit.retry_with(), None, "{limit}");
-        assert!(start.with_retry(&limit).is_none());
+        assert!(start.raised_for(&limit).is_none());
         assert!(
             matches!(decode_with(&bytes, &unlimited), Err(Error::Limit(l)) if l.kind() == LimitKind::AddressSpace)
         );
@@ -818,7 +818,7 @@ fn a_tile_cap_refusal_retries_by_the_sample_limit_and_ends() {
     assert_eq!(limit.retry_with(), Some(Raise::Raised(2)), "{limit}");
     let next = start
         .clone()
-        .with_retry(&limit)
+        .raised_for(&limit)
         .expect("a tile cap refusal retries");
     assert_eq!(
         format!("{next:?}"),
@@ -864,14 +864,14 @@ fn a_tile_code_block_cap_refusal_retries_by_the_sample_limit() {
         // behavior, not a promise (#529 may give the refusal more).
         assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
         assert_eq!(limit.retry_with(), None, "{limit}");
-        assert!(start.with_retry(&limit).is_none());
+        assert!(start.raised_for(&limit).is_none());
         return;
     }
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
     assert_eq!(limit.retry_with(), Some(Raise::Raised(2)), "{limit}");
     let next = start
         .clone()
-        .with_retry(&limit)
+        .raised_for(&limit)
         .expect("a tile cap refusal retries");
     assert_eq!(
         format!("{next:?}"),

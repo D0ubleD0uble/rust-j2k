@@ -153,15 +153,15 @@ fn a_tile_past_the_floor_decodes_once_the_input_raises_the_limit() {
             "{limit}"
         );
         let retry = DecodeOptions::default()
-            .with_retry(&limit)
+            .raised_for(&limit)
             .expect("the hint names the sample limit");
-        assert_eq!(retry.sample_limit, SampleLimit::Raised(2));
+        assert_eq!(retry.sample_limit(), &SampleLimit::Raised(2));
         decodes(&small, &retry, width, height);
         decodes(&padded, &DecodeOptions::default(), width, height);
     } else {
         // No sample limit admits the tile, whatever the padding, and the
         // refusal has no hint to retry with.
-        assert!(DecodeOptions::default().with_retry(&limit).is_none());
+        assert!(DecodeOptions::default().raised_for(&limit).is_none());
         let limit = refusal(&padded, &DecodeOptions::default());
         assert_over_cap(&limit, LimitKind::TileCodeBlocks, None, (0, blocks));
     }
@@ -192,7 +192,7 @@ fn a_tile_that_needs_twice_the_scaled_cap_gets_raised_2() {
             )),
             "{limit}"
         );
-        let retry = DecodeOptions::default().with_retry(&limit).unwrap();
+        let retry = DecodeOptions::default().raised_for(&limit).unwrap();
         decodes(&bytes, &retry, width, height);
     }
 }
@@ -217,7 +217,7 @@ fn under_at_most_the_code_block_cap_scales_from_n_with_no_retry() {
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
     assert_eq!(limit.retry_with(), None, "{limit}");
     assert_eq!(refused_at(&limit), (0, blocks), "{limit}");
-    assert!(options.with_retry(&limit).is_none());
+    assert!(options.raised_for(&limit).is_none());
     assert_eq!(
         limit.message(),
         format!(
@@ -257,7 +257,7 @@ fn under_at_most_an_image_within_the_floor_decodes() {
         None,
         (0, blocks_of(width, height)),
     );
-    assert!(options.with_retry(&limit).is_none());
+    assert!(options.raised_for(&limit).is_none());
 }
 
 /// The precinct cap follows the same rule, one precinct for each 2048
@@ -287,7 +287,7 @@ fn the_precinct_cap_scales_with_the_sample_limit() {
         );
         // Its code-blocks, one a precinct, are within their cap.
         assert!(!limit.message().contains(", and its "), "{limit}");
-        let retry = DecodeOptions::default().with_retry(&limit).unwrap();
+        let retry = DecodeOptions::default().raised_for(&limit).unwrap();
         decodes(&bytes, &retry, width, height);
 
         let exact =
@@ -298,7 +298,7 @@ fn the_precinct_cap_scales_with_the_sample_limit() {
         let limit = refusal(&bytes, &under);
         assert_over_cap(&limit, LimitKind::TilePrecincts, None, (0, precincts));
     } else {
-        assert!(DecodeOptions::default().with_retry(&limit).is_none());
+        assert!(DecodeOptions::default().raised_for(&limit).is_none());
     }
 
     // A tile over both caps is refused for its precincts, which need more
@@ -322,7 +322,7 @@ fn the_precinct_cap_scales_with_the_sample_limit() {
     // The factor named admits both counts. The header read stands in for
     // the decode, whose 2^21 precincts take about 550 MB.
     if cfg!(target_pointer_width = "64") {
-        let retry = DecodeOptions::default().with_retry(&limit).unwrap();
+        let retry = DecodeOptions::default().raised_for(&limit).unwrap();
         let header = read_header_with(&both, &retry).expect("the header is admitted");
         assert_eq!((header.width, header.height), (2048, 1024));
     }
@@ -382,7 +382,7 @@ fn a_tile_over_both_caps_names_a_factor_that_admits_both() {
         other => panic!("{other:?}"),
     }
 
-    let retry = DecodeOptions::default().with_retry(&limit).unwrap();
+    let retry = DecodeOptions::default().raised_for(&limit).unwrap();
     decodes(&bytes, &retry, width, height);
     let mut decoder = IncrementalDecoder::new(retry).unwrap();
     decoder.feed(&bytes);
@@ -417,7 +417,7 @@ fn header_ladder(bytes: &[u8]) -> (Vec<(LimitKind, Option<Raise>)>, bool) {
             Ok(_) => return (ladder, true),
             Err(Error::Limit(limit)) => {
                 ladder.push((limit.kind(), limit.retry_with()));
-                match options.with_retry(&limit) {
+                match options.raised_for(&limit) {
                     Some(next) => options = next,
                     None => return (ladder, false),
                 }
@@ -572,7 +572,7 @@ fn a_tile_part_cod_is_counted_as_the_decode_counts_it() {
         (0, blocks_of(width, height)),
     );
     if cfg!(target_pointer_width = "64") {
-        let retry = DecodeOptions::default().with_retry(&limit).unwrap();
+        let retry = DecodeOptions::default().raised_for(&limit).unwrap();
         decodes(&wide, &retry, width, height);
     }
 }
@@ -626,7 +626,7 @@ fn a_tile_part_cod_over_both_caps_names_a_factor_for_both() {
         }
         other => panic!("{other:?}"),
     }
-    let retry = DecodeOptions::default().with_retry(&limit).unwrap();
+    let retry = DecodeOptions::default().raised_for(&limit).unwrap();
     decodes(&bytes, &retry, width, height);
 }
 
@@ -1288,7 +1288,7 @@ fn a_jp2_file_is_refused_alike() {
     assert_eq!(limit.kind(), OVER_BLOCKS, "{limit}");
     if cfg!(target_pointer_width = "64") {
         assert_eq!(limit.retry_with(), Some(Raise::Raised(2)), "{limit}");
-        let retry = DecodeOptions::default().with_retry(&limit).unwrap();
+        let retry = DecodeOptions::default().raised_for(&limit).unwrap();
         decodes(&bytes, &retry, width, height);
     } else {
         assert_eq!(limit.retry_with(), None, "{limit}");
@@ -1504,7 +1504,7 @@ fn a_refusal_only_unlimited_lifts_is_a_wait() {
         }
         other => panic!("{other:?}"),
     }
-    let unlimited = DecodeOptions::default().with_retry(&limit).unwrap();
+    let unlimited = DecodeOptions::default().raised_for(&limit).unwrap();
     let header = read_header_with(&bytes, &unlimited).expect("Unlimited admits the tile");
     assert_eq!((header.width, header.height), (width, height));
 }

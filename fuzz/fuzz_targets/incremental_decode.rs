@@ -497,19 +497,19 @@ fn change(decoder: &mut IncrementalDecoder, options: &mut DecodeOptions, hash: u
         _ => return false,
     };
     let set = match hash % 8 {
-        0 => checked(decoder.set_resolution_reduction(wanted.resolution_reduction)),
-        1 => checked(decoder.set_max_quality_layers(wanted.max_quality_layers)),
-        _ => checked(decoder.set_region(wanted.region.clone())),
+        0 => checked(decoder.set_resolution_reduction(wanted.resolution_reduction())),
+        1 => checked(decoder.set_max_quality_layers(wanted.max_quality_layers())),
+        _ => checked(decoder.set_region(wanted.region().clone())),
     };
-    let empty = matches!(wanted.region, Region::Window(w) if w.x0 >= w.x1 || w.y0 >= w.y1);
-    if wanted.max_quality_layers == Some(0) || empty {
+    let empty = matches!(wanted.region(), Region::Window(w) if w.x0 >= w.x1 || w.y0 >= w.y1);
+    if wanted.max_quality_layers() == Some(0) || empty {
         assert!(matches!(set, Err(Error::InvalidOptions(_))), "{set:?}");
         return false;
     }
     set.expect("valid options are set");
-    let changed = wanted.resolution_reduction != options.resolution_reduction
-        || wanted.max_quality_layers != options.max_quality_layers
-        || wanted.region != options.region;
+    let changed = wanted.resolution_reduction() != options.resolution_reduction()
+        || wanted.max_quality_layers() != options.max_quality_layers()
+        || wanted.region() != options.region();
     *options = wanted;
     changed
 }

@@ -159,7 +159,7 @@ use crate::{
 /// raise, and a refusal by the bound on the walks of tiles not kept, which the
 /// refines spend together. A caller
 /// who raises the packet work limit to the factor a refusal names, as
-/// [`DecodeOptions::with_retry`] does, and feeds the file to a new decoder,
+/// [`DecodeOptions::raised_for`] does, and feeds the file to a new decoder,
 /// accepts up to about ten times the packet work the file needs over its
 /// refines: a factor up to twice what it needs, times the five bounds of the
 /// walks of tiles not kept.
@@ -812,7 +812,7 @@ pub enum Waiting {
     ///
     /// The detail is the one [`decode_with`] gives for the bytes fed, with
     /// its [`retry_with`](LimitDetail::retry_with).
-    /// [`DecodeOptions::with_retry`] applies it, for a new decoder or a
+    /// [`DecodeOptions::raised_for`] applies it, for a new decoder or a
     /// decode of [`into_bytes`](IncrementalDecoder::into_bytes).
     ///
     /// A code-block `WorkLimit` comes only where the refine decoded every
