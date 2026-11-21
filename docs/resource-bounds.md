@@ -513,8 +513,8 @@ tile, and more for each `COC` or `QCC`, up to about 13 times the bytes of
 those tiles' tile-parts. So the walk's work stays
 within a small multiple of the input: on a 12.5 MB file of 2048 tiles
 whose first tile-part headers of 143 `QCC`s each 254 later tile-parts
-restate, the refusal takes about 135 ms in release, about what the decode's
-takes.
+restate, the refusal takes about 135 ms in release, as long as the
+decode takes to refuse it.
 It checks each tile's own header as it reads the tile's first tile-part,
 from the header in hand, as the parse does. It reads the main header in
 place and keeps no tile record, so it copies no `PPM`

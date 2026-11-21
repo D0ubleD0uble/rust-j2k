@@ -463,9 +463,10 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// for each tile whose later tile-parts restate the coding of its first
 /// with headers that differ, that coding, up to about 13 times the bytes
 /// of those tiles' tile-parts: 240 ms and 640 KiB in release on that
-/// 235 MB file with the tile read left out, and about 135 ms, about what the
-/// decode takes to refuse it, on a 12.5 MB file of 2048 tiles whose first
-/// tile-part headers of 143 `QCC`s each 254 later tile-parts restate.
+/// 235 MB file with the tile read left out, and about 135 ms, as long as
+/// the decode takes to refuse it, on a 12.5 MB file of 2048 tiles whose
+/// first tile-part headers of 143 `QCC`s each 254 later tile-parts
+/// restate.
 /// The decode can also refuse the file before it
 /// gets to that tile, for what only decoding finds, and then names another
 /// tile, kind or factor, or another error: a fault or a work bound in the
