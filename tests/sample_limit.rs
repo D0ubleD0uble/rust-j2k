@@ -354,6 +354,8 @@ fn many_tiles_of_geometry_are_held_to_the_packet_work_bound() {
                 m.message().contains("retry with `WorkLimit::Raised(2)`"),
                 "{m}"
             );
+            assert_eq!(m.kind(), LimitKind::PacketWork, "{m}");
+            assert_eq!(m.refused_at(), None, "{m}");
         }
         other => panic!("{:?}", other.map(|i| (i.width, i.height))),
     }
