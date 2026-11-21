@@ -433,7 +433,8 @@ fn each_header_of_a_jp2_file_is_the_read_of_its_prefix() {
 /// 100 tiles of 4096 components over the precinct cap under the main
 /// header, each but `refused` brought within by a tile-part `COD`, in index
 /// order (`tests/tile_geometry_cap.rs` has the same). The count of the
-/// tiles' own headers runs out of its budget at tile 85.
+/// tiles' own headers runs out of its budget at tile 85: each costs 45,056
+/// steps to read and 4096 to count, of the 2^22.
 fn past_the_budget(refused: u16) -> Vec<u8> {
     let tiles = 100u16;
     let mut cod = synth::cod_body(1, 0, 0, 0);
@@ -466,11 +467,12 @@ fn past_the_budget(refused: u16) -> Vec<u8> {
 
 /// A call on more bytes is charged the budget for the tiles an earlier call
 /// read, as a read from the start is, so the budget runs out at the same
-/// tile: tile 66 is refused, and tile 95, past where the budget runs out, is
-/// left to the decode.
+/// tile: tile 66 is refused, and tile 90, past where the budget runs out, is
+/// left to the decode. Were either charge left out for the tiles read
+/// before, the budget would last past tile 90.
 #[test]
 fn each_header_of_a_file_past_the_budget_is_the_read_of_its_prefix() {
-    for (refused, want) in [(66, "Err(Limit("), (95, "Ok(Some(")] {
+    for (refused, want) in [(66, "Err(Limit("), (90, "Ok(Some(")] {
         let bytes = past_the_budget(refused);
         let mut rng = Rng(u64::from(refused));
         let name = format!("tile {refused} refused");
