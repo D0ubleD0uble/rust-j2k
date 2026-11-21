@@ -239,21 +239,24 @@ fn decode_finds_first_in_a_lower_tile(
 /// - `header` is a refusal of one tile, T, as for
 ///   [`decode_finds_first_in_a_lower_tile`], and `decode` is not an error
 ///   the header itself gives from a tile's own header.
-/// - The header read with `strict` on gives `decode`. Where it refuses a
-///   tile it runs the decode's parse of the tile-parts and gives its fault,
-///   and that parse reads no packet data, so `decode` is a fault of the
-///   tile-parts: not one in packet data, such as an `SOP` out of sequence,
-///   whatever tile it is in.
+/// - The header read with `strict` on fails, and gives `decode` or what the
+///   decode with `strict` on gives. Where it refuses a tile it runs the
+///   decode's parse of the tile-parts and gives its fault, and that parse
+///   reads no packet data, so the fault is in the tile-parts: not in packet
+///   data, such as an `SOP` out of sequence, whatever tile it is in. The
+///   strict-on fault can be one only a strict walk finds (a missing tile, a
+///   tile-part past its `TNsot`) ahead of `decode`; then both strict-on reads
+///   must agree on it.
 /// - The decode of T alone, with T's refusal lifted, gives `decode`.
 /// - The decode of another tile alone (tile 0, or tile 1 for T = 0), under
 ///   the options as given, gives `decode` too. A grid of one tile has no
 ///   other tile.
 ///
-/// Not checked: the refusal of T itself, as the decode never gets to T,
-/// and so whether the strict-off header read was right to refuse T. A
-/// strict-off header that wrongly refuses T, on a file with a fault in its
-/// tile-parts, is excused. The option sets with `strict` on check the
-/// refusal, as far as the strict and strict-off walks share their code.
+/// The decode never gets to T, so the strict-off refusal of T is checked
+/// only through the strict-on header read: one that admits T reads `Ok`,
+/// and the excuse fails. A wrong strict-off refusal of T is missed only
+/// where the strict-on read wrongly refuses T too, or where a strict-only
+/// fault comes first and the strict-on read never gets to T.
 fn decode_finds_a_tile_parts_fault_first(
     data: &[u8],
     options: &rust_j2k::DecodeOptions,
@@ -268,11 +271,15 @@ fn decode_finds_a_tile_parts_fault_first(
         return false;
     };
     let expected = Some(format!("{decode:?}"));
-    let strict = rust_j2k::read_header_with(data, &options.clone().with_strict(true));
-    if strict.err().map(|e| format!("{e:?}")) != expected {
+    let debug = |result: rust_j2k::Result<rust_j2k::Image>| result.err().map(|e| format!("{e:?}"));
+    let strict = options.clone().with_strict(true);
+    let Err(strict_header) = rust_j2k::read_header_with(data, &strict) else {
+        return false;
+    };
+    let strict_header = Some(format!("{strict_header:?}"));
+    if strict_header != expected && strict_header != debug(rust_j2k::decode_with(data, &strict)) {
         return false;
     }
-    let debug = |result: rust_j2k::Result<rust_j2k::Image>| result.err().map(|e| format!("{e:?}"));
     if debug(rust_j2k::decode_with(
         data,
         &lifted.with_region(Region::Tile(tile)),

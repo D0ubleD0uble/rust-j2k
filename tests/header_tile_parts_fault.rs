@@ -218,3 +218,39 @@ fn a_missing_tile_after_a_tile_over_a_cap_comes_first() {
     );
     assert_eq!(keyed(header), keyed(decode_with(bytes, &lenient)));
 }
+
+/// A strict-only fault ahead of the chain fault (the seed
+/// `tests/fixtures/header/strict_off_tnsot_then_chain.j2k`, with the main
+/// header of `row` for two tiles): tile 1's one tile-part comes first, then
+/// tile 0 has two tile-parts that each declare one, and `00 00` stands where
+/// the `EOC` should be. With `strict` off the header read refuses tile 1 and the
+/// decode, of the file or of either tile alone, gives the chain's fault.
+/// With `strict` on both give the extra tile-part's fault, which only a
+/// strict walk refuses. Like the test above, this pins current behavior
+/// that #545 may change.
+#[test]
+fn a_strict_only_fault_can_come_before_the_tile_parts_fault() {
+    let bytes = include_bytes!("fixtures/header/strict_off_tnsot_then_chain.j2k");
+    let chain = "Codestream(\"expected `SOT` or `EOC` after a tile-part, found 0x0000\")";
+    let lenient = DecodeOptions::default().with_strict(false);
+    let header = read_header_with(bytes, &lenient);
+    assert!(
+        matches!(&header, Err(Error::Limit(limit))
+            if limit.kind() == LimitKind::TilePrecincts
+                && limit.message().starts_with("tile 1 holds ")),
+        "{header:?}"
+    );
+    assert_eq!(keyed(decode_with(bytes, &lenient)), Err(chain.to_string()));
+    for tile in 0..2 {
+        let alone = lenient.clone().with_region(Region::Tile(tile));
+        assert_eq!(keyed(decode_with(bytes, &alone)), Err(chain.to_string()));
+    }
+    let strict = DecodeOptions::default();
+    let header = read_header_with(bytes, &strict);
+    assert!(
+        matches!(&header, Err(Error::Codestream(d))
+            if d.message().starts_with("tile 0 tile-part 1 of a declared 1 tile-parts")),
+        "{header:?}"
+    );
+    assert_eq!(keyed(header), keyed(decode_with(bytes, &strict)));
+}

@@ -801,6 +801,21 @@ tile 0 and the decode refuses the chain, and the `header` target's excuse
 has no other tile to decode alone. `opj_decompress` 2.5.0 fails to decode
 the tile, with `-allow-partial` too. It has no license restriction.
 
+`header/strict_off_tnsot_then_chain.j2k` (129 bytes, SHA-256
+`40d127c1d7ae06dcaf8b413c0e9f7f362d23553b8b8916cd042edf59a31dd94a`) was
+written by hand in the review of #504 (PR #542), from the main header `row`
+writes for two tiles. Tile 1's one tile-part, with no data, comes first;
+then tile 0's two tile-parts, each with `TNsot` 1, the first carrying a
+`COD` of no levels and one empty packet; then `00 00` where the `EOC` should
+be. With `strict` off, `read_header_with` refuses tile 1 for its precincts
+and `decode_with` refuses the chain. With `strict` on both refuse tile 0's
+second tile-part, which a strict walk finds first. The `header` target's
+strict-off excuse accepts that strict-on fault when both strict-on reads
+give it. `a_strict_only_fault_can_come_before_the_tile_parts_fault` in
+`tests/header_tile_parts_fault.rs` pins these results. `opj_decompress`
+2.5.0 fails to decode tile 2 of 2, with `-allow-partial` too. It has no
+license restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and
