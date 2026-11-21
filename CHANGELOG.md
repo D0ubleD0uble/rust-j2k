@@ -37,13 +37,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no retry, and in an `IncrementalDecoder` it is an error, not a wait.
   `AtMost(0)`, and `AtMost` on either work bound, is `InvalidOptions`. It
   replaces counting the samples by hand from the header (#475).
-- For a refusal by the code-block work bound, `LimitDetail::refused_at`
-  gives the tile refused and the work it needs, as a `RefusedAt` with
-  `tile()` and `work()`, so a caller need not parse the message. The refusal
-  `decode_with` gives carries it, and so do `Waiting::WorkLimit` and a
-  `Waiting::BoundSpent` where the whole bound refuses a tile. Other
-  refusals give `None`, a `BoundSpent` that the earlier refines alone
-  refused included (#493).
+- For a refusal by the code-block work bound or by a tile's cap on
+  code-blocks or precincts, `LimitDetail::refused_at` gives the tile refused
+  and the amount it needs, as a `RefusedAt` with `tile()` and `amount()`, so
+  a caller need not parse the message. The amount is in sample-passes for
+  the work bound, code-blocks for `TileCodeBlocks` and precincts for
+  `TilePrecincts`. The refusal `decode_with` and `read_header_with` give
+  carries it, and so do `Waiting::WorkLimit` and a `Waiting::BoundSpent`
+  where the whole bound refuses a tile. For other kinds it is `None` today
+  and a later release may set it; so is it for a `BoundSpent` that the
+  earlier refines alone refused (#493, #513).
 
 ### Changed
 
