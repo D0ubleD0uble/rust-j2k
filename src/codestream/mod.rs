@@ -234,7 +234,7 @@ impl Codestream<'_> {
             .tiles
             .get(index)
             .ok_or_else(|| Error::inconsistent(format!("no tile {index}")))?;
-        resolve_tile_header(&self.header, &tile.header)
+        resolve_tile_header(&self.header, &tile.header, index)
     }
 }
 
@@ -324,7 +324,7 @@ fn check_tile_headers(main: &MainHeader, tiles: &[Tile<'_>]) -> Result<()> {
 /// what a valid tile header is; [`tile_header_is_valid`] decides the same
 /// without resolving one.
 fn check_tile_in_full(main: &MainHeader, tile: &TileHeader, index: usize) -> Result<()> {
-    let resolved = resolve_tile_header(main, tile)?;
+    let resolved = resolve_tile_header(main, tile, index)?;
 
     // Every tile writes into one buffer per component, and that buffer's
     // arithmetic follows the component's wavelet: 5/3 reconstructs exact
@@ -686,10 +686,7 @@ impl<'b, 'm> FirstPart<'b, 'm> {
     fn new(bytes: &'b [u8], main: &'m MainHeader, offset: usize, sot: &Sot, pos: usize) -> Self {
         // A tile-part cut short ends with the input, as the tile walk reads
         // it with `strict` off.
-        let end = match sot.psot {
-            0 => bytes.len(),
-            psot => offset.saturating_add(psot as usize).min(bytes.len()),
-        };
+        let end = part_end(bytes.len(), offset, sot.psot);
         FirstPart {
             part: bytes.get(..end).filter(|_| pos <= end),
             offset,
@@ -752,8 +749,8 @@ impl<'b, 'm> FirstPart<'b, 'm> {
                 self.tile, self.psot
             )));
         };
-        read_tile_part_header(&mut Cursor::at(part, self.pos), self.main, true)
-            .and_then(|(tile, _)| resolve_tile_header(self.main, &tile))
+        read_tile_part_header(&mut Cursor::at(part, self.pos), part.len(), self.main, true)
+            .and_then(|(tile, _)| resolve_tile_header(self.main, &tile, usize::from(self.tile)))
     }
 }
 
@@ -1179,7 +1176,8 @@ fn walk_tiles<'a>(
                 || part_offset
                     .checked_add(sot.psot as usize)
                     .is_none_or(|end| end > bytes.len()));
-        let (tile_header, packed) = match read_tile_part_header(&mut cur, main, first_part) {
+        let end = part_end(bytes.len(), part_offset, sot.psot);
+        let (tile_header, packed) = match read_tile_part_header(&mut cur, end, main, first_part) {
             Ok(read) => read,
             Err(_) if cut => {
                 if sot.psot != 0 {
@@ -1218,15 +1216,13 @@ fn walk_tiles<'a>(
         // Packed packet headers append across the tile's parts in TPsot order
         // (which is arrival order, enforced above), matching the body order.
         // They come from `PPT` (this tile-part's own markers) or `PPM` (the main
-        // header, one chunk per tile-part in codestream order) — never both for
-        // the same packets, so a codestream carrying each is out of subset.
+        // header, one chunk per tile-part in codestream order). A.7.4 disallows
+        // `PPT` once `PPM` is present, so a codestream carrying both is malformed.
         if ppm.is_empty() {
-            tile.packed_headers.extend(packed);
+            tile.packed_headers.extend(packed.into_iter().flatten());
         } else {
-            if !packed.is_empty() {
-                return Err(Error::unsupported(
-                    "a codestream carrying both `PPM` and `PPT` packed headers is not decoded",
-                ));
+            if packed.is_some() {
+                return Err(both_packed_headers());
             }
             let chunk = ppm.get(ppm_seq).ok_or_else(|| {
                 Error::codestream(
@@ -1614,6 +1610,21 @@ fn check_restatement(
     Ok(())
 }
 
+/// Where a tile-part that starts at `offset` ends: `Psot` bytes on, or the
+/// end of the input when `Psot` is 0 or runs past it.
+pub(super) fn part_end(len: usize, offset: usize, psot: u32) -> usize {
+    match psot {
+        0 => len,
+        psot => offset.saturating_add(psot as usize).min(len),
+    }
+}
+
+/// A codestream carrying `PPT` beside a `PPM`, which A.7.4 and A.7.5
+/// disallow. The fault walk gives it too, so it is built in one place.
+pub(super) fn both_packed_headers() -> Error {
+    Error::codestream("a codestream carrying both `PPM` and `PPT` packed headers is malformed")
+}
+
 /// Read one tile-part header: the markers between its `SOT` segment and its
 /// `SOD` (A.4.2). The cursor is left on the first byte of the packet data.
 ///
@@ -1622,11 +1633,16 @@ fn check_restatement(
 /// part's COD, COC, QCD and QCC are returned for the caller to hold to the
 /// values in force ([`check_restatement`]); [`OverrideReader`] refuses a later
 /// RGN, as a malformed codestream rather than an unsupported one.
+///
+/// `end` is where the tile-part ends, by its `Psot`, cut to the input.
+/// The packed headers are those of its `PPT` markers, or `None` if it has
+/// none.
 fn read_tile_part_header(
     cur: &mut Cursor<'_>,
+    end: usize,
     main: &MainHeader,
     first_part: bool,
-) -> Result<(TileHeader, Vec<u8>)> {
+) -> Result<(TileHeader, Option<Vec<u8>>)> {
     let siz = &main.siz;
     let mut tile = TileHeader::default();
     let mut overrides = OverrideReader::new(siz, Place::TilePart { first: first_part });
@@ -1681,13 +1697,24 @@ fn read_tile_part_header(
                 let ippt = body.take(body.remaining())?;
                 ppt.push((zppt, ippt.to_vec()));
             }
-            // These are legal markers, but not here: TLM and PLM are
-            // main-header-only (A.7.1, A.7.2), and SOP/EPH delimit packets
-            // after SOD. In a tile-part header they are a malformed
+            // These are legal markers, but not here (Table A.2): SIZ, TLM,
+            // PLM, PPM and CRG are main-header-only, SOP and EPH delimit
+            // packets after SOD, and SOC, SOT and EOC delimit the codestream
+            // and its tile-parts. In a tile-part header they are a malformed
             // codestream, not a missing feature.
-            marker::TLM | marker::PLM | marker::SOP | marker::EPH => {
+            marker::SIZ
+            | marker::TLM
+            | marker::PLM
+            | marker::PPM
+            | marker::CRG
+            | marker::SOP
+            | marker::EPH
+            | marker::SOC
+            | marker::SOT
+            | marker::EOC => {
                 return Err(Error::codestream(format!(
-                    "marker {m:#06X} is not permitted in a tile-part header"
+                    "marker {} is not permitted in a tile-part header",
+                    marker::describe(m)
                 )));
             }
             // CAP and CPF describe the whole codestream, so they belong in the
@@ -1700,21 +1727,101 @@ fn read_tile_part_header(
                     marker::describe(m)
                 )));
             }
+            // The rest map as in the main header (`parse_main_header`): a
+            // Part 2 marker and an unrecognized one are valid syntax this
+            // decoder does not read. The main header walks every segment
+            // before it judges one; here a damaged length earlier in the
+            // header can land in packet data, where `0xFF` and a byte below
+            // `0x90` may follow each other legally. So a code is taken for a
+            // marker only when the header's markers go on from it to `SOD`
+            // within the tile-part, and is damage otherwise.
+            code if marker::PART2.contains(&code) => {
+                if !reaches_sod(cur.buf, cur.pos - 2, end) {
+                    return Err(lost_sync(code));
+                }
+                return Err(Error::unsupported(format!(
+                    "{} is a JPEG 2000 Part 2 marker, outside the Part 1 subset",
+                    marker::describe(code)
+                )));
+            }
+            // A.1.3 says a decoder skips the reserved segment-less markers,
+            // and the main header does. OpenJPEG 2.5.0 refuses one in a
+            // tile-part header (it reads a length after it), so it is refused
+            // here too: as valid syntax not decoded, not as damage.
+            code if marker::RESERVED_NO_SEGMENT.contains(&code) => {
+                if !reaches_sod(cur.buf, cur.pos, end) {
+                    return Err(lost_sync(code));
+                }
+                return Err(Error::unsupported(format!(
+                    "reserved marker {code:#06X} in a tile-part header is not decoded"
+                )));
+            }
+            code if marker::is_marker(code) => {
+                if !reaches_sod(cur.buf, cur.pos - 2, end) {
+                    return Err(lost_sync(code));
+                }
+                return Err(Error::unsupported(format!(
+                    "unrecognized marker {code:#06X} in a tile-part header"
+                )));
+            }
+            // Not a marker at all: the header lost sync.
             other => {
                 return Err(Error::codestream(format!(
-                    "unexpected marker {other:#06X} in tile-part header"
+                    "expected a marker in a tile-part header, found {other:#06X}"
                 )));
             }
         }
     }
     // Stitch this tile-part's PPT markers into one buffer, ordered by Zppt.
-    ppt.sort_by_key(|&(z, _)| z);
-    let packed = ppt.into_iter().flat_map(|(_, bytes)| bytes).collect();
+    // `None` when it has none, which is not the same as `PPT`s with no bytes:
+    // beside a `PPM`, any `PPT` is malformed.
+    let packed = (!ppt.is_empty()).then(|| {
+        ppt.sort_by_key(|&(z, _)| z);
+        ppt.into_iter().flat_map(|(_, bytes)| bytes).collect()
+    });
     tile.overrides = overrides.finish();
     // `parse_tiles` reads this flag from the first tile-part only; the
     // `first_part` test is defensive.
     tile.poc_in_first_part = first_part && !tile.poc.is_empty();
     Ok((tile, packed))
+}
+
+/// Whether the marker segments of a tile-part header, from the marker at
+/// `at`, go on to a `SOD` that ends at or before `end`, stepping over each
+/// segment by its length. A delimiter (`SOC`, `SOT`, `EOC`), a byte pair that
+/// is no marker, a length below 2, or running past `end` breaks the chain.
+/// One pass over the rest of the header, made only where it is refused.
+fn reaches_sod(bytes: &[u8], mut at: usize, end: usize) -> bool {
+    loop {
+        if at.saturating_add(2) > end {
+            return false;
+        }
+        let Some(code) = read_u16(bytes, at) else {
+            return false;
+        };
+        match code {
+            marker::SOD => return true,
+            marker::SOC | marker::SOT | marker::EOC => return false,
+            _ if !marker::is_marker(code) => return false,
+            _ if !marker::has_segment(code) => at += 2,
+            _ => {
+                let Some(length) = read_u16(bytes, at + 2).filter(|&length| length >= 2) else {
+                    return false;
+                };
+                at += 2 + usize::from(length);
+            }
+        }
+    }
+}
+
+/// A marker code in a tile-part header that the markers after it do not
+/// carry on from to `SOD`: an earlier length was damaged, and the code is a
+/// byte pair of the packet data, not a marker.
+fn lost_sync(code: u16) -> Error {
+    Error::codestream(format!(
+        "{code:#06X} in a tile-part header is not followed by marker segments that reach \
+         `SOD` within the tile-part"
+    ))
 }
 
 /// Resolve one tile's effective parameters: the main header with the tile-part
@@ -1741,7 +1848,11 @@ fn read_tile_part_header(
 /// A tile with no markers of its own decodes under the main header unchanged,
 /// so that is returned borrowed: the main header already passed every check
 /// below. Any other tile is a copy, sized by the component count.
-fn resolve_tile_header<'m>(main: &'m MainHeader, tile: &TileHeader) -> Result<Cow<'m, MainHeader>> {
+fn resolve_tile_header<'m>(
+    main: &'m MainHeader,
+    tile: &TileHeader,
+    index: usize,
+) -> Result<Cow<'m, MainHeader>> {
     if *tile == TileHeader::default() {
         return Ok(Cow::Borrowed(main));
     }
@@ -1781,7 +1892,7 @@ fn resolve_tile_header<'m>(main: &'m MainHeader, tile: &TileHeader) -> Result<Co
 
     // The tile's resolved parameters must hold every invariant the main header's
     // do: a tile COD/QCD pair can break one the main header kept.
-    validate_resolved(&header)?;
+    validate_resolved(&header, Some(index))?;
     Ok(Cow::Owned(header))
 }
 
@@ -2066,14 +2177,13 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
                 }
             }
 
-            // Valid markers the decoded subset does not yet cover. Rejected
-            // rather than skipped: each one changes how the codestream is
-            // interpreted, so ignoring it would silently decode the wrong
-            // image. PPT/SOP/EPH belong after SOD or in a tile-part header,
-            // not the main one.
+            // PPT belongs in a tile-part header, and SOP and EPH in the
+            // packet data or the packed headers (Table A.2). Like PLT, in the
+            // main header they are a malformed codestream, not a missing
+            // feature.
             marker::PPT | marker::SOP | marker::EPH => {
-                return Err(Error::unsupported(format!(
-                    "marker {} is outside the decoded subset",
+                return Err(Error::codestream(format!(
+                    "{} is not permitted in the main header",
                     marker::describe(seg.code)
                 )));
             }
@@ -2128,7 +2238,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     header.cpf = cpf;
     overrides.lay_over(&mut header.components);
 
-    validate_resolved(&header)?;
+    validate_resolved(&header, None)?;
     let ppm_chunks = decode_ppm_chunks(ppm)?;
     Ok((header, sot_offset, ppm_chunks))
 }
@@ -2137,7 +2247,7 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
 /// are resolved — whichever header level resolved them. A tile-part COD/QCD pair
 /// can break one the main header kept, so this runs for every tile header too,
 /// not just the main one.
-fn validate_resolved(header: &MainHeader) -> Result<()> {
+fn validate_resolved(header: &MainHeader, tile: Option<usize>) -> Result<()> {
     // A `CAP` that says each tile-component holds one kind of code-block
     // (HTDECLARED, ISO/IEC 15444-15 A.3.2) rules out a MIXED style. The
     // style is per tile-component and `CAP` may follow COD or COC in the
@@ -2202,13 +2312,20 @@ fn validate_resolved(header: &MainHeader) -> Result<()> {
         // wavelet is per component once COC is in play: 5/3 is RCT (integers),
         // 9/7 is ICT (floats). The three components must share it — a mix
         // reconstructs some as integers and some as floats and describes a
-        // transform that does not exist. OpenJPEG reads the type off component 0.
+        // transform that does not exist: G.2 allows RCT only with the 5/3
+        // and G.3 ICT only with the 9/7, so a mix is an illegal `COD`/`COC`
+        // pairing, as `mct::check_geometry`'s faults are. OpenJPEG reads the
+        // type off component 0.
         let transform = header.components[0].coding.transform;
         for (index, params) in header.components.iter().take(3).enumerate() {
             if params.coding.transform != transform {
-                return Err(Error::unsupported(format!(
-                    "`COD` signals the color transform but component {index} uses a different \
-                     wavelet than component 0; the transform is undefined over a mix"
+                let place = match tile {
+                    Some(tile) => format!("tile {tile}"),
+                    None => "the main header".to_string(),
+                };
+                return Err(Error::marker(format!(
+                    "in {place}, the color transform applies but component {index} uses a \
+                     different wavelet than component 0; the transform is undefined over a mix"
                 )));
             }
         }
