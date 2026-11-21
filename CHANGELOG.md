@@ -123,9 +123,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decode admits (#495).
 - `IncrementalDecoder::header` goes on from what its last call found for
   the tiles over a cap, so calls after each feed walk the tile-parts about
-  once in all. On the window above, a call after each 256 KiB fed took
-  5.9 s in all and now takes 66 ms. Each call still gives what
-  `read_header_with` gives on the bytes fed (#502).
+  once in all. On the window above, calls after each 256 KiB fed took
+  5.9 s in all and now take 66 ms. The header of a tile-part not yet fed
+  in full, or of a last tile-part whose `Psot` is 0, is still read again
+  on each call. Each call still gives what `read_header_with` gives with
+  `strict` off on the bytes fed (#502).
 
 ### Fixed
 

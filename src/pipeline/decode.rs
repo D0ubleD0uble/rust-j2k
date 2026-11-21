@@ -33,6 +33,8 @@ pub(crate) fn read_header_kept(
     options: &DecodeOptions,
     kept: Option<&mut HeaderCache>,
 ) -> Result<Header> {
+    // What is kept is not keyed on `strict`: only reads with it off keep.
+    debug_assert!(kept.is_none() || !options.strict);
     check_options(options)?;
     let reduction = options.resolution_reduction;
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
@@ -2026,5 +2028,61 @@ pub(crate) mod tests {
         );
         assert!(read_header(&own_no_levels, &lenient).is_ok());
         check(&own_no_levels, &[lenient, reduced]);
+    }
+
+    /// What a header read keeps is for one input, which grows: a read of
+    /// another on the same [`HeaderCache`] gives what [`read_header`] gives.
+    /// Each file has two tiles of 1040 x 512 and one level, the main
+    /// `COD`'s precincts `precincts`, and in tile 0's first tile-part a `COD`
+    /// of maximal precincts or a `COM` of the same length. With 1x1
+    /// precincts at the lowest resolution the tiles are over the precinct
+    /// cap, so tile 0 is refused without its `COD`.
+    ///
+    /// The second file of each pair is no shorter than the first and lays
+    /// its tile-parts out at the same offsets. Its codestream starts
+    /// elsewhere (in a JP2 file) or its main header differs, so what the
+    /// first read kept does not hold for it.
+    #[test]
+    fn what_is_kept_is_for_one_input() {
+        use crate::synth;
+        let file = |precincts: [u8; 2], rescued: bool| {
+            let mut cod = synth::cod_body(1, 1, 4, 0);
+            cod[0] = 1;
+            cod.extend(precincts);
+            let rescue = synth::seg(0xFF52, &synth::cod_body(1, 1, 4, 0));
+            let mut comment = vec![0, 1];
+            comment.resize(rescue.len() - 4, b'x');
+            let comment = synth::seg(0xFF64, &comment);
+            assert_eq!(comment.len(), rescue.len());
+            let main = [
+                synth::seg(0xFF52, &cod),
+                synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 4])),
+            ];
+            let grid = [2 * 1040, 512, 0, 0, 1040, 512, 0, 0];
+            tiles_of(grid, &main, |tile| match tile {
+                0 if !rescued => comment.clone(),
+                _ => rescue.clone(),
+            })
+        };
+        let lenient = DecodeOptions::default().with_strict(false);
+        let check = |first: &[u8], second: &[u8]| {
+            assert!(read_header(first, &lenient).is_ok());
+            let want = read_header(second, &lenient);
+            assert!(
+                matches!(&want, Err(Error::Limit(limit)) if limit.message().starts_with("tile 0 ")),
+                "{want:?}"
+            );
+            let mut kept = HeaderCache::default();
+            read_header_kept(first, &lenient, Some(&mut kept)).expect("a header");
+            let got = read_header_kept(second, &lenient, Some(&mut kept));
+            assert_eq!(format!("{got:?}"), format!("{want:?}"));
+        };
+        // The same main header, its codestream at another start.
+        let over = [0x00, 0x11];
+        let refused = file(over, false);
+        let jp2 = synth::wrap_jp2_boxes(0x0C, &refused, &[]);
+        check(&file(over, true), &jp2);
+        // Another main header: one whose tiles are within the caps first.
+        check(&file([0x11, 0x11], false), &refused);
     }
 }

@@ -165,10 +165,13 @@ main header, in `pipeline::decode::HeaderCache`: the walk of the tile-parts,
 where it stopped, the first tile-part offset of each tile it reached, and
 the counts of each tile's own header once that tile-part is whole. A later
 call goes on from there and reads only the tile-parts fed since, so the
-calls after each feed read each `SOT` about once in all. The tiles it
+calls after each feed read each `SOT` about once in all. The header of a
+tile-part not yet fed in full is read again on each call, as is that of a
+last tile-part whose `Psot` is 0, which is never whole. The tiles it
 learned of are charged the read's budget again, as a read from the start
-charges them, so each call gives what `read_header_with` gives on the same
-bytes. What it keeps is for one selected area and reduction, and a change
+charges them, so each call gives what `read_header_with` gives with
+`strict` off on the same bytes. It keeps about 140 bytes for each tile
+over a cap, a byte for each other tile, and a copy of the main header. What it keeps is for one selected area and reduction, and a change
 of options drops it.
 
 ## Changing the options
