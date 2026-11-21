@@ -61,6 +61,16 @@ fn big_tile_file() -> Vec<u8> {
     bytes
 }
 
+/// A decoder whose `header_kept` mutex has been locked once, with nothing fed.
+/// Where std's `Mutex` is pthread-based (macOS, for one), it boxes its
+/// `pthread_mutex_t` on the first lock (64 bytes on aarch64 macOS), which is
+/// not the cache's, so it is taken before the heap is measured.
+fn warm_decoder(options: DecodeOptions) -> IncrementalDecoder {
+    let decoder = IncrementalDecoder::new(options).unwrap();
+    assert!(decoder.header().expect("no bytes, no error").is_none());
+    decoder
+}
+
 /// The heap `decoder` holds after each of 3 calls of `header()`, over what
 /// it held before the first, with each header checked against `want`.
 fn held_after_calls(decoder: &IncrementalDecoder, want: &Header) -> [usize; 3] {
@@ -88,7 +98,7 @@ fn header_holds_what_the_files_tiles_need() {
     let bytes = ppm_file();
     assert!(bytes.len() > 16_000_000, "{} bytes", bytes.len());
     let want = read_header_with(&bytes, &lenient).expect("a header");
-    let mut decoder = IncrementalDecoder::new(lenient.clone()).unwrap();
+    let mut decoder = warm_decoder(lenient.clone());
     decoder.feed(&bytes);
     let none = held_after_calls(&decoder, &want);
     drop(decoder);
@@ -96,7 +106,7 @@ fn header_holds_what_the_files_tiles_need() {
     // A tile that is not: its counts are kept, a few hundred bytes.
     let bytes = big_tile_file();
     let want = read_header_with(&bytes, &lenient).expect("a header");
-    let mut decoder = IncrementalDecoder::new(lenient).unwrap();
+    let mut decoder = warm_decoder(lenient);
     decoder.feed(&bytes);
     let counts = held_after_calls(&decoder, &want);
 
