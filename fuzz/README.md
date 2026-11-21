@@ -41,6 +41,7 @@ fuzz/
   fuzz_targets/icc_srgb.rs      # a fuzzed ICC profile under ColorOutput::Srgb
   fuzz_targets/window_crop.rs   # a window, tile or component subset against the crop of the whole decode
   fuzz_targets/retry_ladder.rs  # DecodeOptions::with_retry followed from each limit refusal
+  fuzz_targets/header_split.rs  # IncrementalDecoder::header() fed in pieces, each call against read_header_with, strict off
   icc.dict                      # ICC tag and type signatures for icc_srgb
   ../tests/support/synth.rs     # std-only seg/bx builders; tile_body, jp2_boxes and icc_srgb include it by #[path]
   ../tests/support/tile_body.rs # tile_body's header and body wrapper; tests/tile_body_variants.rs pins its variant bytes
@@ -376,6 +377,44 @@ starts, so slow seeds eat the run. Of the 93
 seeds, 12 take a step (3 sample limit refusals of the header, 8 packet work
 and 1 code-block work) and 16 compare an image.
 
+`header_split` feeds a file to an `IncrementalDecoder` in pieces and checks
+every `header()` call. `header()` keeps the walk of the tile-parts and what
+each whole first tile-part gave between calls, so a call on more bytes goes on
+where the last one stopped; the other targets never call it. After each feed
+the call must give what `read_header_with` gives with `strict` off on the
+bytes fed so far, under the decoder's options: the same `Header` or the same
+error, and `None` where that read finds the main header incomplete (compared
+by `Debug` text). On one feed in five a second call must give the same again.
+
+The first 12 bytes are control bytes and the rest is the file: the reduction
+(0 to 2), `strict` (the oracle reads with it off, as `header()` documents), the
+sample limit (`Default`, `Raised`, `Unlimited` or `AtMost`), the region (the
+whole image, a tile or a window), `ColorOutput::Srgb`, raw channels, a
+component subset and a layer cap, then six bytes that seed the sizes of the
+pieces (about 24 on average, so a tile-part is often cut in the middle) and
+the changes of the region, the reduction and the layer cap between them. A
+change the decoder refuses leaves the options as they were, and the oracle
+reads them back from the decoder.
+
+Random bytes seldom reach a tile over a cap under the main header, which is
+what the cache is for, so seed it with `scripts/gen-header-split-seeds.py`:
+the files of `tests/incremental_header.rs` (tiles rescued by a tile-part
+`COD`, refused, of no levels at a reduction of 1, or missing; a file of 1024
+components; the same in a JP2 file, and with a box layout fault) behind four
+sets of control bytes, plus four seeds whose pieces end inside the `COD` of a
+tile of no levels. The fixtures go in behind a control prefix too (see the
+recipe below).
+
+What the seeds catch, measured with the file put back after each change:
+with `FirstPart::is_whole` (`src/codestream/mod.rs`) returning `true`, so a
+tile-part cut short is taken for whole and its header never read again, a
+seed fails on replay. With the tile index of the `known` lookup in
+`Rescue::count` (`src/pipeline/decode.rs`) shifted by one, no seed fails on
+replay but the target fails within a minute. The reduction, area, start and
+length that key the cache are not reached by this target: a change of options
+drops the cache before the key is checked, and the input only grows. The unit
+test that reuses one `HeaderCache` across two inputs covers them.
+
 `j2k.dict` is a libFuzzer dictionary of the marker codes (plus an SOP and an
 SOT composite), for the targets that read codestream structure (`decode`,
 `tile_body`): mutation almost never synthesizes a two-byte marker code, and
@@ -515,6 +554,17 @@ seed 00 retry_ladder/tile_precincts.j2k
 seed 00 retry_ladder/tile_code_blocks.j2k
 cargo +nightly fuzz run retry_ladder -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
 
+# The header_split target: 36 synthetic files with tiles over a cap (the script
+# writes the same files on every run), and the fixtures behind the control
+# prefix `00 00 00 00 00 00 01 02 00 00 00 00` (the defaults, one stream of
+# piece sizes). `-max_len` must be over the largest seed, 36,832 bytes.
+mkdir -p fuzz/corpus/header_split
+python3 scripts/gen-header-split-seeds.py fuzz/corpus/header_split
+for f in tests/fixtures/*.j2k tests/fixtures/header/*.j2k tests/fixtures/*.jp2; do
+  { printf '\0\0\0\0\0\0\1\2\0\0\0\0'; cat "$f"; } > "fuzz/corpus/header_split/fx_$(basename "$f")"
+done
+cargo +nightly fuzz run header_split -- -dict=fuzz/j2k.dict -max_len=65536 -max_total_time=60 -rss_limit_mb=4096 -timeout=30
+
 # Deeper periodic run over the widened surface; expected to find nothing.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=3600 -rss_limit_mb=4096
 cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -rss_limit_mb=4096
@@ -548,6 +598,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-18 | `window_crop` with windows from one point before the origin, and the image size compared | the README's seeding (114 seeds: `decode`'s, the window fixtures, the `.jph` files and the JP2 files under 200 KB), `j2k.dict` | 61 s, 21 419 runs; `nice -n 19`, one job; the 1-minute load was 4.6 | no failure. Coverage 10 427. With `Footprint::rect` shifted one column right, a seed fails on replay; with the image's reported width one too many, a seed fails on its size assertion |
 | 2026-11-18 | `incremental_decode` with the repeat-charge oracle (`incremental_repeat_work`) and the setters between refines (bit 6) | the fixtures under 3 KB, and the same behind `40 00 00 00 00 00` (98 seeds), `j2k.dict`, `-max_len=4096` | `-max_total_time=60` (66 s with loading), 18 228 runs; `nice -n 19`, one job; the 1-minute load was 1.5 | no failure |
 | 2026-11-18 | `incremental_decode` with the reason a refine waits checked (`check_waiting`, and `MoreBytes { until }` on each refine not due) | the fixtures under 3 KB, and the same behind `40 00 00 00 00 00` (110 seeds), `j2k.dict`, `-max_len=4096` | `-max_total_time=60`, 22 818 runs; `nice -n 19`, one job; the 1-minute load was 1.4 | no failure |
+| 2026-11-20 | `header_split` (new) | the README's seeding (118 inputs: 36 from `gen-header-split-seeds.py` and the 82 fixtures behind a control prefix), `j2k.dict`, `-max_len=65536` | 61 s, 25 711 runs; `nice -n 19`, one job; the 1-minute load was 1 | no failure. Coverage 3 107. With `FirstPart::is_whole` always true, a seed (`rescued_tile30_nolevels_cut*`) fails on replay; with the `known` lookup's tile index shifted by one, no seed fails on replay and the target fails within 60 s |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 
