@@ -8,7 +8,8 @@
 //! components has a tile-part `COD` that brings it within, the peak is one
 //! tile's coding parameters, however many tiles there are. Where a tile is
 //! refused, the read walks every tile-part for the fault the decode gives
-//! first, and holds about 10 bytes a tile for that walk.
+//! first, and holds about 10 bytes a tile for that walk, 14 where later
+//! tile-parts restate the tiles' own coding.
 //!
 //! The peak is measured with a counting global allocator, so this file holds a
 //! single test: a second one running in parallel would count into the same
@@ -181,8 +182,9 @@ fn the_header_read_holds_no_tile_data() {
         assert_eq!(matches!(error, Error::Limit(_)), !fault, "{error:?}");
     }
     // The same with a second tile-part for each tile that restates its
-    // `COD`: each restatement reads the tile's short first header again
-    // rather than keep its coding, so the peak is as above.
+    // `COD`: the walk notes where each restating header starts, 4 more
+    // bytes a tile, and keeps no tile's coding, as no tile restates it with
+    // two headers that differ.
     for strict in [true, false] {
         let options = last.clone().with_strict(strict);
         let bytes = most_tiles_with(u16::MAX - 1, true, EOC);
@@ -190,9 +192,49 @@ fn the_header_read_holds_no_tile_data() {
         eprintln!(
             "{tiles} tiles restated, the last refused, strict {strict}: {peak} bytes at the peak"
         );
-        assert!(peak < PEAK_BYTES + 11 * tiles, "{peak} bytes");
+        assert!(peak < PEAK_BYTES + 15 * tiles, "{peak} bytes");
         assert!(matches!(error, Error::Limit(_)), "{error:?}");
     }
+    // Each tile's own `QCD` restated by two later tile-parts with headers
+    // that differ, so the walk keeps every tile's coding: the smallest
+    // tiles that keep one, 64 bytes each. The kept coding stays within
+    // about 6 times the bytes of the tile-parts (380 bytes a tile).
+    for strict in [true, false] {
+        let options = last.clone().with_strict(strict);
+        let bytes = most_tiles_kept();
+        let (peak, error) = peak_of_refusal(&bytes, &options);
+        eprintln!(
+            "{tiles} tiles kept, the last refused, strict {strict}: {peak} bytes at the peak"
+        );
+        assert!(peak < PEAK_BYTES + 7 * bytes.len(), "{peak} bytes");
+        assert!(matches!(error, Error::Limit(_)), "{error:?}");
+    }
+}
+
+/// [`most_tiles`] with no tile-part `COD`, so every tile is over the cap,
+/// and in three tile-parts a tile: the first's header a `QCD`, the second's
+/// the same `QCD` and the third's that `QCD` and an empty `COM`.
+fn most_tiles_kept() -> Vec<u8> {
+    let mut cod = synth::cod_body(1, 0, 4, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let siz = synth::siz_body([520 * 255, 512 * 257, 0, 0, 520, 512, 0, 0], &[[7, 1, 1]]);
+    let qcd = synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8]));
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        qcd.clone(),
+    ]
+    .concat();
+    let other = [&qcd[..], &[0xFF, 0x64, 0, 2]].concat();
+    for tile in 0..u16::MAX {
+        bytes.extend(synth::tile_part(tile, 0, 3, &qcd, &[]));
+        bytes.extend(synth::tile_part(tile, 1, 3, &qcd, &[]));
+        bytes.extend(synth::tile_part(tile, 2, 3, &other, &[]));
+    }
+    bytes.extend_from_slice(EOC);
+    bytes
 }
 
 const EOC: &[u8] = &[0xFF, 0xD9];

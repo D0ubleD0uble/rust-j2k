@@ -266,6 +266,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The walk is kept over a change of options. With `strict` off the
   `TNsot` look-ahead is taken only where its answer changes an error's
   counts (#560).
+- That walk reads a tile's first tile-part header again at most twice,
+  however many later tile-parts restate its coding. It read a header of
+  1 KiB or less again for each, so a refusal of a 12.5 MB file of 2048
+  tiles, whose first headers of 143 `QCC`s each 254 later tile-parts
+  restate, took 9.8 s where the decode takes 130 ms; it now takes 135 ms
+  (#590).
 - With `strict` off, a fault in the header of a tile-part that runs to the
   end of the input, a last one with `Psot` 0 or one whose `Psot` runs past
   the end, is refused with the error a strict decode gives when the input
@@ -305,9 +311,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   while `decode_with` refuses the file for the tile-parts before it counts
   any tile. To find the error it walks the tile-parts as the decode's
   parse does, keeping up to 10 bytes a tile (14 on an input of 4 GiB or
-  more) in place of the decode's tile records, plus the coding of each
-  first tile-part header over 1 KiB that a later tile-part restates, up to
-  about 13 times those headers' bytes: on a 235 MB file of
+  more) in place of the decode's tile records, plus 4 more a tile (8) once
+  a later tile-part restates a tile's own coding, and the coding of each
+  tile that later tile-parts restate with headers that differ, up to about
+  13 times those tiles' bytes: on a 235 MB file of
   16.7 million tile-parts that refusal takes 240 ms and 640 KiB, where the
   decode's parse takes 1.7 s and 290 MiB (#498, #545).
 - With `strict` off, `read_header_with` gives the decode's error for the
