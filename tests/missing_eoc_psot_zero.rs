@@ -137,3 +137,18 @@ fn surplus_ppm_chunks_are_refused_unless_the_header_is_cut() {
         }
     }
 }
+
+/// Input that ends right after tile 0's tile-part, or one byte into the next
+/// `SOT`, holds one tile-part of the two an exact `PPM` has chunks for. It
+/// reads as a cut, not as a `PPM` with chunks left over.
+#[test]
+fn a_cut_after_the_first_tile_part_keeps_an_exact_ppm() {
+    let (bytes, at) = two_tiles(2, &[], &[0; 6]);
+    let options = DecodeOptions::default().with_strict(false);
+    for end in [at, at + 1] {
+        let cut = &bytes[..end];
+        rust_j2k::fuzz::tile_parts_walks_agree(cut);
+        let image = decode_with(cut, &options).unwrap_or_else(|e| panic!("cut {end}: {e}"));
+        assert_eq!(count_missing_eoc(&image.report.entries), 1, "cut {end}");
+    }
+}
