@@ -40,7 +40,7 @@ fuzz/
   fuzz_targets/header.rs        # rust_j2k::read_header_with, checked against decode_with
   fuzz_targets/icc_srgb.rs      # a fuzzed ICC profile under ColorOutput::Srgb
   fuzz_targets/window_crop.rs   # a window, tile or component subset against the crop of the whole decode
-  fuzz_targets/retry_ladder.rs  # DecodeOptions::with_retry followed from each limit refusal
+  fuzz_targets/retry_ladder.rs  # DecodeOptions::raised_for followed from each limit refusal
   fuzz_targets/header_split.rs  # IncrementalDecoder::header() fed in pieces, each call against read_header_with, strict off
   icc.dict                      # ICC tag and type signatures for icc_srgb
   ../tests/support/synth.rs     # std-only seg/bx builders; tile_body, jp2_boxes and icc_srgb include it by #[path]
@@ -323,7 +323,7 @@ What `window_crop` cannot catch, by design:
   96 points, and component subsets other than `[0]`, `[1]`, `[2, 0]` and
   `[1, 0]` are never generated.
 
-`retry_ladder` follows `DecodeOptions::with_retry` from each limit refusal.
+`retry_ladder` follows `DecodeOptions::raised_for` from each limit refusal.
 The first input byte picks where each of the three limits starts
 (`Default`, or a factor of 1 or 2), a reduction of 0 or 1, and `strict`;
 the rest is the file. An input that starts with `FF 4F` or the JP2

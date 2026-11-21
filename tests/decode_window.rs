@@ -132,10 +132,10 @@ fn decode_ok(bytes: &[u8], options: &DecodeOptions, what: &str) -> Image {
 /// The reference-grid area `options` asks for, cut to the image.
 fn area_of(geo: &Geometry, options: &DecodeOptions) -> (u32, u32, u32, u32) {
     let (x0, y0, x1, y1) = geo.image;
-    if let Region::Window(w) = options.region {
+    if let Region::Window(w) = options.region() {
         return (w.x0.max(x0), w.y0.max(y0), w.x1.min(x1), w.y1.min(y1));
     }
-    if let Region::Tile(t) = options.region {
+    if let Region::Tile(t) = options.region() {
         let (p, q) = (t % geo.columns, t / geo.columns);
         let ((tx, ty), (tw, th)) = (geo.tile_origin, geo.tile);
         return (
@@ -150,7 +150,7 @@ fn area_of(geo: &Geometry, options: &DecodeOptions) -> (u32, u32, u32, u32) {
 
 /// The image size `options` decodes to: the area at the reduction.
 fn size_of(geo: &Geometry, options: &DecodeOptions) -> (u32, u32) {
-    let up = |v: u32| v.div_ceil(1 << options.resolution_reduction);
+    let up = |v: u32| v.div_ceil(1 << options.resolution_reduction());
     let (x0, y0, x1, y1) = area_of(geo, options);
     (up(x1) - up(x0), up(y1) - up(y0))
 }
@@ -165,7 +165,7 @@ fn crop(
     width: u32,
     options: &DecodeOptions,
 ) -> (u32, u32, Vec<i32>) {
-    let r = options.resolution_reduction;
+    let r = options.resolution_reduction();
     let (dx, dy) = geo.sampling[c];
     let at = |v: u32, d: u32| v.div_ceil(d).div_ceil(1 << r);
     let (x0, y0, x1, y1) = area_of(geo, options);
@@ -182,7 +182,7 @@ fn crop(
 
 /// The components `options` returns, as SIZ indices.
 fn picked(options: &DecodeOptions) -> Vec<usize> {
-    options.components.as_ref().map_or_else(
+    options.components().as_ref().map_or_else(
         || vec![0, 1, 2],
         |c| c.iter().map(|&c| usize::from(c)).collect(),
     )
@@ -242,7 +242,7 @@ fn the_97_cases_match_openjpeg_within_one() {
                 case.size,
                 "{what}"
             );
-            let r = case.options.resolution_reduction;
+            let r = case.options.resolution_reduction();
             for (component, &c) in image.components.iter().zip(&picked(&case.options)) {
                 let whole = parse_pgx(&read(&format!("{name}_r{r}_{c}.pgx"))).unwrap();
                 let (w, h, expected) = crop(geo, c, &whole.samples, whole.width, &case.options);
@@ -280,7 +280,7 @@ fn every_case_is_the_crop_of_the_whole_decode() {
         for case in cases(name) {
             let what = format!("{name} {}", case.args);
             let image = decode_ok(&bytes, &case.options, &what);
-            let whole = &wholes[usize::from(case.options.resolution_reduction)];
+            let whole = &wholes[usize::from(case.options.resolution_reduction())];
             for (component, &c) in image.components.iter().zip(&picked(&case.options)) {
                 let plane = &whole.components[c];
                 let (w, h, expected) = crop(geo, c, &plane.samples, plane.width, &case.options);

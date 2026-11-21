@@ -1326,8 +1326,7 @@ fn file10_reports_application_defined_channels_and_no_color_space() {
         let bare = rust_j2k::decode(&bytes[start..end]).unwrap();
         assert!(image.components == bare.components, "{name}");
         // Without a color specification there is no sRGB conversion.
-        let mut srgb = rust_j2k::DecodeOptions::default();
-        srgb.color = ColorOutput::Srgb;
+        let srgb = rust_j2k::DecodeOptions::default().with_color(ColorOutput::Srgb);
         assert!(
             matches!(
                 rust_j2k::decode_with(&bytes, &srgb),

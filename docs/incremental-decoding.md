@@ -335,7 +335,7 @@ bounds over all the refines: four, and the one walk
 that goes past them, which one decode's bound holds. The bound follows the
 packet work limit: raised by `WorkLimit::Raised`, none under
 `WorkLimit::Unlimited`. So a caller who raises the limit to the factor a
-refusal names, as `DecodeOptions::with_retry` does, and feeds the file to a
+refusal names, as `DecodeOptions::raised_for` does, and feeds the file to a
 new decoder, accepts up to about ten times the packet work the file needs
 over its refines: a factor up to twice what it needs, times five bounds. A
 walk let go when the options change (see

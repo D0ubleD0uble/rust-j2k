@@ -118,7 +118,7 @@ test = false
 doc = false
 bench = false
 
-# `retry_ladder` follows `DecodeOptions::with_retry` from each limit refusal
+# `retry_ladder` follows `DecodeOptions::raised_for` from each limit refusal
 # and checks the options it gives and the image it ends at.
 [[bin]]
 name = "retry_ladder"

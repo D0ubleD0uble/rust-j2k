@@ -1,5 +1,5 @@
 #![no_main]
-//! Property target over [`rust_j2k::DecodeOptions::with_retry`]: following
+//! Property target over [`rust_j2k::DecodeOptions::raised_for`]: following
 //! [`rust_j2k::LimitDetail::retry_with`] from one limit refusal to the next
 //! raises the option the refusal names and no other, steps strictly upward,
 //! and never turns an image into an error. An image it reaches has the
@@ -143,15 +143,15 @@ fn rank_work(limit: &WorkLimit) -> u64 {
 /// no factor.
 fn field(options: &DecodeOptions, kind: LimitKind) -> Option<u64> {
     match kind {
-        _ if is_sample_limit(kind) => match &options.sample_limit {
+        _ if is_sample_limit(kind) => match options.sample_limit() {
             SampleLimit::Default => Some(1),
             SampleLimit::Raised(factor) => Some(u64::from(*factor)),
             SampleLimit::Unlimited => Some(u64::MAX),
             SampleLimit::AtMost(_) => None,
             other => unreachable!("a new limit setting: {other:?}"),
         },
-        LimitKind::PacketWork => Some(rank_work(&options.packet_work_limit)),
-        LimitKind::CodeBlockWork => Some(rank_work(&options.code_block_work_limit)),
+        LimitKind::PacketWork => Some(rank_work(options.packet_work_limit())),
+        LimitKind::CodeBlockWork => Some(rank_work(options.code_block_work_limit())),
         other => unreachable!("an adjustable limit with no option: {other:?}"),
     }
 }
@@ -167,7 +167,7 @@ fn with_field(options: &DecodeOptions, kind: LimitKind, raise: Raise) -> DecodeO
     }
 }
 
-/// One step of the ladder: the options `with_retry` gives for `limit`,
+/// One step of the ladder: the options `raised_for` gives for `limit`,
 /// checked against `options`, with the limit it raised. `None` when no
 /// option raises it.
 fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, Raise)> {
@@ -176,11 +176,11 @@ fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, 
     // the ladder ends in this one step. The tile caps are refused by the same
     // ceiling. Not reached for a tile cap at `CEILING`: the area check
     // refuses first. Kept for a higher ceiling.
-    if is_sample_limit(kind) && matches!(options.sample_limit, SampleLimit::AtMost(_)) {
+    if is_sample_limit(kind) && matches!(options.sample_limit(), SampleLimit::AtMost(_)) {
         assert!(
-            limit.retry_with().is_none() && options.with_retry(limit).is_none(),
+            limit.retry_with().is_none() && options.raised_for(limit).is_none(),
             "a refusal under {:?} gives a retry: {limit:?}",
-            options.sample_limit
+            options.sample_limit()
         );
         return None;
     }
@@ -192,34 +192,33 @@ fn step(options: &DecodeOptions, limit: &LimitDetail) -> Option<(DecodeOptions, 
             limit.retry_with()
         );
     }
-    let Some(next) = options.with_retry(limit) else {
+    let Some(next) = options.raised_for(limit) else {
         // An adjustable limit gives no retry only when its refusal shows no
         // factor, such as a packet work refusal while reading the header.
         assert!(
             limit.retry_with().is_none(),
-            "{kind:?}: retry_with gives {:?}, with_retry none",
+            "{kind:?}: retry_with gives {:?}, raised_for none",
             limit.retry_with()
         );
         return None;
     };
     assert!(
         kind.is_adjustable(),
-        "{kind:?} is fixed but with_retry raises it"
+        "{kind:?} is fixed but raised_for raises it"
     );
-    let raised = limit.retry_with().expect("with_retry raised a limit");
+    let raised = limit.retry_with().expect("raised_for raised a limit");
     assert!(
         field(options, kind).is_some_and(|old| rank(&raised) > old),
         "{kind:?}: retry_with {raised:?} is not above {:?} ({limit})",
         field(options, kind)
     );
     // The option the kind names is set to `retry_with` and every other
-    // option is as it was: compared by `Debug`, so the check covers every
-    // field, a new one included (`DecodeOptions` has no `PartialEq`).
+    // option is as it was: compared with `==`, so the check covers every
+    // field, a new one included.
     let expected = with_field(options, kind, raised);
-    assert_eq!(
-        format!("{next:?}"),
-        format!("{expected:?}"),
-        "{kind:?}: with_retry changed more than the option it names"
+    assert!(
+        next == expected,
+        "{kind:?}: raised_for changed more than the option it names: {next:?} against {expected:?}"
     );
     Some((next, raised))
 }
@@ -255,13 +254,13 @@ fuzz_target!(|input: &[u8]| {
         return;
     }
     let defaults = base
-        .with_resolution_reduction(options.resolution_reduction)
-        .with_strict(options.strict);
+        .with_resolution_reduction(options.resolution_reduction())
+        .with_strict(options.strict());
     let at_defaults = KINDS
         .into_iter()
         .all(|kind| field(&options, kind) == Some(1));
     let mut result = checked(decode_with(data, &options));
-    if matches!(options.sample_limit, SampleLimit::AtMost(_)) {
+    if matches!(options.sample_limit(), SampleLimit::AtMost(_)) {
         // Below the default: a refusal by it is one step, and an image under
         // it is the image of the same options with the default sample limit.
         // In bounds: the two decodes at up to 2 each.

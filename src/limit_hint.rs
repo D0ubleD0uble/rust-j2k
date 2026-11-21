@@ -372,10 +372,28 @@ mod tests {
         assert_eq!(walk(u64::MAX), Some(Raise::Unlimited));
     }
 
-    /// `DecodeOptions::with_retry` gives options exactly for the kinds an
+    /// A refusal that names `Raised(1)` gives options equal to the default
+    /// ones: `raised_for` stores it as `Default`, like the builders.
+    #[test]
+    fn raised_for_stores_raised_one_as_default() {
+        use crate::DecodeOptions;
+        for kind in [
+            LimitKind::Samples,
+            LimitKind::TileCodeBlocks,
+            LimitKind::TilePrecincts,
+            LimitKind::PacketWork,
+            LimitKind::CodeBlockWork,
+        ] {
+            let limit = crate::error::any_limit(kind, Some(Raise::Raised(1)));
+            let options = DecodeOptions::default().raised_for(&limit);
+            assert_eq!(options, Some(DecodeOptions::default()), "{kind:?}");
+        }
+    }
+
+    /// `DecodeOptions::raised_for` gives options exactly for the kinds an
     /// option raises, and sets that option to the limit the refusal gave.
     #[test]
-    fn with_retry_is_some_exactly_for_the_adjustable_kinds() {
+    fn raised_for_is_some_exactly_for_the_adjustable_kinds() {
         use crate::DecodeOptions;
         // Every kind: the match fails to build when a kind is added, so that
         // it is added to the list too.
@@ -422,13 +440,13 @@ mod tests {
             let Error::Limit(limit) = error else {
                 unreachable!()
             };
-            let retry = base.with_retry(&limit);
+            let retry = base.raised_for(&limit);
             assert_eq!(retry.is_some(), kind.is_adjustable(), "{kind:?}");
             // A kind no option raises gives `None` even with a limit to
             // retry with, which no refusal carries.
             let carried = crate::error::any_limit(kind, Some(Raise::Raised(7)));
             assert_eq!(
-                base.with_retry(&carried).is_some(),
+                base.raised_for(&carried).is_some(),
                 kind.is_adjustable(),
                 "{kind:?} with a retry"
             );

@@ -89,7 +89,7 @@ fn is_sample_limit(error: &Error) -> bool {
 /// `None`. A sample limit of `AtMost` is a ceiling more bytes do not raise,
 /// so its refusal is the error.
 fn refine_oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>, Error> {
-    let ceiling = matches!(options.sample_limit, SampleLimit::AtMost(_));
+    let ceiling = matches!(options.sample_limit(), SampleLimit::AtMost(_));
     match checked(decode_with(prefix, &options.clone().with_strict(false))) {
         Ok(image) => Ok(Some(image)),
         Err(Error::Incomplete(_)) => Ok(None),
@@ -1045,7 +1045,7 @@ fn bomb() -> Vec<u8> {
 /// A refine that a work bound refuses waits with `WorkLimit`, carrying the
 /// refusal the one-shot decode of its bytes gives, hint included: the
 /// code-block bound on `t1bomb_1024_64_88.j2k`, and the packet bound on
-/// `sweep_rpcl_1024_64.j2k`. Retries with `with_retry` of each hint, a new
+/// `sweep_rpcl_1024_64.j2k`. Retries with `raised_for` of each hint, a new
 /// decoder each, reach a refine that gives the image.
 #[test]
 fn a_work_bound_refusal_waits_with_the_hint_the_decode_gives() {
@@ -1075,7 +1075,7 @@ fn a_work_bound_refusal_waits_with_the_hint_the_decode_gives() {
         let mut options = DecodeOptions::default();
         let mut retries = 0;
         let image = loop {
-            options = options.with_retry(&limit).unwrap();
+            options = options.raised_for(&limit).unwrap();
             retries += 1;
             let mut again = IncrementalDecoder::new(options.clone()).unwrap();
             again.feed(&bytes);
@@ -1749,7 +1749,7 @@ fn a_change_of_options_applies_to_the_later_refines_and_clears_their_error() {
         .with_region(Region::Window(Window::new(0, 0, 9, 7)));
     decoder.set_resolution_reduction(1).unwrap();
     decoder.set_max_quality_layers(Some(2)).unwrap();
-    decoder.set_region(options.region.clone()).unwrap();
+    decoder.set_region(options.region().clone()).unwrap();
     // Not twice the bytes yet.
     decoder.feed(&bytes[half + 1..half + 2]);
     assert!(matches!(
@@ -1795,7 +1795,7 @@ fn decode_with_the_decoders_options_gives_an_image_after_a_change() {
     assert_eq!(image, expected);
     // Strict `finish` refuses the cut file.
     assert!(decoder.finish().is_err());
-    assert!(decoder.options().strict);
+    assert!(decoder.options().strict());
 }
 
 /// `options()` follows each setter, keeps the caller's `strict`, and is
@@ -1803,15 +1803,15 @@ fn decode_with_the_decoders_options_gives_an_image_after_a_change() {
 #[test]
 fn options_reflects_each_setter_and_survives_a_refused_one() {
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
-    assert_eq!(decoder.options().resolution_reduction, 0);
-    assert!(decoder.options().strict);
+    assert_eq!(decoder.options().resolution_reduction(), 0);
+    assert!(decoder.options().strict());
     decoder.set_resolution_reduction(2).unwrap();
-    assert_eq!(decoder.options().resolution_reduction, 2);
+    assert_eq!(decoder.options().resolution_reduction(), 2);
     decoder.set_max_quality_layers(Some(3)).unwrap();
-    assert_eq!(decoder.options().max_quality_layers, Some(3));
+    assert_eq!(decoder.options().max_quality_layers(), Some(3));
     let region = Region::Window(Window::new(1, 2, 3, 4));
     decoder.set_region(region.clone()).unwrap();
-    assert_eq!(decoder.options().region, region);
+    assert_eq!(decoder.options().region(), &region);
     assert!(matches!(
         decoder.set_max_quality_layers(Some(0)),
         Err(Error::InvalidOptions(_))
@@ -1821,14 +1821,14 @@ fn options_reflects_each_setter_and_survives_a_refused_one() {
         Err(Error::InvalidOptions(_))
     ));
     let options = decoder.options();
-    assert_eq!(options.resolution_reduction, 2);
-    assert_eq!(options.max_quality_layers, Some(3));
-    assert_eq!(options.region, region);
-    assert!(options.strict);
+    assert_eq!(options.resolution_reduction(), 2);
+    assert_eq!(options.max_quality_layers(), Some(3));
+    assert_eq!(options.region(), &region);
+    assert!(options.strict());
 
     let lenient = DecodeOptions::default().with_strict(false);
     let decoder = IncrementalDecoder::new(lenient).unwrap();
-    assert!(!decoder.options().strict);
+    assert!(!decoder.options().strict());
 }
 
 /// The same with a partial image: 1500 bytes short, the last layer holds
@@ -1841,7 +1841,7 @@ fn decode_with_the_decoders_options_gives_a_partial_image_after_a_change() {
     decoder.feed(prefix);
     assert!(decoder.refine().unwrap().image().is_some());
     decoder.set_resolution_reduction(1).unwrap();
-    assert!(decoder.options().strict);
+    assert!(decoder.options().strict());
     let image = decode_with(
         decoder.bytes(),
         &decoder.options().clone().with_strict(false),
@@ -1972,7 +1972,7 @@ fn a_change_of_the_layer_cap_walks_the_tiles_again() {
         let (mut images, mut charged) = (0, 0);
         for (step, end) in doubling(bytes.len()).into_iter().enumerate() {
             let layers = [Some(1), Some(2), None][step % 3];
-            let changed = step > 0 && decoder.options().max_quality_layers != layers;
+            let changed = step > 0 && decoder.options().max_quality_layers() != layers;
             let walked = incremental_repeat_work(&decoder).visits;
             images += change_and_refine(name, &mut decoder, &bytes, end, &|d| {
                 d.set_max_quality_layers(layers).unwrap();
