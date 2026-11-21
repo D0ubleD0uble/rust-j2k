@@ -211,6 +211,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for its fields, as OpenJPEG 2.5.0 refuses it. Such a `PPT` decoded before
   when the codestream had no `PPM`, and such a `PPM` decoded before and hid
   a `PPT` beside it (#564).
+- With `strict` off, a decode whose last tile-part has `Psot` 0 reports
+  `ReportEntry::MissingEoc` whenever the input does not end in `FF D9`. It
+  was left out when the input ended inside that tile-part's data (#588).
+- With `strict` off, input cut inside the header of a last tile-part with
+  `Psot` 0, where the bytes kept end in `FF D9`, no longer refuses its
+  `PPM` for chunks left over, as for any other cut (#588).
 - A fault in a tile's own tile-part header (too few quantization steps,
   the 9/7 wavelet with no quantization, a wavelet that differs from the
   main header's) is found as the tile-part walk reads that header, and a

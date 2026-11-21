@@ -1146,12 +1146,16 @@ fn walk_tiles<'a>(
     // worked out on first use.
     let summary = OnceCell::new();
 
+    // Whether, with `strict` off, the walk ended where the input did, so a
+    // `PPM` may carry chunks for tile-parts the input ends before.
+    let mut ended_early = false;
     let mut part_offset = sot_offset;
     loop {
         // Not strict: input that ends inside the `SOT` marker segment ends the
         // codestream there. `SOT` is always 12 bytes (Lsot = 10).
         if !strict && bytes.len().saturating_sub(part_offset) < 12 {
             entries.push(ReportEntry::MissingEoc);
+            ended_early = true;
             break;
         }
         let mut cur = Cursor::at(bytes, part_offset);
@@ -1244,6 +1248,7 @@ fn walk_tiles<'a>(
                 if sot.psot != 0 || !bytes.ends_with(&marker::EOC.to_be_bytes()) {
                     entries.push(ReportEntry::MissingEoc);
                 }
+                ended_early = true;
                 break;
             }
             Err(error) => return Err(error),
@@ -1385,13 +1390,21 @@ fn walk_tiles<'a>(
         }
 
         // A Psot = 0 tile-part is the last one: the walk ends there, whatever
-        // the two bytes after its data are.
+        // the two bytes after its data are. Not strict, input that does not
+        // end in an `EOC` is reported as without one, as when the input ends
+        // inside the tile-part's header.
         if sot.psot == 0 {
+            if !strict && !bytes.ends_with(&marker::EOC.to_be_bytes()) {
+                entries.push(ReportEntry::MissingEoc);
+            }
+            // The tile-part is the last one, so chunks of `PPM` left over
+            // are not for tile-parts the input ends before.
             break;
         }
         // Not strict, a tile-part cut short ends the codestream.
         if data_end == bytes.len() && !strict {
             entries.push(ReportEntry::MissingEoc);
+            ended_early = true;
             break;
         }
 
@@ -1408,6 +1421,7 @@ fn walk_tiles<'a>(
             // Not strict, the input may end after any tile-part.
             None if !strict => {
                 entries.push(ReportEntry::MissingEoc);
+                ended_early = true;
                 break;
             }
             None => {
@@ -1419,7 +1433,6 @@ fn walk_tiles<'a>(
     // Every PPM chunk maps to one tile-part; leftover chunks mean the main header
     // packed headers for tile-parts the codestream never carried. Not strict,
     // a codestream that ends early may not reach the last of them.
-    let ended_early = entries.last() == Some(&ReportEntry::MissingEoc);
     if ppm_seq != ppm.len() && !(ended_early && ppm_seq < ppm.len()) {
         return Err(Error::codestream(format!(
             "`PPM` carries {} packet-header chunk(s) but the codestream has {ppm_seq} tile-part(s)",
