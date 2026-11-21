@@ -208,7 +208,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   count's budget, or meets a tile whose counts under its own header are at
   fault walked every tile-part fed again, so calls after each feed took
   time quadratic in the input: 21.5 s for calls after each 1 MiB of a
-  235 MB file with tile 0 refused, now 170 ms. With `strict` off the
+  235 MB file with tile 0 refused, now 170 ms. The header of a tile whose
+  own header is at fault is kept with the walk (18 s, now 150 ms), and
+  the walk is kept over a change of options. With `strict` off the
   `TNsot` look-ahead is taken only where its answer changes an error's
   counts (#560).
 - With `strict` off, a fault in the header of a tile-part that runs to the

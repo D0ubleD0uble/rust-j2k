@@ -598,13 +598,21 @@ end is followed by an `SOT`: every step before there read only bytes a
 longer input holds the same. Each call that refuses a tile, stops at a
 budget or meets a tile whose counts under its own header are at fault
 goes on from there, reading the tile-parts fed since and the one it was
-kept before, and checks each tile once more. With tile 0 refused and
-`Region::Tile(0)`, calls after each 1 MiB fed of the 235 MB file took
-21.5 s in all with a walk from the start on each, and take 170 ms. On a
+kept before, and checks each tile once more. The header of the first tile
+whose own header is at fault, gathered by a walk of its own, is kept with
+the walk, which joins on the `POC` volumes of that tile's later
+tile-parts; it is gathered again only when another tile is the first at
+fault. The walk depends on no option but `strict`, which the header read
+always has off, so it is kept over a change of options. With tile 0
+refused and `Region::Tile(0)`, calls after each 1 MiB fed of the 235 MB
+file took 21.5 s in all with a walk from the start on each, and take
+170 ms; with tile 1's own header at fault as well, they took 18 s and
+take 150 ms. On a
 file of 65535 tiles of 4096 components and 255 tile-parts each (233 MB),
 whose count runs out of its budget and whose header reads, they took
-6.9 s and take 410 ms, most of it the budget each call spends. Both are
-in `tests/incremental_header_cost.rs`. With `strict` off, as
+6.9 s and take 410 ms, most of it the budget each call spends. These
+are in `tests/incremental_header_cost.rs`, which bounds each by 8 times
+one read of the whole file. With `strict` off, as
 `IncrementalDecoder::header` reads, the `TNsot` look-ahead is taken only
 when the error it changes is built (it raises both counts in "tile N
 declares A tile-parts in one `SOT` and B in another"), as it reads past

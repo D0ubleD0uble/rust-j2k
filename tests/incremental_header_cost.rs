@@ -97,6 +97,7 @@ fn small_row_over_tall_row(components: usize, width: u32, tall: u32, levels: u8)
 /// How many reads of the whole file, timed in the same test, the calls
 /// after each feed may cost. They cost about 1 to 3; a walk from the start
 /// on each call cost 45 to 130.
+#[cfg(not(debug_assertions))]
 const READS: u32 = 8;
 
 /// Feed `bytes` to a decoder under `options` in pieces of `piece` bytes,

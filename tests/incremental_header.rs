@@ -628,6 +628,17 @@ fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
                 );
             }
         }
+        // A change of options keeps the walk, which depends on neither the
+        // selection nor the reduction.
+        let len = bytes.len();
+        let changes = [
+            (len / 4, Change::Region(Region::Tile(0))),
+            (len / 2, Change::Reduction(1)),
+            (3 * len / 4, Change::Region(Region::Whole)),
+        ];
+        let seen = check(name, bytes, &options, |_| rng.up_to(20), &changes);
+        let last = seen.last().expect("a call");
+        assert!(last.starts_with(want), "{name}, with changes: {last}");
         let decoded = format!("{:?}", rust_j2k::decode_with(bytes, &lenient).map(|_| ()));
         assert!(decoded.starts_with(want), "{name}: the decode, {decoded}");
     }

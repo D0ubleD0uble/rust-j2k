@@ -563,6 +563,13 @@ impl HeaderCache {
         self.kept = Some(kept);
     }
 
+    /// Let go of what was kept for the selection and the reduction. The
+    /// walk for the decode's error for the tile-parts depends on neither,
+    /// and the header read always reads with `strict` off, so it is kept.
+    pub(crate) fn clear_selection(&mut self) {
+        self.kept = None;
+    }
+
     /// The fault walk kept, if it was kept for a codestream at `start` of
     /// the input with the main header keyed `main`. It checks itself that
     /// the input has not shrunk. Anything else kept is dropped.
