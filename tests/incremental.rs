@@ -679,6 +679,11 @@ fn a_limit_more_bytes_cannot_clear_is_an_error() {
 /// limit to 2^29, waits, and `finish` reports the limit, as the one-shot
 /// decode does. Each refine that tries once the header is in waits with
 /// `SampleLimit`, carrying the refusal the one-shot decode gives.
+///
+/// Gated to 64-bit: the file is just over the 2^29 - 1 samples a 32-bit
+/// target addresses, so there it is an error, which
+/// `a_sample_limit_refusal_is_an_error_on_a_32_bit_target` checks.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_sample_limit_refusal_is_a_wait() {
     let path = fixtures().join("sample_limit/flat_32769x16385_tiled_lossless.j2k");
@@ -717,12 +722,59 @@ fn a_sample_limit_refusal_is_a_wait() {
     }
 }
 
+/// On a 32-bit target the flat 32769x16385 file, 536920065 samples, is past
+/// the 2^29 - 1 a target addresses, so no byte count raises the limit and the
+/// refusal is `AddressSpace`, not a wait: a refine returns it as an error from
+/// the first one with the header in, with no retry, under the defaults and
+/// under `AtMost` alike, as does `finish`. This is current behavior.
+#[cfg(not(target_pointer_width = "64"))]
+#[test]
+fn a_sample_limit_refusal_is_an_error_on_a_32_bit_target() {
+    let path = fixtures().join("sample_limit/flat_32769x16385_tiled_lossless.j2k");
+    let bytes = std::fs::read(&path).unwrap();
+    for options in [
+        DecodeOptions::default(),
+        DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(1 << 29)),
+    ] {
+        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        let mut first = None;
+        for piece in bytes.chunks(4096) {
+            decoder.feed(piece);
+            match (decoder.refine(), &first) {
+                (
+                    Ok(Refined::Waiting(
+                        Waiting::MoreBytes { .. } | Waiting::HeaderIncomplete { .. },
+                    )),
+                    None,
+                ) => {}
+                (Err(Error::Limit(limit)), None) => {
+                    assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
+                    assert_eq!(limit.retry_with(), None, "{limit}");
+                    first = Some(format!("{:?}", Error::Limit(limit)));
+                }
+                (Err(error), Some(first)) => assert_eq!(&format!("{error:?}"), first),
+                (other, _) => panic!("{} bytes: {other:?}", decoder.bytes_fed()),
+            }
+        }
+        let first = first.expect("a refine reached the limit");
+        match decoder.finish() {
+            Err(error) => assert_eq!(format!("{error:?}"), first),
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
 /// Under `AtMost` the sample limit does not grow with the bytes, so its
 /// refusal is final: once the flat file's main header is in, `refine` returns
 /// the refusal the one-shot decode gives, as an error with no retry, and
 /// `header` returns it too. It sticks as the rest of the file comes in, and
 /// `finish` gives it. A change of region clears it: a window inside one tile
 /// fits the ceiling.
+///
+/// Gated to 64-bit: the ceiling of 2^29 is past the address space of a
+/// 32-bit target, which refuses the file as `AddressSpace` whatever the
+/// ceiling (see `a_sample_limit_refusal_is_an_error_on_a_32_bit_target`).
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_sample_limit_refusal_under_at_most_is_final() {
     let path = fixtures().join("sample_limit/flat_32769x16385_tiled_lossless.j2k");
@@ -1449,7 +1501,14 @@ fn the_bound_spent_seed_waits_on_bound_spent_where_decode_with_is_refused_by_a_t
     else {
         panic!("not refused");
     };
-    assert_eq!(expected.kind(), LimitKind::TilePrecincts, "{expected}");
+    // On a 32-bit target the cap stops at its floor, and the tile is past
+    // what the address space holds.
+    let over_precincts = if cfg!(target_pointer_width = "64") {
+        LimitKind::TilePrecincts
+    } else {
+        LimitKind::AddressSpace
+    };
+    assert_eq!(expected.kind(), over_precincts, "{expected}");
     let mut decoder = incremental_with_code_block_work_spent(options.clone(), u64::MAX).unwrap();
     decoder.feed(&bytes);
     let Ok(Refined::Waiting(why)) = decoder.refine() else {

@@ -831,6 +831,20 @@ fn a_100_byte_file_at_the_floor_is_past_the_address_space() {
     }
 }
 
+/// The admitted side of the floor on a 32-bit target: 233 * 1103 x 2089 is
+/// 2^29 - 1 samples, the most it addresses, and the header read admits it
+/// where one sample more is refused. The same holds on a 64-bit target,
+/// which admits 2^29 as well (below). The decode is not run: it would
+/// allocate the whole image before it found the tile missing.
+#[test]
+fn a_100_byte_file_of_2_to_the_29_less_one_samples_is_admitted() {
+    let (width, height) = (233 * 1103, 2089);
+    assert_eq!(u64::from(width) * u64::from(height), (1 << 29) - 1);
+    let file = hundred_byte_file(width, height);
+    let header = read_header(&file).expect("2^29 - 1 samples fit");
+    assert_eq!((header.width, header.height), (width, height));
+}
+
 /// A file of 100 bytes is held to the floor: it cannot ask for more than
 /// 2^29 samples. One of exactly 2^29 is admitted, and one of a sample more
 /// refused, through `decode` and `read_header` alike.

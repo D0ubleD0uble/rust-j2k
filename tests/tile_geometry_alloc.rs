@@ -17,6 +17,11 @@
 //! `tests/support/alloc.rs` forwards every call to `System` unchanged, which
 //! the project conventions allow (`.claude/rules/conventions.md`, "Stay
 //! pure-Rust"). The library itself has no `unsafe`.
+//!
+//! The file is built for 64-bit targets only: the caps it measures are the
+//! ones a sample limit past 2^29 raises, which a 32-bit target cannot hold
+//! (`tests/tile_geometry_cap.rs` checks what it refuses there).
+#![cfg(target_pointer_width = "64")]
 
 #[path = "support/alloc.rs"]
 mod alloc;
