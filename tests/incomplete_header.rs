@@ -586,15 +586,15 @@ fn a_refused_main_header_gives_its_variant() {
     }
 }
 
-/// A whole file whose main header has a damaged field is `Codestream`, not
-/// `Incomplete`: every byte of the header is there, so more bytes would not
-/// help.
+/// A whole file whose main header is damaged is `Codestream` (its layout)
+/// or `Marker` (a segment's length or field), not `Incomplete`: every byte
+/// of the header is there, so more bytes would not help.
 #[test]
-fn a_damaged_main_header_is_codestream() {
+fn a_damaged_main_header_is_codestream_or_marker() {
     let mut messages = Vec::new();
     for (what, bytes, _) in damaged() {
         let header = read_header(&bytes);
-        let Err(Error::Codestream(message)) = &header else {
+        let Err(Error::Codestream(message) | Error::Marker(message)) = &header else {
             panic!("{what}: read_header gave {header:?}");
         };
         for options in [DecodeOptions::default(), lenient()] {
@@ -614,7 +614,8 @@ fn a_damaged_main_header_is_codestream() {
 /// A prefix that holds a damaged segment in full is an error, not
 /// `Incomplete`, from `read_header`, a strict decode and a partial one: the
 /// segments the input holds are judged before the cut is reported. A shorter
-/// prefix does not yet show it, and is `Incomplete` or `Codestream`.
+/// prefix does not yet show it, and is `Incomplete`, `Codestream` or `Marker`
+/// (a segment it holds in full whose length is wrong).
 ///
 /// Each case here damages one place only, so the prefix's error is exactly
 /// the whole file's. That does not hold in general: a whole file whose header
@@ -643,7 +644,10 @@ fn a_cut_after_a_damaged_segment_is_an_error_not_incomplete() {
                     // messages ("truncated marker segment") share.
                     assert_ne!(shown(result.clone()), whole, "{what}, cut at {length}");
                     assert!(
-                        matches!(result, Err(Error::Incomplete(_) | Error::Codestream(_))),
+                        matches!(
+                            result,
+                            Err(Error::Incomplete(_) | Error::Codestream(_) | Error::Marker(_))
+                        ),
                         "{what}, cut at {length}: {result:?}"
                     );
                 }

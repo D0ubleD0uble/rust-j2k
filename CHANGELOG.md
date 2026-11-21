@@ -59,6 +59,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `Error::Marker` and `Error::Codestream` no longer overlap. `Marker` is a
+  marker segment that says something invalid: a field, a length that does
+  not fit its fields, or a coding parameter another segment rules out.
+  `Codestream` is the layout of the markers, the tile-parts and the packets,
+  input that runs out, and corrupt coded data. These refusals move from
+  `Codestream` to `Marker`; which fault a file reports is unchanged (#564):
+  - a marker segment length below 2;
+  - a segment body too short for its fields ("truncated marker segment"
+    where the whole segment is there), or with bytes left over;
+  - `SIZ` component records that do not match `Csiz`, `TLM` entries that are
+    not whole, a `PLT` that ends inside an entry, and a `QCD` or `QCC` step
+    table of the wrong length for its style;
+  - an `SOP` whose `Lsop` is not 4;
+  - an `RGN`, or a MIXED code-block style, that `CAP` rules out.
+
+  A segment that runs past the end of the input stays `Codestream` (or
+  `Incomplete` in the main header). The cap of 65,536 main-header marker
+  segments stays `Codestream`.
 - The refusal of a Part 2 marker names `DCO`, `VMS`, `DFS`, `ADS` and `ATK`
   (0xFF70 to 0xFF73 and 0xFF79) as it does the others, where it called them
   unrecognized. The error variant is unchanged (`Unsupported`) (#579).
@@ -168,9 +186,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `PPT`, `SOP` or `EPH` in the main header is `Error::Codestream`, as
     `PLT` there is. It was `Error::Unsupported`.
   - A `PPT` marker in a codestream that has a `PPM` is `Error::Codestream`.
-    It was `Error::Unsupported`. A `PPT` that holds no packet-header bytes
-    (only its `Zppt`) beside a `PPM` decoded before, and is now refused
-    too, as the standard (A.7.4) and OpenJPEG 2.5.0 refuse it.
+    It was `Error::Unsupported`. A `PPT` that holds only its `Zppt` is
+    `Error::Marker` instead (see Fixed).
   - A color transform over components 0 to 2 that do not share a wavelet is
     `Error::Marker`, naming the tile where a tile's markers cause it. It was
     `Error::Unsupported`.
@@ -179,6 +196,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A `PPT` or `PPM` marker that holds only its `Zppt` or `Zppm` (`Lppt` or
+  `Lppm` 3) is refused as `Error::Marker`, since the segment is too short
+  for its fields, as OpenJPEG 2.5.0 refuses it. Such a `PPT` decoded before
+  when the codestream had no `PPM`, and such a `PPM` decoded before and hid
+  a `PPT` beside it (#564).
 - A code-block's codeword segments cost about 15 bytes of heap each, or
   about 85 with a byte, where they cost about 130 with none. A file of
   many pass-terminated (`termall`) segments peaked at up to about 350

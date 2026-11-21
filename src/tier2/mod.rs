@@ -1409,7 +1409,7 @@ fn read_sop(data: &[u8], pos: usize, packet_index: u32) -> Result<usize> {
     }
     let lsop = u16::from_be_bytes([data[pos + 2], data[pos + 3]]);
     if lsop != 4 {
-        return Err(Error::codestream(format!(
+        return Err(Error::marker(format!(
             "`SOP` declares `Lsop` {lsop}, expected 4"
         )));
     }

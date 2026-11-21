@@ -661,7 +661,8 @@ bit 14 cleared, or both, to the same samples as the file as made (measured on
 `ds0_ht_01_b11` and `ds1_ht_07_b11`). This decoder matches that (rule 2).
 
 Three `CAP` fields bound what follows, and this decoder holds the codestream
-to them as `Codestream`. `Ccap15` bits 15-14 at `10` (HTDECLARED, T.814
+to them. A MIXED style or an `RGN` that `CAP` rules out is `Marker`; a
+magnitude past the bound is `Codestream`, since it is in the coded data. `Ccap15` bits 15-14 at `10` (HTDECLARED, T.814
 A.3.2) say no code-block style sets bit 7, so a MIXED style in the main header
 or a tile-part header is refused. At `00` (HTONLY), A.3.2's note allows a
 MIXED style, and every block of it is read as an HT block. `Ccap15` bit 12

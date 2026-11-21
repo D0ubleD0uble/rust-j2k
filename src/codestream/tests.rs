@@ -211,18 +211,62 @@ fn truncated_main_header_segment_is_incomplete() {
     assert!(matches!(err(&bytes), Error::Incomplete(_)));
 }
 
-/// A segment body too short for its own fields is all there, so it is
-/// malformed, not cut short: the main-header walk read the whole of it.
+/// A segment body too short for its own fields is all there, so its length
+/// is wrong, not cut short: the main-header walk read the whole of it.
 #[test]
-fn a_segment_too_short_for_its_fields_is_codestream() {
+fn a_segment_too_short_for_its_fields_is_marker() {
     let mut body = one_component();
     body.truncate(body.len() - 1);
     let e = err(&codestream(&[seg(marker::SIZ, &body)]));
-    assert!(matches!(e, Error::Codestream(_)), "{e:?}");
+    assert!(matches!(e, Error::Marker(_)), "{e:?}");
+}
+
+/// A segment length below 2 cannot hold its own length field: `Marker`, in
+/// the main header and in a tile-part header.
+#[test]
+fn a_segment_length_below_2_is_marker() {
+    let mut bytes = codestream(&default_header());
+    let at = bytes.len() - 2;
+    bytes.splice(at..at, [0xFF, 0x64, 0x00, 0x01]);
+    let e = err(&bytes);
+    assert!(
+        matches!(&e, Error::Marker(m) if m.message() == "marker segment length below 2"),
+        "main header: {e:?}"
+    );
+    let bytes =
+        assemble_with_tile_markers(&default_header(), &[vec![0xFF, 0x64, 0x00, 0x01]], &[0]);
+    let e = perr(&bytes);
+    assert!(
+        matches!(&e, Error::Marker(m) if m.message() == "marker segment length below 2"),
+        "tile-part header: {e:?}"
+    );
+}
+
+/// A no-quantization `QCD` with no step entry, and a derived one with more
+/// than one, have lengths that do not fit their style: `Marker`.
+#[test]
+fn a_step_table_of_the_wrong_length_is_marker() {
+    for (qcd, what) in [
+        (vec![2u8 << 5], "carries no step entries"),
+        (
+            vec![(2 << 5) | 1, 0x40, 0x00, 0x40, 0x00],
+            "exactly one step entry",
+        ),
+    ] {
+        let e = err(&codestream(&[
+            seg(marker::SIZ, &one_component()),
+            seg(marker::COD, &cod_default(1)),
+            seg(marker::QCD, &qcd),
+        ]));
+        assert!(
+            matches!(&e, Error::Marker(m) if m.message().contains(what)),
+            "{what}: {e:?}"
+        );
+    }
 }
 
 #[test]
-fn trailing_bytes_in_siz_is_codestream() {
+fn trailing_bytes_in_siz_is_marker() {
     let mut body = one_component();
     body.push(0xAB); // one byte the layout does not account for
     let bytes = codestream(&[
@@ -230,7 +274,7 @@ fn trailing_bytes_in_siz_is_codestream() {
         seg(marker::COD, &cod_default(1)),
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
-    assert!(matches!(err(&bytes), Error::Codestream(_)));
+    assert!(matches!(err(&bytes), Error::Marker(_)));
 }
 
 #[test]
@@ -1872,19 +1916,32 @@ fn a_com_run_past_sod_in_a_real_file_is_never_unsupported() {
     );
 }
 
-/// A.7.4 disallows any `PPT` beside a `PPM`, one with no packet-header
-/// bytes too: `FF61 0003 00`, only its `Zppt`, added to
-/// `packed_overrun/ppm_whole.j2k`, is refused with `strict` on and off,
-/// where it decoded before. OpenJPEG 2.5.0 refuses it too.
+/// A `PPT` that carries only its `Zppt` (`Lppt` 3) is too short for its
+/// fields, `Zppt` and at least one byte of `Ippt`: `Marker`, beside a `PPM`
+/// or not. `FF61 0003 00` added to `packed_overrun/ppm_whole.j2k` is refused
+/// so with `strict` on and off. OpenJPEG 2.5.0 refuses both files ("Error
+/// reading PPT marker"), checking the length before the `PPM`.
 #[test]
-fn an_empty_ppt_beside_a_ppm_is_codestream() {
+fn a_ppt_of_lppt_3_is_marker() {
+    let lppt_3 = |header: Vec<Vec<Vec<u8>>>| {
+        assemble_with_tile_markers(&header.concat(), &[seg(marker::PPT, &[0])], &[0])
+    };
+    let ppm = vec![seg(marker::PPM, &[0, 0, 0, 0, 1, 0])];
+    for bytes in [
+        lppt_3(vec![default_header(), ppm.clone()]),
+        lppt_3(vec![default_header()]),
+    ] {
+        crate::fuzz::tile_parts_walks_agree(&bytes);
+        let e = perr(&bytes);
+        assert!(
+            matches!(&e, Error::Marker(m) if m.message().contains("`Lppt` must be at least 4")),
+            "got {e:?}"
+        );
+    }
+    // One byte of `Ippt` beside the `PPM` is the two packed-header places.
     let bytes = assemble_with_tile_markers(
-        &[
-            default_header(),
-            vec![seg(marker::PPM, &[0, 0, 0, 0, 1, 0])],
-        ]
-        .concat(),
-        &[seg(marker::PPT, &[0])],
+        &[default_header(), ppm].concat(),
+        &[seg(marker::PPT, &[0, 0])],
         &[0],
     );
     crate::fuzz::tile_parts_walks_agree(&bytes);
@@ -1907,12 +1964,53 @@ fn an_empty_ppt_beside_a_ppm_is_codestream() {
     crate::fuzz::tile_parts_walks_agree(&bytes);
     for strict in [true, false] {
         let e = crate::decode_with(&bytes, &crate::DecodeOptions::default().with_strict(strict))
-            .expect_err("a PPT beside a PPM");
+            .expect_err("a PPT of Lppt 3");
         assert!(
-            matches!(&e, Error::Codestream(m) if m.message().contains("both `PPM` and `PPT`")),
+            matches!(&e, Error::Marker(m) if m.message().contains("`Lppt` must be at least 4")),
             "strict {strict}: got {e:?}"
         );
     }
+}
+
+/// A `PPM` that carries only its `Zppm` (`Lppm` 3) is too short for its
+/// fields: `Marker`, as OpenJPEG 2.5.0 refuses it ("Error reading PPM
+/// marker"). Such a `PPM` gives no packet-header chunk, so with it refused a
+/// `PPM` present always gives a chunk, and a `PPT` beside one is never
+/// taken for a codestream without `PPM`. A `PPM` of `Lppm` 2 has no `Zppm`
+/// and is `Marker` too.
+#[test]
+fn a_ppm_of_lppm_3_is_marker() {
+    for (ppm, ppt) in [
+        (vec![seg(marker::PPM, &[0])], vec![]),
+        (
+            vec![seg(marker::PPM, &[0])],
+            vec![seg(marker::PPT, &[0, 0])],
+        ),
+        (
+            vec![
+                seg(marker::PPM, &[0, 0, 0, 0, 1, 0]),
+                seg(marker::PPM, &[1]),
+            ],
+            vec![],
+        ),
+    ] {
+        let bytes = assemble_with_tile_markers(&[default_header(), ppm].concat(), &ppt, &[0]);
+        let e = err(&bytes);
+        assert!(
+            matches!(&e, Error::Marker(m) if m.message().contains("`Lppm` must be at least 4")),
+            "got {e:?}"
+        );
+    }
+    let bytes = assemble_with_tile_markers(
+        &[default_header(), vec![seg(marker::PPM, &[])]].concat(),
+        &[],
+        &[0],
+    );
+    let e = err(&bytes);
+    assert!(
+        matches!(&e, Error::Marker(m) if m.message() == "truncated marker segment"),
+        "got {e:?}"
+    );
 }
 
 /// The color-transform rule holds for a tile's resolved coding too: a tile
@@ -2076,7 +2174,7 @@ fn component_record_count_must_match_csiz() {
     let body = siz_body(2, &[(7, 1, 1)]);
     assert!(matches!(
         decode_siz(Cursor::new(&body)),
-        Err(Error::Codestream(_))
+        Err(Error::Marker(_))
     ));
 }
 
@@ -2547,7 +2645,7 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
                 ]
                 .concat(),
             )),
-            Variant::Codestream,
+            Variant::Marker,
         ),
         (
             "tile-part RGN in a codestream whose CAP says it has none",
@@ -2556,7 +2654,7 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
                 &[seg(marker::RGN, &rgn_body(&[0], 0, 4))],
                 &[0],
             )),
-            Variant::Codestream,
+            Variant::Marker,
         ),
         // Multiple components are decoded, so they left this table. The
         // sample limit that bounds them depends on the caller's options, so
@@ -2880,7 +2978,7 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0xC0, 1)),
             seg(marker::QCD, &qcd_none(2, &[8; 16])),
         ])),
-        Variant::Codestream,
+        Variant::Marker,
     ));
 
     let wrong: Vec<String> = rows
@@ -3232,7 +3330,7 @@ fn a_malformed_qcc_names_qcc_and_not_qcd() {
         seg(marker::QCC, &[0, (2 << 5) | 2, 0x00]),
     ]);
     let e = err(&bytes);
-    let Error::Codestream(message) = &e else {
+    let Error::Marker(message) = &e else {
         panic!("got {e:?}")
     };
     assert!(message.message().contains("QCC"), "{message}");
@@ -3325,7 +3423,7 @@ fn a_wrong_length_rgn_is_rejected() {
             seg(marker::QCD, &qcd_none(2, &[8; 16])),
         ]);
         assert!(
-            matches!(err(&bytes), Error::Codestream(_)),
+            matches!(err(&bytes), Error::Marker(_)),
             "{body:?} should reject"
         );
     }
@@ -3753,11 +3851,11 @@ fn tlm_reserved_stlm_bits_are_a_marker_error() {
 
 /// A body that does not divide into whole entries is malformed.
 #[test]
-fn tlm_misaligned_body_is_a_codestream_error() {
+fn tlm_misaligned_body_is_a_marker_error() {
     let mut segments = default_header();
     segments.push(seg(marker::TLM, &tlm_body(0x60, &[0, 0, 0, 0x13])));
     let bytes = codestream(&segments);
-    assert!(matches!(err(&bytes), Error::Codestream(_)));
+    assert!(matches!(err(&bytes), Error::Marker(_)));
 }
 
 /// The subset's grid is a single tile — enforced at SIZ — so an entry naming
@@ -3786,11 +3884,11 @@ fn plm_parses_and_is_skipped() {
 
 /// A PLM with no `Zplm` byte at all is malformed.
 #[test]
-fn plm_without_zplm_is_a_codestream_error() {
+fn plm_without_zplm_is_a_marker_error() {
     let mut segments = default_header();
     segments.push(seg(marker::PLM, &[]));
     let bytes = codestream(&segments);
-    assert!(matches!(err(&bytes), Error::Codestream(_)));
+    assert!(matches!(err(&bytes), Error::Marker(_)));
 }
 
 /// PLT parses in the tile-part header: `Zplt`, then packet lengths as
@@ -3807,10 +3905,10 @@ fn plt_parses_in_the_tile_part_header() {
 /// A PLT whose last byte still has the continuation bit set ends mid-entry —
 /// malformed, and OpenJPEG's `opj_j2k_read_plt` rejects it the same way.
 #[test]
-fn plt_ending_mid_entry_is_a_codestream_error() {
+fn plt_ending_mid_entry_is_a_marker_error() {
     let plt = seg(marker::PLT, &[0, 0x85]);
     let bytes = assemble_with_tile_markers(&default_header(), &[plt], &[1, 2]);
-    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+    assert!(matches!(perr(&bytes), Error::Marker(_)));
 }
 
 /// PLT belongs to the tile-part header alone (A.7.3); in the main header it is
@@ -4585,7 +4683,7 @@ fn cap15(ccap15: u16) -> Vec<u8> {
 /// so a main-header `RGN` is refused, before or after the `CAP`. With the
 /// bit set, or with no Part 15 `CAP` at all, the same `RGN` is read.
 #[test]
-fn a_main_header_rgn_against_a_rgn_free_cap_is_codestream() {
+fn a_main_header_rgn_against_a_rgn_free_cap_is_marker() {
     let rgn = || seg(marker::RGN, &rgn_body(&[0], 0, 4));
     let cap = |ccap15| seg(marker::CAP, &cap15(ccap15));
     let [siz, cod, qcd] = <[Vec<u8>; 3]>::try_from(default_header()).unwrap();
@@ -4596,7 +4694,7 @@ fn a_main_header_rgn_against_a_rgn_free_cap_is_codestream() {
     ] {
         let e = err(&codestream(&segments));
         assert!(
-            matches!(&e, Error::Codestream(m) if m.message().contains("`Ccap15` bit 12 is 0")),
+            matches!(&e, Error::Marker(m) if m.message().contains("`Ccap15` bit 12 is 0")),
             "got {e:?}"
         );
     }
@@ -4618,14 +4716,14 @@ fn a_main_header_rgn_against_a_rgn_free_cap_is_codestream() {
 
 /// A tile-part `RGN` is held to the main header's `CAP` the same way.
 #[test]
-fn a_tile_part_rgn_against_a_rgn_free_cap_is_codestream() {
+fn a_tile_part_rgn_against_a_rgn_free_cap_is_marker() {
     let rgn = seg(marker::RGN, &rgn_body(&[0], 0, 4));
     let mut header = default_header();
     header.insert(1, seg(marker::CAP, &cap15(0x0003)));
     let bytes = assemble_with_tile_markers(&header, std::slice::from_ref(&rgn), &[1, 2]);
     let e = parse(&bytes).expect_err("RGN-free CAP");
     assert!(
-        matches!(&e, Error::Codestream(m) if m.message().contains("`Ccap15` bit 12 is 0")),
+        matches!(&e, Error::Marker(m) if m.message().contains("`Ccap15` bit 12 is 0")),
         "got {e:?}"
     );
 
@@ -4858,18 +4956,18 @@ fn a_cut_header_holding_a_refused_style_is_refused_not_incomplete() {
 }
 
 /// `Ccap15` bits 15-14 at `10` (HTDECLARED, ISO/IEC 15444-15 A.3.2) say no
-/// code-block style sets bit 7, so a MIXED style under them is `Codestream`,
+/// code-block style sets bit 7, so a MIXED style under them is `Marker`,
 /// whether `CAP` comes before or after the COD, or a COC or a tile-part
 /// marker sets it. `00` (HTONLY) allows a MIXED style (A.3.2 NOTE), and `11`
 /// and no `CAP` allow MIXED.
 #[test]
-fn a_mixed_style_under_an_htdeclared_cap_is_codestream() {
+fn a_mixed_style_under_an_htdeclared_cap_is_marker() {
     let cap = |ccap15| seg(marker::CAP, &cap15(ccap15));
     let mixed_cod = seg(marker::COD, &cod_body(0, 0, 1, 0, 5, 4, 4, 0xC0, 1));
     let qcd = seg(marker::QCD, &qcd_none(2, &[8; 16]));
     let siz = seg(marker::SIZ, &one_component());
     let refused = |bytes: &[u8], e: Error| {
-        let Error::Codestream(message) = &e else {
+        let Error::Marker(message) = &e else {
             panic!("got {e:?} for {bytes:02X?}")
         };
         assert!(
@@ -5302,7 +5400,7 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
                 }],
                 &[],
             ),
-            "Codestream(\"truncated marker segment\")",
+            "Marker(\"truncated marker segment\")",
         ),
         (
             "a whole empty COD, then the input ends in a cut tile-part header",
@@ -5316,7 +5414,7 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
                 }],
                 &[],
             ),
-            "Codestream(\"truncated marker segment\")",
+            "Marker(\"truncated marker segment\")",
         ),
         (
             "a cut tile-part header the input ends inside",
@@ -5617,7 +5715,7 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
             "a bad SOT length",
             false,
             grid_of_four(&[], &[all(0), seg(0xFF90, &[0; 9])], &eoc),
-            "Codestream(\"`SOT` segment has 1 unexpected trailing byte(s)\")",
+            "Marker(\"`SOT` segment has 1 unexpected trailing byte(s)\")",
         ),
     ];
     for (name, strict, bytes, error) in &cases {

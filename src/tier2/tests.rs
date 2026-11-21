@@ -2092,16 +2092,16 @@ fn a_wrong_sop_sequence_number_is_codestream() {
 }
 
 #[test]
-fn a_malformed_sop_segment_is_codestream() {
+fn a_malformed_sop_segment_is_rejected() {
     let bands = [single_block_band(BandKind::Ll, 8, 8)];
 
-    // Lsop must be 4.
+    // Lsop must be 4: a length that does not fit the fields is `Marker`.
     let mut data = vec![0xFF, 0x91, 0x00, 0x06, 0x00, 0x00];
     data.extend_from_slice(&one_block_header());
     data.extend_from_slice(&[1, 2]);
     let e = parse_layers_with(&data, &bands, 1, SOP).unwrap_err();
     assert!(
-        matches!(&e, Error::Codestream(m) if m.message().contains("Lsop")),
+        matches!(&e, Error::Marker(m) if m.message().contains("Lsop")),
         "got {e:?}"
     );
 

@@ -2,7 +2,8 @@
 //! that names its class, so a caller can tell a malformed input from an
 //! unsupported feature: [`Error::Codestream`] for structural damage,
 //! [`Error::Incomplete`] for input that ends before the main header is whole,
-//! [`Error::Marker`] for an invalid field value, [`Error::FileFormat`] for a
+//! [`Error::Marker`] for a marker segment that says something invalid (a
+//! field, a length or a conflict with another segment), [`Error::FileFormat`] for a
 //! malformed JP2 box structure, [`Error::Unsupported`] for
 //! a valid-but-out-of-subset feature, [`Error::Limit`] for an input past a
 //! decoder resource guard, [`Error::InvalidOptions`] for bad caller options,
@@ -33,7 +34,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// | Variant | A message for a user |
 /// | ------- | -------------------- |
 /// | `Codestream` | The file is damaged, cut short or not a JPEG 2000 image. |
-/// | `Marker` | The file is damaged: a header field holds a value the standard does not allow. |
+/// | `Marker` | The file is damaged: a header field or segment length holds a value the standard does not allow. |
 /// | `FileFormat` | The file is damaged: its JP2 boxes are malformed or disagree with the image. |
 /// | `Incomplete` | The file is cut short before its header ends. If it is still arriving, try again with more of it, or feed it to an [`IncrementalDecoder`](crate::IncrementalDecoder). |
 /// | `Unsupported` | The file uses a JPEG 2000 feature this decoder does not read, or a valid request it does not do: sRGB output from sub-sampled sYCC chroma on an area smaller than the image (`DecodeOptions::region`). |
@@ -95,12 +96,21 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Error {
-    /// Not a JPEG 2000 codestream, or its structure is broken: a missing
-    /// segment, a segment too short for its fields, lost sync, a tile-part or
-    /// packet data cut short, or corrupt packet / coded data. Input that ends
-    /// before the main header is whole is [`Error::Incomplete`] instead. Any
-    /// input that is not JPEG 2000 at all (text, another image format) is
-    /// this variant, since it has no `SOC` marker.
+    /// Not a JPEG 2000 codestream, or its structure is broken: how the
+    /// markers and the data are laid out, not what a segment says. That is
+    /// a marker that is missing, repeated or out of place; the tile-parts
+    /// that `SOT` lays out (its tile index, `Psot`, `TPsot` and `TNsot`)
+    /// and the `PPM` and `PPT` packet headers they share out; a segment or
+    /// tile-part that runs past the end of the input; packets the `POC`
+    /// volumes leave out; and corrupt packet or coded data, `SOP`
+    /// sequence numbers and `EPH` included. Input that ends before the
+    /// main header is whole is [`Error::Incomplete`] instead. Any input that
+    /// is not JPEG 2000 at all (text, another image format) is this
+    /// variant, since it has no `SOC` marker.
+    ///
+    /// A cap on the main header's marker segments (65,536) is this variant
+    /// too, not [`Error::Limit`]: no valid main header comes near it, and no
+    /// option raises it.
     Codestream(ErrorDetail),
     /// The input ends before the codestream's main header is whole, that is,
     /// before its first `SOT` marker (the start of the first
@@ -171,8 +181,18 @@ pub enum Error {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     Incomplete(ErrorDetail),
-    /// A marker segment has an invalid field: a reserved value, a bad length
-    /// or an out-of-range value.
+    /// A marker segment says something invalid, wherever it is: a field with
+    /// a reserved or out-of-range value, a length that does not fit the
+    /// fields the segment carries (too short, bytes left over, not a whole
+    /// number of entries, or below the segment's minimum), or a coding
+    /// parameter that another segment rules out. That last covers a
+    /// component index past `SIZ`'s count, a `TLM` tile index past the tile
+    /// grid, an `RGN` or a MIXED code-block
+    /// style that `CAP` rules out, quantization steps too few for the
+    /// decomposition levels, and a color transform over components that
+    /// differ. A segment whose length runs past the end of the input is
+    /// [`Error::Codestream`] or [`Error::Incomplete`] instead, since the input
+    /// may be cut short.
     Marker(ErrorDetail),
     /// The JP2 box structure or a box field is malformed: a box that runs past
     /// the superbox holding it, a truncated box after the codestream, a
