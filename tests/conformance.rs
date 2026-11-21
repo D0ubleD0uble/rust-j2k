@@ -225,6 +225,10 @@ mod harness {
     // --- classification -----------------------------------------------------
 
     #[test]
+    #[cfg_attr(
+        target_os = "wasi",
+        ignore = "a panic aborts on wasm32-wasip1, so `catch_unwind` cannot catch it"
+    )]
     fn panic_classifies_as_failed() {
         // `decode` promises a typed error for every input; a panic must fail
         // the gate, not slip through as anything softer.

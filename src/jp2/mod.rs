@@ -487,6 +487,8 @@ pub(crate) fn check_against_siz(header: &Jp2Header<'_>, siz: &Siz) -> Result<()>
 pub(crate) struct ChannelPlans {
     palette: PalettePlan,
     channels: ChannelPlan,
+    /// The `cdef` entries as written, when the file has a `cdef`.
+    definitions: Option<Vec<ChannelDefinitionEntry>>,
 }
 
 impl ChannelPlans {
@@ -508,8 +510,13 @@ impl ChannelPlans {
         let layout = layout::read(header, jph)?;
         let palette = palette::plan(layout.palette, siz, reduction, cap, raw_channels)?;
         let count = palette.output_channels(siz, reduction).len();
+        let definitions = layout.cdef.as_deref().map(channels::definitions);
         let channels = channels::plan(layout.cdef, count, raw_channels)?;
-        Ok(ChannelPlans { palette, channels })
+        Ok(ChannelPlans {
+            palette,
+            channels,
+            definitions,
+        })
     }
 
     /// The output channels' formats, in output order: the palette's output,
@@ -538,7 +545,7 @@ pub(crate) fn metadata(file: &Jp2File<'_>, plans: &ChannelPlans, siz: &Siz) -> R
         palette_applied: false,
         palette: None,
         channel_mapping: None,
-        channel_definitions: channels::definitions(&file.header, is_jph(&file.file_type)),
+        channel_definitions: plans.definitions.clone(),
         resolution: resolution::read(&file.header),
         xml: passed.xml,
         uuid: passed.uuid,
