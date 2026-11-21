@@ -128,6 +128,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in full, or of a last tile-part whose `Psot` is 0, is still read again
   on each call. Each call still gives what `read_header_with` gives with
   `strict` off on the bytes fed (#502).
+- `IncrementalDecoder::header` keeps no copy of the main header: a
+  16-byte key of it, and nothing at all for a file with no tile over a cap.
+  On a 16.8 MB main header of `PPM` data it held 100 MB after a call and
+  now holds none, and the decoder is 464 bytes, not 896. Each call
+  parses the main header again, so it costs the main header plus the
+  tile-parts fed since (#556).
 
 ### Fixed
 

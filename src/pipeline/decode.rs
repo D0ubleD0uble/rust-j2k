@@ -214,9 +214,10 @@ fn count_geometry(
     // header, selected area and reduction.
     let area = selection.area.image_rect();
     let (mut kept, start) = kept.map_or((None, 0), |(kept, start)| (Some(kept), start));
+    let main = MainKey::of(bytes, parsed);
     let mut earlier = kept
         .as_deref_mut()
-        .and_then(|kept| kept.take(start, bytes.len(), parsed, area, reduction));
+        .and_then(|kept| kept.take(start, bytes.len(), main, area, reduction));
     // The tiles read depend on the area alone, so those kept are reused.
     let reads = match &mut earlier {
         Some(earlier) => std::mem::take(&mut earlier.reads),
@@ -326,17 +327,22 @@ fn count_geometry(
     let counted = count();
     if let Some(kept) = kept {
         let (walk, known) = (rescue.walk, rescue.known);
-        kept.keep(Kept {
-            start,
-            len: bytes.len(),
-            parsed: earlier.map_or_else(|| parsed.clone(), |earlier| earlier.parsed),
-            area,
-            reads,
-            reduction,
-            walk,
-            counts: counts.unwrap_or_default(),
-            known: known.unwrap_or_default(),
-        });
+        let (counts, known) = (counts.unwrap_or_default(), known.unwrap_or_default());
+        // Nothing is kept for a file with no walk and no count: the next
+        // call has nothing to go on from.
+        if walk.is_some() || !counts.is_empty() || !known.is_empty() {
+            kept.keep(Box::new(Kept {
+                start,
+                len: bytes.len(),
+                main,
+                area,
+                reads,
+                reduction,
+                walk,
+                counts,
+                known,
+            }));
+        }
     }
     counted
 }
@@ -400,7 +406,33 @@ impl Over {
 /// starts again.
 #[derive(Default)]
 pub(crate) struct HeaderCache {
-    kept: Option<Kept>,
+    /// Boxed, so a decoder with nothing kept holds a pointer.
+    kept: Option<Box<Kept>>,
+}
+
+/// What a main header is keyed on: its length and a hash of its bytes, so
+/// that the cache holds 16 bytes for it, not a copy of the parsed header
+/// (whose `PPM` chunks run to several times the input). The bytes fed only
+/// grow, so a main header read whole stays the same; the key tells a read
+/// of another input from a read of the same one grown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct MainKey {
+    len: usize,
+    hash: u64,
+}
+
+impl MainKey {
+    /// The key of the main header `parsed` read from the start of `bytes`.
+    fn of(bytes: &[u8], parsed: &codestream::ParsedHeader) -> Self {
+        use std::hash::{Hash, Hasher};
+        let len = parsed.main_header_len();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes[..len.min(bytes.len())].hash(&mut hasher);
+        MainKey {
+            len,
+            hash: hasher.finish(),
+        }
+    }
 }
 
 /// [`HeaderCache`]'s contents, and what they were kept for.
@@ -409,7 +441,7 @@ struct Kept {
     start: usize,
     /// The bytes of the codestream the last call read.
     len: usize,
-    parsed: codestream::ParsedHeader,
+    main: MainKey,
     /// The area the selection reads, on the reference grid.
     area: codestream::markers::Rect,
     /// Which tiles it reads.
@@ -426,27 +458,27 @@ struct Kept {
 impl HeaderCache {
     /// What was kept, if it was kept for a codestream at `start` of the
     /// input that `len` bytes of it now extend, with the main header
-    /// `parsed`, the area read `area` and the reduction `reduction`.
+    /// keyed `main`, the area read `area` and the reduction `reduction`.
     /// Anything else kept is dropped.
     fn take(
         &mut self,
         start: usize,
         len: usize,
-        parsed: &codestream::ParsedHeader,
+        main: MainKey,
         area: codestream::markers::Rect,
         reduction: u8,
-    ) -> Option<Kept> {
+    ) -> Option<Box<Kept>> {
         self.kept.take().filter(|kept| {
             kept.start == start
                 && kept.len <= len
                 && kept.reduction == reduction
                 && kept.area == area
-                && kept.parsed == *parsed
+                && kept.main == main
         })
     }
 
     /// Keep `kept` for the next call.
-    fn keep(&mut self, kept: Kept) {
+    fn keep(&mut self, kept: Box<Kept>) {
         self.kept = Some(kept);
     }
 }

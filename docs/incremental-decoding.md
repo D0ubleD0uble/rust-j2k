@@ -164,15 +164,18 @@ walk starts again.
 main header, in `pipeline::decode::HeaderCache`: the walk of the tile-parts,
 where it stopped, the first tile-part offset of each tile it reached, and
 the counts of each tile's own header once that tile-part is whole. A later
-call goes on from there and reads only the tile-parts fed since, so the
-calls after each feed read each `SOT` about once in all. The header of a
+call goes on from there, so the calls after each feed read each `SOT` about
+once in all. Each call also parses the main header again, so a call costs
+the main header (`PPM` data included) plus the tile-parts fed since. The
+header of a
 tile-part not yet fed in full is read again on each call, as is that of a
 last tile-part whose `Psot` is 0, which is never whole. The tiles it
 learned of are charged the read's budget again, as a read from the start
 charges them, so each call gives what `read_header_with` gives with
 `strict` off on the same bytes. It keeps about 140 bytes for each tile
-counted under its own header, a byte for each other tile, and a copy of
-the main header. What it keeps is for one selected area and reduction,
+counted under its own header and a byte for each other tile, and a 16-byte
+key of the main header, not a copy. A file with no tile over a cap keeps
+nothing. What it keeps is for one selected area and reduction,
 and a change of options drops it.
 
 ## Changing the options

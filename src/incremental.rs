@@ -313,12 +313,13 @@ impl IncrementalDecoder {
     /// and `refine` returns it as an error too: a server that streams files
     /// in can refuse one as soon as its main header has come in.
     ///
-    /// Each call parses the main header again. For the tiles over a cap
-    /// under it, the decoder keeps what the last call found: the walk of the
-    /// tile-parts and the counts of the tiles' own headers. A call goes on
-    /// from there, so the calls after each feed walk the tile-parts about
-    /// once in all, and each call costs the tile-parts fed since plus up to
-    /// the read's budget. The header of a tile-part not yet fed in full, or
+    /// Each call parses the main header again (its `PPM` data included), so
+    /// a call costs the main header plus the tile-parts fed since. For the
+    /// tiles over a cap under it, the decoder keeps what the last call
+    /// found: the walk of the tile-parts and the counts of the tiles' own
+    /// headers. A call goes on from there, so the calls after each feed walk
+    /// the tile-parts about once in all, and each call costs up to the
+    /// read's budget besides. The header of a tile-part not yet fed in full, or
     /// of a last tile-part whose `Psot` is 0, is read again on each call. A
     /// call that refuses a tile or stops at a budget also walks every
     /// tile-part fed, as `read_header_with` does, for the error the decode
@@ -326,10 +327,10 @@ impl IncrementalDecoder {
     /// a window of 1530 tiles of a 235 MB file of 16.7 million tile-parts,
     /// calls after each 256 KiB fed took 5.9 s in all and now take 66 ms.
     /// What is kept, about 140 bytes for each tile counted under its own
-    /// header and a byte for each other tile plus a copy of the main header
-    /// (its `PPM` data included), is held until the options change, which
-    /// drops it. A call made while another thread is in one reads from the
-    /// start.
+    /// header and a byte for each other tile, plus a 16-byte key of the main
+    /// header (not a copy of it), is held until the options change, which
+    /// drops it. A file with no tile over a cap keeps nothing. A call made
+    /// while another thread is in one reads from the start.
     pub fn header(&self) -> Result<Option<Header>> {
         // A call on another thread holding the lock reads from the start. A
         // call that panicked may have left the walk half done, so it is

@@ -390,15 +390,26 @@ for each tile-component of the tiles read that have no tile-part, past the
 packet work bound. The header read decodes no packet, so it does not
 follow the decode there; `tests/tile_geometry_cap.rs` shows a case of the
 first and of the last.
+The main header is parsed into memory, and its `PPM` data is held as one
+`Vec` for each `Nppm` record, 24 bytes of header each however short the
+record. A main header of 16.8 MB of `PPM` markers holding 4.19 million
+empty records is 100 MB parsed, and `read_header_with` peaks at 168 MB on
+it, about 10 times the input. The decode holds the same parse.
 `IncrementalDecoder::header` keeps the walk and the counts of the tiles'
 own headers between calls, and goes on from where the last call stopped.
 Calls after each feed walk the tile-parts about once in all, and each call
 is charged the budgets as a read from the start is: after each 256 KiB fed
-of the 235 MB file above, 66 ms in all. The header of a tile-part not yet
+of the 235 MB file above, 66 ms in all. Each call also parses the main
+header again, so the cost of a call is the main header plus the tile-parts
+fed since, up to the budgets; a main header of megabytes of `PPM` data is
+parsed on every call. The header of a tile-part not yet
 fed in full, or of a last tile-part whose `Psot` is 0, is read again on
 each call. What it keeps, about 140 bytes for each tile counted under its
-own header and a byte for each other tile plus a copy of the main header
-(`PPM` data included), is held until the options change. The walk for the
+own header and a byte for each other tile, is held until the options
+change. It keeps no copy of the main header, only a 16-byte key of it, so
+a file with no tile over a cap keeps nothing (`tests/incremental_header_cache_alloc.rs`:
+0 bytes held after a call on a 16.8 MB main header of `PPM` data, where a
+copy of the parsed header held 100 MB). The walk for the
 decode's error for the tile-parts is not kept: each call that refuses a
 tile or stops at a budget walks every tile-part fed again, so with tile 0
 refused and `Region::Tile(0)`, calls after each 1 MiB fed of the 235 MB
