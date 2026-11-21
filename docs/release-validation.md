@@ -394,8 +394,18 @@ CARGO_TARGET_WASM32_WASIP1_RUNNER="wasmtime run --dir=$PWD::$PWD" \
   cargo test --target wasm32-wasip1 --tests
 ```
 
-Every test binary passes, with none skipped as slow: the whole run takes
-about six minutes, and the longest binary, `incremental`, about 90 s. A wasm
+Every test binary passes. The whole run takes about six minutes, and the
+longest binary, `incremental`, about 90 s. It skips the tests marked
+`#[ignore = "slow"]`, as it does on every target. Run
+`--test work_limit -- --include-ignored` as well: its three slow tests
+(`the_large_ht_bomb_decodes_at_the_default_bound`,
+`the_issue_bomb_decodes_with_the_limit_lifted` and
+`a_ladder_over_many_tiles_that_each_reach_the_bound_takes_log_steps`) pass on
+wasm32 in about a minute in a release build. The slow test in
+`tests/tile_geometry_cap.rs` (a 40000-square tile) is gated to 64-bit, because
+the caps never rise above their floor on 32-bit and the tile is
+`AddressSpace` there. The slow test in `src/image.rs` (about 30 CPU-minutes) and the one in
+`src/jp2/math_tests.rs` (it needs the host's glibc) are not part of this run. A wasm
 test binary stops at its first failure, because a panic aborts there, so a
 failing run names one test a binary. To list them all, run each test in its
 own process (`<binary>.wasm --list`, then `--exact <name>`).
@@ -414,7 +424,9 @@ expectation for each target, in `tests/tile_geometry_cap.rs`,
 `tests/fuzz_seed_outcomes.rs`. What is gated to 64-bit has no 32-bit meaning
 (a ceiling past 2^29 samples, a retry that scales the cap). What is ignored
 on WASI needs what it lacks: a process to run `python3` in, or an unwinding
-panic.
+panic. The `should_panic` test `one_entry_over_the_bound_panics` in
+`tests/fuzz_partial_oracle.rs` is the exception: under panic=abort libtest
+drops it from the wasm run, so it does not run there.
 
 Print a hash of each corpus input's output (or its error text) from a small
 program built for each target, and compare the two lists.
