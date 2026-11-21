@@ -364,9 +364,9 @@ tile-parts, `read_header_with` may still give a `Limit` or a reduction
 refusal (`InvalidOptions`) instead of the decode's error
 where it refuses a tile it found a tile-part for, as it does not check the
 tile-parts it passes nor walk past that tile. The decode's parse would find
-the fault, but at the decode's cost: on the 235 MB file above with the last
-tile over the cap and a fault after it, the refusal takes 45 ms and 65 KiB
-of heap, and the parse 1.46 s and 281 MiB. `tests/header_tile_parts_fault.rs`
+the fault, but at the cost of the `strict` on refusal above (1.75 s and
+281 MiB at 255 tile-parts a tile); with `strict` off that refusal takes
+45 ms and 65 KiB of heap. `tests/header_tile_parts_fault.rs`
 shows the difference, and the `header` fuzz target excuses it only with
 `strict` off. The decode can also refuse
 the file before it gets to the tile refused, for what only decoding finds,

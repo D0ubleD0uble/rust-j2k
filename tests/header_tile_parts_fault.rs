@@ -126,6 +126,10 @@ fn one_tile(end: &[u8]) -> Vec<u8> {
 /// the `header` fuzz finds of #504), or tile 0's header holds a `COD` cut
 /// short, a `COD` too short for its length field, or a `COM` that runs past
 /// the tile-part.
+///
+/// This pins the current strict-off behavior, not a promise: a strict-off
+/// walk that finds these faults (#545) would make the header read give the
+/// fault too, and this test would then assert that instead.
 #[test]
 fn with_strict_off_a_tile_parts_fault_can_follow_a_tile_refused() {
     let mut cut_cod = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));

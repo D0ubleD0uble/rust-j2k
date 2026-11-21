@@ -26,8 +26,9 @@
 //!   decode refuses the file first for a fault in the tile-parts, which the
 //!   decode's parse finds before it counts any tile and the header read does
 //!   not look for with `strict` off (`decode_finds_a_tile_parts_fault_first`).
-//!   That excuse holds only if decoding that tile alone with its refusal
-//!   lifted, and decoding another tile alone, give the fault too;
+//!   That excuse holds only if the header read with `strict` on, which runs
+//!   that parse, gives the fault, and decoding that tile alone with its
+//!   refusal lifted, and another tile alone, give it too;
 //! - when `decode_with` succeeds, `read_header_with` reports the decoded
 //!   image's area, each channel's format, and the same JP2 metadata.
 //!
@@ -228,7 +229,8 @@ fn decode_finds_first_in_a_lower_tile(
 /// With `strict` on the header read runs that parse where it refuses a
 /// tile; with it off it does not, as the parse keeps a record of every
 /// tile-part. The `read_header_with` rustdoc and `docs/resource-bounds.md`
-/// list this difference.
+/// list this difference. A strict-off walk that finds these faults (#545)
+/// removes it, and this excuse with it.
 ///
 /// It holds only when all of these do:
 ///
@@ -237,17 +239,21 @@ fn decode_finds_first_in_a_lower_tile(
 /// - `header` is a refusal of one tile, T, as for
 ///   [`decode_finds_first_in_a_lower_tile`], and `decode` is not an error
 ///   the header itself gives from a tile's own header.
-/// - The decode of T alone, with T's refusal lifted, gives `decode`, so it
-///   is not in another tile's data: a header that wrongly refuses T must not
-///   hide behind a fault in a lower tile.
+/// - The header read with `strict` on gives `decode`. Where it refuses a
+///   tile it runs the decode's parse of the tile-parts and gives its fault,
+///   and that parse reads no packet data, so `decode` is a fault of the
+///   tile-parts: not one in packet data, such as an `SOP` out of sequence,
+///   whatever tile it is in.
+/// - The decode of T alone, with T's refusal lifted, gives `decode`.
 /// - The decode of another tile alone (tile 0, or tile 1 for T = 0), under
-///   the options as given, gives `decode` too, so it is not in T's own data
-///   either. What both decodes find is in what every decode reads before it
-///   counts a tile: the tile-parts. A grid of one tile has no other tile;
-///   there the option sets with `strict` on check the refusal.
+///   the options as given, gives `decode` too. A grid of one tile has no
+///   other tile.
 ///
-/// The refusal of T itself is not checked against the decode here, as the
-/// decode never gets to T.
+/// Not checked: the refusal of T itself, as the decode never gets to T,
+/// and so whether the strict-off header read was right to refuse T. A
+/// strict-off header that wrongly refuses T, on a file with a fault in its
+/// tile-parts, is excused. The option sets with `strict` on check the
+/// refusal, as far as the strict and strict-off walks share their code.
 fn decode_finds_a_tile_parts_fault_first(
     data: &[u8],
     options: &rust_j2k::DecodeOptions,
@@ -261,8 +267,12 @@ fn decode_finds_a_tile_parts_fault_first(
     let Some((tile, lifted)) = refusal_of(options, header) else {
         return false;
     };
-    let debug = |result: rust_j2k::Result<rust_j2k::Image>| result.err().map(|e| format!("{e:?}"));
     let expected = Some(format!("{decode:?}"));
+    let strict = rust_j2k::read_header_with(data, &options.clone().with_strict(true));
+    if strict.err().map(|e| format!("{e:?}")) != expected {
+        return false;
+    }
+    let debug = |result: rust_j2k::Result<rust_j2k::Image>| result.err().map(|e| format!("{e:?}"));
     if debug(rust_j2k::decode_with(
         data,
         &lifted.with_region(Region::Tile(tile)),
