@@ -1455,10 +1455,9 @@ report the same one. The exceptions are:
 - The sample limit and the tile caps, which count a JP2 file's own bytes
   (`resource-bounds.md`). Past 64 MiB the wrapper can admit what the bare
   codestream refuses, or name a smaller factor to retry with.
-- A file the decode refuses for a fault in its tile data, where the header
-  read reports a `Limit` or `InvalidOptions` for a tile that the decode does
-  not reach first. The decode refuses the file for a fault in a tile-part
-  (with `strict` off) or in the data of a lower tile.
+- A `Limit` or `InvalidOptions` the header read gives for a tile, where the
+  decode first refuses the file for an earlier fault: in a tile-part (with
+  `strict` off), or in a lower tile's data.
 
 Separately, `read_header_with` can return `Ok` for a fault only decoding
 finds. A JP2 file's box faults have no
