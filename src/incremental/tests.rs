@@ -1429,8 +1429,11 @@ fn a_change_of_region_keeps_the_walks() {
 /// go is charged as a walk read again.
 ///
 /// Which walks fit the room is set by their size in bytes, which follows the
-/// pointer width: on a 64-bit target tiles 1 and 2 are let go, on a 32-bit
-/// one the walks are smaller and letting go of tile 1 is enough.
+/// pointer width: on a 64-bit target the six walks hold 134,976 bytes
+/// against a room of 117,520, and letting go of tile 1 is enough. A 32-bit
+/// target holds smaller walks, which may all fit, so the test is for 64-bit
+/// targets only.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_smaller_region_lets_go_of_the_walks_of_the_tiles_it_does_not_read() {
     let bytes = fixture(SIX_TILES);
@@ -1446,9 +1449,6 @@ fn a_smaller_region_lets_go_of_the_walks_of_the_tiles_it_does_not_read() {
         oracle(&bytes, &tile).unwrap()
     );
     // The tiles let go, from the first; tile 0's walk goes on.
-    #[cfg(target_pointer_width = "64")]
-    let gone: &[u16] = &[1, 2];
-    #[cfg(not(target_pointer_width = "64"))]
     let gone: &[u16] = &[1];
     assert_eq!(decoder.spent.walks.kept(), (6 - gone.len(), 0));
     assert_eq!(decoder.spent.repeats, 0);

@@ -22,9 +22,9 @@ fn all_bytes(block: &CodeBlock<'_>) -> Vec<u8> {
 }
 
 /// The byte chunks of a block's single codeword segment (the default style).
-fn only_segment<'a, 'b>(block: &'a CodeBlock<'b>) -> &'a CodedSegment<'b> {
+fn only_segment<'a, 'b>(block: &'a CodeBlock<'b>) -> CodedSegment<'a, 'b> {
     assert_eq!(block.segments.len(), 1, "the default style has one segment");
-    &block.segments[0]
+    block.segments.get(0).unwrap()
 }
 
 /// Parse `data` as a one-layer packet over `bands`, returning the subbands and
@@ -1150,9 +1150,9 @@ fn a_block_with_passes_and_no_bytes_at_all_is_accepted() {
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 2, "both layers' passes count");
     assert_eq!(block.segments.len(), 1);
-    assert_eq!(block.segments[0].passes, 2);
+    assert_eq!(block.segments.get(0).unwrap().passes, 2);
     assert!(
-        block.segments[0].chunks.is_empty(),
+        block.segments.get(0).unwrap().chunks.is_empty(),
         "a zero length files no chunk"
     );
     assert_eq!(next, data.len());
@@ -2231,12 +2231,12 @@ fn restart_splits_a_contribution_into_one_segment_per_pass() {
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 3);
     assert_eq!(block.segments.len(), 3, "one segment per coding pass");
-    for segment in &block.segments {
+    for segment in block.segments.iter() {
         assert_eq!(segment.passes, 1);
     }
-    assert_eq!(block.segments[0].bytes(), vec![0xA1]);
-    assert_eq!(block.segments[1].bytes(), vec![0xB1, 0xB2]);
-    assert_eq!(block.segments[2].bytes(), vec![0xC1, 0xC2, 0xC3]);
+    assert_eq!(block.segments.get(0).unwrap().bytes(), vec![0xA1]);
+    assert_eq!(block.segments.get(1).unwrap().bytes(), vec![0xB1, 0xB2]);
+    assert_eq!(block.segments.get(2).unwrap().bytes(), vec![0xC1, 0xC2, 0xC3]);
     assert_eq!(next, data.len());
 }
 
@@ -2261,7 +2261,7 @@ fn the_default_style_keeps_one_segment_for_every_pass() {
     let block = &subbands[0].blocks[0];
     assert_eq!(block.num_passes, 3);
     assert_eq!(block.segments.len(), 1, "one continuous codeword");
-    assert_eq!(block.segments[0].passes, 3);
+    assert_eq!(block.segments.get(0).unwrap().passes, 3);
     assert_eq!(next, data.len());
 }
 
@@ -2306,8 +2306,8 @@ fn restart_segments_fill_one_pass_at_a_time_across_layers() {
         2,
         "a full segment does not take more passes"
     );
-    assert_eq!(block.segments[0].bytes(), vec![7]);
-    assert_eq!(block.segments[1].bytes(), vec![8, 9]);
+    assert_eq!(block.segments.get(0).unwrap().bytes(), vec![7]);
+    assert_eq!(block.segments.get(1).unwrap().bytes(), vec![8, 9]);
     assert_eq!(next, data.len());
 }
 
@@ -2350,12 +2350,12 @@ fn an_ht_block_with_its_cleanup_pass_alone_parses() {
 #[test]
 fn lazy_segment_max_passes_follows_the_10_2_1_pattern() {
     const LAZY: u8 = 0x01;
-    let mut segments: Vec<SegmentState> = Vec::new();
+    let mut last = None;
     let mut pattern = Vec::new();
     for _ in 0..7 {
-        let (kind, max_passes) = next_segment(Coder::Part1, LAZY, segments.last());
+        let (kind, max_passes) = next_segment(Coder::Part1, LAZY, last);
         pattern.push(max_passes);
-        segments.push(SegmentState::new(kind, max_passes));
+        last = Some(kind);
     }
     assert_eq!(pattern, [10, 2, 1, 2, 1, 2, 1]);
 }

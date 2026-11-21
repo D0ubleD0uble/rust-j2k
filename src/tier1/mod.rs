@@ -650,10 +650,7 @@ mod tests {
                 height: 1,
                 num_passes,
                 zero_bit_planes,
-                segments: vec![crate::tier2::CodedSegment {
-                    passes: 1,
-                    chunks: vec![&[0x80][..]],
-                }],
+                segments: [(1, [&[0x80][..]])].into_iter().collect(),
                 cut: false,
                 placeholders: 0,
                 coder: Coder::Part1,
@@ -741,7 +738,8 @@ mod tests {
     /// A one-sample band whose block decodes to a nonzero index.
     fn coded_subband(kind: BandKind) -> Subband<'static> {
         let mut sb = kind_block_subband(kind, 1, 0);
-        sb.blocks[0].segments[0].chunks = vec![&[0x00, 0x00, 0x00][..]];
+        let passes = sb.blocks[0].segments.first().unwrap().passes;
+        sb.blocks[0].segments = [(passes, [&[0x00, 0x00, 0x00][..]])].into_iter().collect();
         sb
     }
 
@@ -873,7 +871,8 @@ mod tests {
         decode_subband::<i32, _>(&sb, 1, 1, coders, &mut Scratch::default(), |q| q)
             .expect("a Part 1 block");
         sb.blocks[0].coder = Coder::Ht;
-        sb.blocks[0].segments[0].chunks = vec![&[0, 0][..]];
+        let passes = sb.blocks[0].segments.first().unwrap().passes;
+        sb.blocks[0].segments = [(passes, [&[0, 0][..]])].into_iter().collect();
         let err = decode_subband::<i32, _>(&sb, 1, 1, coders, &mut Scratch::default(), |q| q)
             .expect_err("an HT block");
         let Error::Codestream(message) = &err else {
@@ -979,10 +978,7 @@ mod tests {
             height,
             num_passes: passes,
             zero_bit_planes: busy_zero_planes(coder),
-            segments: vec![crate::tier2::CodedSegment {
-                passes,
-                chunks: vec![data],
-            }],
+            segments: [(passes, [data])].into_iter().collect(),
             cut: false,
             placeholders: 0,
             coder,
@@ -1141,10 +1137,7 @@ mod tests {
     ) -> CodeBlock<'a> {
         let mut block = shaped_block((0, 0), shape, Coder::Ht, cleanup);
         block.num_passes = 3;
-        block.segments.push(crate::tier2::CodedSegment {
-            passes: 2,
-            chunks: vec![refinement],
-        });
+        block.segments.push(2, &[refinement]);
         block
     }
 

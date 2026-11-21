@@ -1,5 +1,5 @@
 use super::*;
-use crate::tier2::{CodeBlock, CodedSegment};
+use crate::tier2::CodeBlock;
 
 /// A one-pass HT code-block of `width` x `height` with `zbp` zero bit-planes
 /// whose cleanup segment is `bytes`.
@@ -11,10 +11,7 @@ fn block(width: usize, height: usize, zbp: u32, bytes: &[u8]) -> CodeBlock<'_> {
         height,
         num_passes: 1,
         zero_bit_planes: zbp,
-        segments: vec![CodedSegment {
-            passes: 1,
-            chunks: vec![bytes],
-        }],
+        segments: [(1, [bytes])].into_iter().collect(),
         cut: false,
         placeholders: 0,
         coder: crate::tier2::Coder::Ht,
@@ -795,10 +792,7 @@ fn refined<'a>(
 ) -> CodeBlock<'a> {
     let mut b = block(width, height, zbp, cleanup);
     b.num_passes = passes;
-    b.segments.push(CodedSegment {
-        passes: passes - 1,
-        chunks: vec![refinement],
-    });
+    b.segments.push(passes - 1, &[refinement]);
     b
 }
 
