@@ -175,8 +175,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only one over a cap under the main header, while `decode_with` refuses
   the file for the tile-parts. The same holds where the tile's precincts
   and code-blocks under that header are at fault and the decode's parse
-  of the tile-parts finds a fault. `IncrementalDecoder::header` gives the
-  error once the tile-part is whole (#578).
+  of the tile-parts finds a fault. With `strict` off this holds for a
+  tile-part the input holds whole (a `Psot` of 0 is never whole), so
+  `IncrementalDecoder::header` gives the error once the tile-part is
+  whole (#578).
 - A tile over both the precinct and the code-block cap is still refused for
   its precincts (`LimitKind::TilePrecincts`), but `retry_with` now names a
   `WorkLimit::Raised` factor that admits its code-blocks too, and the

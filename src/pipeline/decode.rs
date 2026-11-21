@@ -644,10 +644,10 @@ impl<'a> Rescue<'a> {
     /// ([`walk_fault`](Self::walk_fault)) and not at all with it off (the
     /// decode leaves it out). A tile whose tile-part header is at fault, or
     /// whose counts under it are, gets the decode's error for the
-    /// tile-parts ([`own_fault`](Self::own_fault)). So a tile-part `COD` that brings a tile
-    /// within the caps is admitted, and one that takes it over them is
-    /// refused. A tile within them (`None`) whose first tile-part has no
-    /// `COD` or `COC` is admitted unread and uncharged.
+    /// tile-parts ([`own_fault`](Self::own_fault)). So a tile-part `COD`
+    /// that brings a tile within the caps is admitted, and one that takes
+    /// it over them is refused. A tile within them (`None`) whose first
+    /// tile-part has no `COD` or `COC` is admitted unread and uncharged.
     ///
     /// The tiles are counted in index order, as the walk notes the
     /// tile-parts only from the first tile counted on. Only the header read
@@ -701,7 +701,7 @@ impl<'a> Rescue<'a> {
         }
         let Ok(own) = part.header() else {
             self.learn(index, whole, sets_coding, Some(OwnHeader::Fault));
-            return self.own_fault();
+            return self.own_fault(whole);
         };
         let resolutions = resolutions(&own);
         if !self.charge(resolutions) {
@@ -722,7 +722,7 @@ impl<'a> Rescue<'a> {
                 counts,
             }),
         );
-        self.check_own(index, counts)
+        self.check_own(index, counts, whole)
     }
 
     /// [`count`](Self::count) for a tile whose own header gave `header`.
@@ -735,21 +735,22 @@ impl<'a> Rescue<'a> {
             counts,
         } = header
         else {
-            return self.own_fault();
+            return self.own_fault(true);
         };
         if !self.charge(resolutions) {
             return Ok(false);
         }
-        // It was within the reduction when it was read.
-        self.check_own(index, counts)
+        // It was within the reduction when it was read, and is whole.
+        self.check_own(index, counts, true)
     }
 
     /// Hold tile `index` to the caps under its own header, which gave its
     /// tile `counts`, as [`tier2::check_tile`] holds it. Counts at fault
-    /// (`None`) are [`own_fault`](Self::own_fault)'s.
-    fn check_own(&mut self, index: u32, counts: Option<(u64, u64)>) -> Result<bool> {
+    /// (`None`) are [`own_fault`](Self::own_fault)'s, for a tile-part that
+    /// is `whole` in the input or not.
+    fn check_own(&mut self, index: u32, counts: Option<(u64, u64)>, whole: bool) -> Result<bool> {
         let Some(counts) = counts else {
-            return self.own_fault();
+            return self.own_fault(whole);
         };
         match tier2::check_counts(index, counts, self.cap) {
             Err(error @ Error::Limit(_)) => Err(error),
@@ -762,12 +763,17 @@ impl<'a> Rescue<'a> {
     /// `strict` as the read has it ([`codestream::tile_parts_fault`]), as
     /// the decode parses every tile-part before it counts any tile. A whole
     /// tile-part header at fault is one that parse finds, if it finds no
-    /// fault before it. Where it finds none (a tile-part the input cuts,
-    /// with `strict` off, or counts at fault that only the decode's count
-    /// of the tile finds), the tile is left to the decode. The tile-parts
-    /// are walked once at most.
-    fn own_fault(&mut self) -> Result<bool> {
-        if !self.fault_free {
+    /// fault before it. Where it finds none (counts at fault that only the
+    /// decode's count of the tile finds), the tile is left to the decode.
+    ///
+    /// A tile-part not `whole` in the input (cut, or with a `Psot` of 0),
+    /// with `strict` off, is left to the decode unwalked. So a call on a
+    /// prefix whose last tile-part is not whole, as each call of
+    /// [`IncrementalDecoder::header`](crate::IncrementalDecoder::header) on
+    /// a stream fed so far can be, does not walk the tile-parts again. The
+    /// tile-parts are walked once at most.
+    fn own_fault(&mut self, whole: bool) -> Result<bool> {
+        if !self.fault_free && (whole || self.strict) {
             match codestream::tile_parts_fault(self.bytes, self.parsed, self.strict) {
                 Some(fault) => return Err(fault),
                 None => self.fault_free = true,

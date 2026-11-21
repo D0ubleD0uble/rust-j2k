@@ -869,3 +869,28 @@ fn a_tile_whose_own_counts_are_at_fault_gives_the_decode_s_fault_for_the_tile_pa
         );
     }
 }
+
+/// The same faults in a tile-part whose `Psot` is 0, which runs to the end
+/// of the codestream, so it is never whole in the input. With `strict` on
+/// the read gives the decode's error. With it off the read leaves such a
+/// tile-part to the decode, as it does one the input cuts, so that a call
+/// on a stream fed so far does not walk the tile-parts for it; that case
+/// is not pinned here.
+#[test]
+fn a_fault_in_an_own_header_with_a_psot_of_0_is_the_decode_s_error_with_strict_on() {
+    for &(what, colors, insert, variant) in OWN_HEADER_FAULTS {
+        let (mut bytes, sot) = over_cap_tile_with(colors, insert);
+        bytes[sot + 6..sot + 10].copy_from_slice(&[0; 4]);
+        let options = DecodeOptions::default();
+        let header = keyed(read_header_with(&bytes, &options).map(|_| ()));
+        assert!(
+            header.as_ref().is_err_and(|e| e.starts_with(variant)),
+            "{what}: {header:?}"
+        );
+        assert_eq!(
+            header,
+            keyed(decode_with(&bytes, &options).map(|_| ())),
+            "{what}"
+        );
+    }
+}

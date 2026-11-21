@@ -443,7 +443,9 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// refuses is the lowest the decode refuses. Where a tile-part header the
 /// read counts a tile under is at fault, or the tile's precincts and
 /// code-blocks under it are, the read gives the parse's error in the same
-/// way, if the parse finds one. Where the read refuses no tile, a fault the
+/// way, if the parse finds one; with `strict` off, only where the input
+/// holds all of that tile-part, up to the end its `Psot` gives (not 0).
+/// Where the read refuses no tile, a fault the
 /// decode finds in a tile-part header the read does not read is left to
 /// the decode, as is a
 /// tile-part `COD` that takes a tile over the caps with no tile over them
