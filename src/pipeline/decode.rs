@@ -465,7 +465,8 @@ impl Over {
 /// of the tile-parts, with where it found the first tile-part of each tile
 /// the selection reads, the precincts and code-blocks of each tile counted
 /// under the main header, and what the count read of each tile-part that
-/// is whole in the input ([`Own`]). The bytes fed only grow, so what a call
+/// is whole in the input ([`Own`]), and, apart, the walk for the decode's
+/// error for the tile-parts ([`Faults`]). The bytes fed only grow, so what a call
 /// found in them stays so, and a call gives what a read from the start
 /// gives. It is kept for one codestream, main header, selection and
 /// reduction; a call that reads another, as after a change of region,

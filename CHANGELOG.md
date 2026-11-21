@@ -191,8 +191,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of the tile-parts finds a fault. With `strict` off, a fault the input
   ends inside is read as a cut, as the decode reads it, so
   `IncrementalDecoder::header` gives the error once the decode would.
-  Counts at fault in a tile-part not whole in the input (cut, or with a
-  `Psot` of 0) are left to the decode with `strict` off (#578).
+  This holds for counts at fault in a tile-part not whole in the input
+  (cut, or with a `Psot` of 0) too (#578, #560).
+- `IncrementalDecoder::header` keeps the walk for the decode's error for
+  the tile-parts between calls. A call that refuses a tile, stops at the
+  count's budget, or meets a tile whose counts under its own header are at
+  fault walked every tile-part fed again, so calls after each feed took
+  time quadratic in the input: 21.5 s for calls after each 1 MiB of a
+  235 MB file with tile 0 refused, now 170 ms. With `strict` off the
+  `TNsot` look-ahead is taken only where its answer changes an error's
+  counts (#560).
 - With `strict` off, a fault in the header of a tile-part that runs to the
   end of the input, a last one with `Psot` 0 or one whose `Psot` runs past
   the end, is refused with the error a strict decode gives when the input

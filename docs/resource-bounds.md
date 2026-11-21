@@ -554,10 +554,23 @@ integers). A file whose tiles' sizes show them within the caps keeps nothing
 (`tests/incremental_header_cache_alloc.rs`: 0 bytes held after a call on a
 16.8 MB main header of `PPM` data, where a copy of the parsed header held
 100 MB); any other keeps a few hundred bytes, plus the per-tile counts. The walk for the
-decode's error for the tile-parts is not kept: each call that refuses a
-tile or stops at a budget walks every tile-part fed again, so with tile 0
-refused and `Region::Tile(0)`, calls after each 1 MiB fed of the 235 MB
-file take 22 s in all.
+decode's error for the tile-parts is kept too, with its heap above, where
+it stood after the last tile-part it read whose `Psot` is not 0 and whose
+end is followed by an `SOT`: every step before there read only bytes a
+longer input holds the same. Each call that refuses a tile, stops at a
+budget or meets a tile whose counts under its own header are at fault
+goes on from there, reading the tile-parts fed since and the one it was
+kept before, and checks each tile once more. With tile 0 refused and
+`Region::Tile(0)`, calls after each 1 MiB fed of the 235 MB file took
+21.5 s in all with a walk from the start on each, and take 170 ms. On a
+file of 65535 tiles of 4096 components and 255 tile-parts each (233 MB),
+whose count runs out of its budget and whose header reads, they took
+6.9 s and take 410 ms, most of it the budget each call spends. Both are
+in `tests/incremental_header_cost.rs`. With `strict` off, as
+`IncrementalDecoder::header` reads, the `TNsot` look-ahead is taken only
+when the error it changes is built (it raises both counts in "tile N
+declares A tile-parts in one `SOT` and B in another"), as it reads past
+the tile-parts walked.
 In an `IncrementalDecoder` a refusal under the default or a `Raised` limit
 is a wait (`Waiting::SampleLimit`), as the caps grow with the bytes fed.
 

@@ -14,7 +14,10 @@
 //! walks are kept in step
 //! by a differential over every committed codestream and header seed in
 //! `tests.rs`, and over fuzzed input by the `header` fuzz target
-//! ([`crate::fuzz::tile_parts_walks_agree`]).
+//! ([`crate::fuzz::tile_parts_walks_agree`]). [`tile_parts_fault_kept`]
+//! keeps the walk between calls on an input that grows, with `strict` off,
+//! and the same differential holds it to a walk from the start on growing
+//! prefixes.
 //!
 //! [`parse_tiles_with`]: super::parse_tiles_with
 //! [`walk_tiles`]: super::walk_tiles

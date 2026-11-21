@@ -332,18 +332,23 @@ impl IncrementalDecoder {
     /// the tile-parts about once in all, and each call costs up to the
     /// read's budget besides. The header of a tile-part not yet fed in full, or
     /// of a last tile-part whose `Psot` is 0, is read again on each call. A
-    /// call that refuses a tile or stops at a budget also walks every
-    /// tile-part fed, as `read_header_with` does, for the error the decode
-    /// would give for the tile-parts first; that walk is not kept. So does
-    /// each call that meets a tile whose precincts and code-blocks under its
-    /// own tile-part header are at fault (a component with no sample in the
-    /// tile), which the decode refuses. On
-    /// a window of 1530 tiles of a 235 MB file of 16.7 million tile-parts,
-    /// calls after each 256 KiB fed took 5.9 s in all and now take 66 ms.
+    /// call that refuses a tile, stops at a budget, or meets a tile whose
+    /// precincts and code-blocks under its own tile-part header are at
+    /// fault (a component with no sample in the tile) also looks for the
+    /// error the decode would give for the tile-parts first, as
+    /// `read_header_with` does. That walk is kept too: a call walks the
+    /// tile-parts fed since the last, and checks each tile once. On a
+    /// window of 1530 tiles of a 235 MB file of 16.7 million tile-parts,
+    /// calls after each 256 KiB fed took 5.9 s in all and now take 66 ms;
+    /// with its tile 0 refused and read alone, calls after each 1 MiB fed
+    /// took 21.5 s and now take 170 ms.
     /// What is kept, about 140 bytes for each tile counted under its own
     /// header and a byte for each other tile, plus a key of the main
-    /// header (not a copy of it), is held until the options change, which
-    /// drops it. Nothing is kept for a file whose tiles' sizes show them
+    /// header (not a copy of it), and, once the walk for the decode's error
+    /// has run, its heap as `read_header_with` documents it (up to 10
+    /// bytes a tile of the grid, and the codings later tile-parts restate),
+    /// is held until the options change, which drops it. Nothing is kept
+    /// for a file whose tiles' sizes show them
     /// within the caps; otherwise a few hundred bytes, plus the counts
     /// above. A call made while another thread is in one reads from the
     /// start.
