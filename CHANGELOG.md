@@ -187,9 +187,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   1.50 GiB. A tile's segment records take up to about 65 bytes of heap
   for each byte of input, and a file of such a tile after tiles of
   samples stays within the bound of about 6.4 GiB up to 64 MiB of input
-  and about 102 bytes for each byte past it. A packet's notes of its
-  segments are freed before the records Tier-1 reads are built, and the
-  records before the inverse wavelet. Decoded images do not change
+  and about 102 bytes for each byte past it. In a one-shot decode, a
+  packet's notes of its segments are freed before the records Tier-1
+  reads are built, and the records before the inverse wavelet. Decoded images do not change
   (#585).
 - `read_header_with` gives the decode's error for a file where the
   tile-part header it reads to count a tile is at fault (a Part 2 marker
