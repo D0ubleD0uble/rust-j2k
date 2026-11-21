@@ -1903,7 +1903,107 @@ pub(crate) mod tests {
         }
         let parts = 64 * 16;
         eprintln!("{kept} reads in {calls} calls, {afresh} from the start");
+        assert!(kept > 0);
         assert!(kept <= parts + 2 * calls, "{kept} reads in {calls} calls");
         assert!(kept * 100 < afresh, "{kept} reads, {afresh} from the start");
+    }
+
+    /// A gray codestream of `tiles` tiles in a row, whose main header and
+    /// tiles' first tile-parts are `main` and `own(tile)`, as marker
+    /// segments, with an empty packet in each tile.
+    fn tiles_of(grid: [u32; 8], main: &[Vec<u8>], own: impl Fn(u16) -> Vec<u8>) -> Vec<u8> {
+        use crate::synth;
+        let siz = synth::siz_body(grid, &[[7, 1, 1]]);
+        let mut bytes = [vec![0xFF, 0x4F], synth::seg(0xFF51, &siz), main.concat()].concat();
+        let tiles = (grid[0] - grid[6]).div_ceil(grid[4]) * (grid[1] - grid[7]).div_ceil(grid[5]);
+        for tile in 0..tiles as u16 {
+            bytes.extend(synth::tile_part(tile, 0, 1, &own(tile), &[0]));
+        }
+        bytes.extend_from_slice(&[0xFF, 0xD9]);
+        bytes
+    }
+
+    /// What a header read keeps is for one area and reduction, and its walk
+    /// for the tiles from where it started on: a read under other options
+    /// on the same [`HeaderCache`] gives what [`read_header`] gives. The
+    /// decoder drops what it keeps on any change of options, so only a read
+    /// here can mix them.
+    ///
+    /// The first file has three tiles of 2048 x 1024 in 1x1 precincts, the
+    /// first cut to 400 wide by the image offset: over the precinct cap
+    /// under the default sample limit, but not under `Raised(4)`, while the
+    /// other two, brought within by their own `COD`, are over it under
+    /// both. Under `Raised(4)` the walk starts at tile 1; under the default
+    /// it must start at tile 0, which it refuses, and so must a read of the
+    /// whole image after a read of tile 1. In the second, of one level, tile
+    /// 1's own `COD` has none, which a reduction of 1 refuses.
+    #[test]
+    fn what_is_kept_is_for_one_area_reduction_and_walk() {
+        use crate::synth;
+        let check = |bytes: &[u8], sequence: &[DecodeOptions]| {
+            let mut kept = HeaderCache::default();
+            for (call, options) in sequence.iter().enumerate() {
+                let got = read_header_kept(bytes, options, Some(&mut kept));
+                let want = read_header(bytes, options);
+                assert_eq!(format!("{got:?}"), format!("{want:?}"), "call {call}");
+            }
+        };
+        let lenient = DecodeOptions::default().with_strict(false);
+        let mut cod = synth::cod_body(1, 0, 4, 0);
+        cod[0] = 1;
+        cod.push(0x00);
+        let main = [
+            synth::seg(0xFF52, &cod),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+        ];
+        let rescue = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
+        let grid = [3 * 2048, 1024, 1648, 0, 2048, 1024, 0, 0];
+        let narrow_first = tiles_of(
+            grid,
+            &main,
+            |tile| {
+                if tile == 0 { vec![] } else { rescue.clone() }
+            },
+        );
+        let refused = read_header(&narrow_first, &lenient);
+        assert!(
+            matches!(&refused, Err(Error::Limit(limit)) if limit.message().starts_with("tile 0 ")),
+            "{refused:?}"
+        );
+        let raised = lenient.clone().with_sample_limit(WorkLimit::Raised(4));
+        assert!(read_header(&narrow_first, &raised).is_ok());
+        let tile = lenient.clone().with_region(Region::Tile(1));
+        check(&narrow_first, &[raised, lenient.clone()]);
+        check(&narrow_first, &[tile, lenient.clone()]);
+
+        let mut cod = synth::cod_body(1, 1, 4, 0);
+        cod[0] = 1;
+        cod.extend([0x00, 0x11]);
+        let main = [
+            synth::seg(0xFF52, &cod),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 4])),
+        ];
+        let no_levels = [
+            synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0)),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+        ]
+        .concat();
+        let one_level = synth::seg(0xFF52, &synth::cod_body(1, 1, 4, 0));
+        let grid = [2 * 1040, 512, 0, 0, 1040, 512, 0, 0];
+        let own_no_levels = tiles_of(grid, &main, |tile| {
+            if tile == 1 {
+                no_levels.clone()
+            } else {
+                one_level.clone()
+            }
+        });
+        let reduced = lenient.clone().with_resolution_reduction(1);
+        let refused = read_header(&own_no_levels, &reduced);
+        assert!(
+            matches!(&refused, Err(Error::InvalidOptions(message)) if message.to_string().ends_with("in tile 1")),
+            "{refused:?}"
+        );
+        assert!(read_header(&own_no_levels, &lenient).is_ok());
+        check(&own_no_levels, &[lenient, reduced]);
     }
 }
