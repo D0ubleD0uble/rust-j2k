@@ -367,13 +367,38 @@ fn a_header_past_its_psot_is_refused_without_reading_on() {
                 let _ = decoder.header();
             }
             let took = start.elapsed();
-            let error = format!("{:?}", decoded.unwrap_err());
-            assert!(error.contains("shorter than its header"), "{error}");
-            assert!(header.is_ok(), "{header:?}");
             assert!(
                 took < Duration::from_secs(1),
                 "{} bytes: {took:?}",
                 bytes.len()
+            );
+            let error = format!("{:?}", decoded.unwrap_err());
+            assert!(error.contains("shorter than its header"), "{error}");
+            assert!(header.is_ok(), "{header:?}");
+        }
+    }
+}
+
+/// A `Psot` that ends inside the tile-part's 12-byte `SOT` is refused as
+/// shorter than its `SOT`, for a first tile-part and a later one, with
+/// `strict` on and off.
+#[test]
+fn a_psot_inside_the_sot_is_refused_as_shorter_than_it() {
+    for later in [false, true] {
+        let mut bytes = small();
+        bytes.extend(tile_part(0, 0, if later { 2 } else { 1 }, &[], &[0; 4]));
+        let (tile, part) = if later { (0, 1) } else { (1, 0) };
+        bytes.extend(sot(tile, 10, part, if later { 2 } else { 1 }));
+        bytes.extend([0xFF, 0x93, 0, 0, 0xFF, 0xD9]);
+        for strict in [false, true] {
+            let error = decode_with(&bytes, &options(strict)).unwrap_err();
+            assert_eq!(
+                format!("{error:?}"),
+                format!(
+                    "Codestream(\"tile {tile} tile-part {part} declares `Psot` 10, shorter than \
+                     its `SOT`\")"
+                ),
+                "{later}, {strict}"
             );
         }
     }
