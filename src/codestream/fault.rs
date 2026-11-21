@@ -30,6 +30,13 @@ use super::{
     sot_at, tile_overrides_are_valid,
 };
 
+impl ParsedHeader {
+    /// The length of the main header: the offset of the first `SOT`.
+    pub(crate) fn main_header_len(&self) -> usize {
+        self.sot_offset
+    }
+}
+
 /// What the walk keeps of one tile, 6 bytes.
 #[derive(Debug, Clone, Copy, Default)]
 struct Seen {
