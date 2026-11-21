@@ -21,7 +21,8 @@
 //!   fault or a work bound in a lower tile's data first, which only decoding
 //!   can see (`decode_finds_first_in_a_lower_tile`). That excuse holds only
 //!   if decoding that tile alone (`Region::Tile`, in the color the file
-//!   codes) gives the header's error too, so a header that refuses a tile the decode accepts is still caught;
+//!   codes) gives the header's error too, so a header that refuses a tile
+//!   the decode accepts is still caught;
 //! - with `strict` off, also where the header refuses that tile and the
 //!   decode refuses the file first for a fault in the tile-parts, which the
 //!   decode's parse finds before it counts any tile and the header read does
