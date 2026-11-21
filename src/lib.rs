@@ -23,7 +23,7 @@
 //! color order. [`read_header`] and [`read_header_with`] read the same header
 //! without decoding any tile data. Samples come out as coded by default;
 //! [`ColorOutput::Srgb`] converts sYCC and restricted ICC profiles to sRGB.
-//! The [feature scope](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/scope.md)
+//! The [feature scope](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md)
 //! maps what is decoded and what is not.
 //!
 //! # Pipeline
@@ -141,8 +141,8 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! [terms]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/README.md#what-a-jpeg-2000-file-holds
-//! [strict]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams
+//! [terms]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/README.md#what-a-jpeg-2000-file-holds
+//! [strict]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/openjpeg-departures.md#stricter-than-the-oracle-on-non-conforming-streams
 //!
 //! With [`DecodeOptions::strict`] off, a codestream cut short, or one with
 //! bytes left after a tile's last packet, decodes to the image the data
@@ -190,7 +190,7 @@
 //! needs more than one HT coding pass set, a Part 2 extension) is rejected with [`Error::Unsupported`],
 //! never half-decoded. GRIB2 §5.40 (`grid_jpeg`) payloads, the crate's original
 //! target, are raw codestreams and decode directly. The feature map is in
-//! [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/scope.md).
+//! [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
 #![warn(missing_docs)]
 
 // The pipeline modules are crate-internal: the public API is `decode`,
@@ -245,7 +245,7 @@ mod readme_examples {}
 /// into an [`Image`]: the reference-grid image area plus one [`Component`] per
 /// output channel, each on its own sample grid. For a raw codestream that is
 /// one per component of the `SIZ` marker, in `SIZ` order. [What a JPEG 2000
-/// file holds](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/README.md#what-a-jpeg-2000-file-holds)
+/// file holds](https://github.com/D0ubleD0uble/rust-j2k/blob/main/README.md#what-a-jpeg-2000-file-holds)
 /// explains the codestream's parts. A JP2 file can change the channels:
 /// its palette and channel definitions (below), and, through [`decode_with`],
 /// the sRGB output option.
@@ -344,9 +344,9 @@ mod readme_examples {}
 /// since the format has no checksum, and damage can show up as any variant
 /// (see the crate docs).
 ///
-/// [sample-limit]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit
-/// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-tier-2-work-bound
-/// [tier1-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-tier-1-work-bound
+/// [sample-limit]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit
+/// [work-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-tier-2-work-bound
+/// [tier1-bound]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-tier-1-work-bound
 pub fn decode(bytes: &[u8]) -> Result<Image> {
     decode_with(bytes, &DecodeOptions::default())
 }
@@ -658,7 +658,7 @@ pub enum ColorOutput {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
-    /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/srgb-output.md#every-input-and-its-result
+    /// [outcomes]: https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/srgb-output.md#every-input-and-its-result
     Srgb,
 }
 
@@ -951,7 +951,7 @@ pub struct DecodeOptions {
     /// names is the smallest that admits that file. `Unlimited` lifts the
     /// limit: the decode allocates what the header declares, 4 bytes per
     /// sample for the output, and about 1.35 to 3.2 times that in all at its
-    /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
+    /// peak (see [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)), so a small hostile file can ask
     /// for many gigabytes. If
     /// the allocation fails the process aborts, as Rust's allocation
     /// failures do. Only an image too large for this target to
@@ -971,7 +971,7 @@ pub struct DecodeOptions {
     /// top: the input itself, and the parse of the tile-parts, which keeps a
     /// record of under 1 KiB for each tile the input carries, at most about 52
     /// times the input plus 128 KiB (see [the sample
-    /// limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)).
+    /// limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)).
     /// The palette expansion and sRGB output are checked against `n` too,
     /// and so is every tile a region reads, and the code-blocks and
     /// precincts a tile may hold are set from `n`. A refusal under it gives
@@ -1053,7 +1053,7 @@ pub struct DecodeOptions {
     /// reduction that is. [`IncrementalDecoder`] decodes such prefixes for
     /// you: each refine goes on from where the last one stopped reading
     /// packets. The packets it reads again are listed in
-    /// [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/incremental-decoding.md).
+    /// [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md).
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
@@ -1156,7 +1156,7 @@ impl Default for DecodeOptions {
 /// minutes of work, and a file of up to 64 MiB is held to the sample limit's
 /// floor: about 2.7 GiB of memory for a square tile and several GiB for a tall,
 /// narrow one. Past 64 MiB the sample limit grows with the file (see
-/// [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/docs/resource-bounds.md#the-sample-limit)).
+/// [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)).
 /// A valid file can still go past a bound, when it codes many samples in very
 /// few bytes or is very large. The decode then fails with [`Error::Limit`]. Its
 /// [`LimitDetail::kind`] names the option, and [`LimitDetail::retry_with`]

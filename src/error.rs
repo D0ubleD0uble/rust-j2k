@@ -52,12 +52,19 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// any release. What holds is that when
 /// [`read_header_with`](crate::read_header_with) returns an error,
 /// [`decode_with`](crate::decode_with) returns the same one, and a codestream
-/// and its JP2 wrapper report the same one. The exceptions are sRGB output,
-/// whose check comes at a different point for a raw codestream and for a JP2
-/// file, and, for a file the decode refuses in its tile data, a
-/// [`Error::Limit`] or [`Error::InvalidOptions`] for another tile (with
-/// `strict` off or in a lower tile). Separately, the header read can return
-/// `Ok` for a fault only decoding finds.
+/// and its JP2 wrapper report the same one. The exceptions are:
+///
+/// - sRGB output, whose check comes at a different point for a raw codestream
+///   and for a JP2 file.
+/// - The sample limit and the tile caps, which count a JP2 file's own bytes.
+///   Past 64 MiB the wrapper can admit what the bare codestream refuses, or
+///   name a smaller factor to retry with.
+/// - A [`Error::Limit`] or [`Error::InvalidOptions`] the header read gives for
+///   a tile, where the decode first refuses the file for an earlier fault: in
+///   a tile-part (with `strict` off), or in a lower tile's data.
+///
+/// Separately, the header read can return `Ok` for a fault only decoding
+/// finds.
 ///
 /// ```
 /// use rust_j2k::{Error, decode};
@@ -95,7 +102,7 @@ pub enum Error {
     Codestream(ErrorDetail),
     /// The input ends before the codestream's main header is whole, that is,
     /// before its first `SOT` marker (the start of the first
-    /// [tile-part](https://github.com/D0ubleD0uble/rust-j2k/blob/v0.5.0/README.md#what-a-jpeg-2000-file-holds)) is complete. No top-level box or segment
+    /// [tile-part](https://github.com/D0ubleD0uble/rust-j2k/blob/main/README.md#what-a-jpeg-2000-file-holds)) is complete. No top-level box or segment
     /// the input holds in full was found damaged, so more bytes may still give
     /// a valid header. The boxes inside a superbox (such as `ihdr` in `jp2h`)
     /// are judged only once the superbox is whole, so a cut `jp2h` is this

@@ -208,7 +208,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   which walks fit, could differ from a fresh decoder's (#519).
 - A JP2 file's header is checked closer to OpenJPEG's order (see
   `docs/openjpeg-departures.md`), and a codestream and its JP2 wrapper give
-  the same error for the same options, except under sRGB output (#419):
+  the same error for the same options, except under sRGB output and where
+  the sample limit and the tile caps, which count a JP2 file's own bytes,
+  differ past 64 MiB (#419):
   - The layout of the `pclr`, `cmap` and `cdef` boxes (a second box, a
     `cmap` without a `pclr` or before it, a malformed payload) is checked
     before the codestream, as OpenJPEG checks it while it reads `jp2h`. A
