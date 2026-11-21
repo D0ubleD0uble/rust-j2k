@@ -34,9 +34,13 @@
 //! `scripts/gen-header-split-seeds.py` (see `fuzz/README.md`).
 
 use libfuzzer_sys::fuzz_target;
+
+#[path = "../../tests/support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
 use rust_j2k::{
-    ColorOutput, DecodeOptions, Error, IncrementalDecoder, Region, Window, WorkLimit,
-    read_header_with,
+    read_header_with, ColorOutput, DecodeOptions, Error, IncrementalDecoder, Region, Window,
+    WorkLimit,
 };
 
 /// splitmix64: the same stream on every platform, from a seed in the input.
@@ -78,7 +82,10 @@ fn region(code: u8, arg: u8, salt: usize) -> Region {
 fn oracle(prefix: &[u8], options: &DecodeOptions) -> String {
     format!(
         "{:?}",
-        match read_header_with(prefix, &options.clone().with_strict(false)) {
+        match checked(read_header_with(
+            prefix,
+            &options.clone().with_strict(false)
+        )) {
             Ok(header) => Ok(Some(header)),
             Err(Error::Incomplete(_)) => Ok(None),
             Err(error) => Err(error),
@@ -114,7 +121,7 @@ fuzz_target!(|input: &[u8]| {
         options = options.with_max_quality_layers(Some(1));
     }
     // Options the decoder refuses at the start leave nothing to check.
-    let Ok(mut decoder) = IncrementalDecoder::new(options) else {
+    let Ok(mut decoder) = checked(IncrementalDecoder::new(options)) else {
         return;
     };
     let mut rng = Rng(u64::from_le_bytes([
@@ -135,16 +142,20 @@ fuzz_target!(|input: &[u8]| {
             // A change that is refused leaves the options as they were, and
             // the oracle reads them back from the decoder.
             let _ = match (r >> 16) % 3 {
-                0 => decoder.set_region(region((r >> 24) as u8, arg, fed)),
-                1 => decoder.set_resolution_reduction(arg % 3),
-                _ => decoder.set_max_quality_layers(Some(1 + u16::from(arg % 3))),
+                0 => checked(decoder.set_region(region((r >> 24) as u8, arg, fed))),
+                1 => checked(decoder.set_resolution_reduction(arg % 3)),
+                _ => checked(decoder.set_max_quality_layers(Some(1 + u16::from(arg % 3)))),
             };
         }
         let want = oracle(&data[..fed], decoder.options());
-        let got = format!("{:?}", decoder.header());
+        let got = format!("{:?}", checked(decoder.header()));
         assert_eq!(got, want, "at {fed} of {}", data.len());
         if r % 5 == 0 {
-            assert_eq!(format!("{:?}", decoder.header()), want, "again at {fed}");
+            assert_eq!(
+                format!("{:?}", checked(decoder.header())),
+                want,
+                "again at {fed}"
+            );
         }
     }
 });

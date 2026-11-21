@@ -9,6 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
 #[path = "support/synth.rs"]
 mod synth;
 
@@ -87,7 +90,7 @@ fn is_sample_limit(error: &Error) -> bool {
 /// so its refusal is the error.
 fn refine_oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>, Error> {
     let ceiling = matches!(options.sample_limit, WorkLimit::AtMost(_));
-    match decode_with(prefix, &options.clone().with_strict(false)) {
+    match checked(decode_with(prefix, &options.clone().with_strict(false))) {
         Ok(image) => Ok(Some(image)),
         Err(Error::Incomplete(_)) => Ok(None),
         Err(error) if is_work_limit(&error) || (is_sample_limit(&error) && !ceiling) => Ok(None),
@@ -103,7 +106,7 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 
 /// A refine, with the reason it waited dropped.
 fn refine_image(decoder: &mut IncrementalDecoder) -> Result<Option<Image>, Error> {
-    decoder.refine().map(Refined::image)
+    checked(decoder.refine()).map(Refined::image)
 }
 
 /// Check `why`, the reason a refine that tried on `prefix` waited, against
@@ -120,7 +123,7 @@ fn refine_image(decoder: &mut IncrementalDecoder) -> Result<Option<Image>, Error
 /// same tile and for the same work, and the wait names them. The bound on
 /// the walks done again can refuse whatever that decode gives.
 fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptions) {
-    let one_shot = decode_with(prefix, &options.clone().with_strict(false));
+    let one_shot = checked(decode_with(prefix, &options.clone().with_strict(false)));
     let at = prefix.len();
     match (why, &one_shot) {
         (Waiting::HeaderIncomplete { .. }, Err(Error::Incomplete(_))) => {}
@@ -194,8 +197,8 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
 /// Whether `finish` on `bytes` gives what `decode_with` gives under
 /// `options`, with `Incomplete` turned into a truncation error.
 fn check_finish(name: &str, bytes: &[u8], decoder: IncrementalDecoder, options: &DecodeOptions) {
-    let finished = decoder.finish();
-    match decode_with(bytes, options) {
+    let finished = checked(decoder.finish());
+    match checked(decode_with(bytes, options)) {
         Err(Error::Incomplete(why)) => match finished {
             Err(Error::Codestream(m) | Error::FileFormat(m)) => {
                 assert!(
@@ -226,7 +229,7 @@ fn check_finish(name: &str, bytes: &[u8], decoder: IncrementalDecoder, options: 
 /// no image, for a main header cut short or a work bound, still counts: the
 /// next one waits for twice its bytes.
 fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> usize {
-    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    let mut decoder = checked(IncrementalDecoder::new(options.clone())).unwrap();
     let mut fed = 0;
     let mut images = 0;
     // The bytes fed at the last refine that decoded or tried to.
@@ -243,12 +246,15 @@ fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> u
         if due {
             tried = fed;
         }
-        match decoder.refine() {
+        match checked(decoder.refine()) {
             Ok(Refined::Image(image)) => {
                 images += 1;
                 tried = fed;
                 assert_eq!(decoder.bytes_decoded(), fed, "{name}");
-                let expected = decode_with(&bytes[..fed], &options.clone().with_strict(false));
+                let expected = checked(decode_with(
+                    &bytes[..fed],
+                    &options.clone().with_strict(false),
+                ));
                 assert_eq!(Ok(image), keyed(expected), "{name}, {fed} bytes");
             }
             Ok(Refined::Waiting(why)) => {
@@ -276,7 +282,7 @@ fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> u
                 // a decoder that gave up for good on a prefix of a file
                 // that decodes would pass the check above.
                 assert!(
-                    decode_with(bytes, &options.clone().with_strict(false)).is_err(),
+                    checked(decode_with(bytes, &options.clone().with_strict(false))).is_err(),
                     "{name}: refine failed for good at {fed} bytes, but the whole input decodes"
                 );
                 return images;
@@ -291,7 +297,7 @@ fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> u
 /// each to the strict-off decode of the bytes fed, and `finish` is the
 /// decode of the whole.
 fn halves(name: &str, bytes: &[u8], options: &DecodeOptions) -> usize {
-    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    let mut decoder = checked(IncrementalDecoder::new(options.clone())).unwrap();
     let mut images = 0;
     for fed in [bytes.len() / 2, bytes.len()] {
         decoder.feed(&bytes[decoder.bytes_fed()..fed]);
@@ -337,11 +343,11 @@ fn cuts(len: usize, rng: &mut Rng) -> Vec<usize> {
 fn cut(name: &str, bytes: &[u8], cuts: &[usize], rng: &mut Rng, options: &DecodeOptions) {
     for &at in cuts {
         let prefix = &bytes[..at];
-        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        let mut decoder = checked(IncrementalDecoder::new(options.clone())).unwrap();
         let split = rng.below(at + 1);
         decoder.feed(&prefix[..split]);
         decoder.feed(&prefix[split..]);
-        let refined = decoder.refine();
+        let refined = checked(decoder.refine());
         match &refined {
             Ok(Refined::Waiting(Waiting::MoreBytes { until: 1, .. })) if at == 0 => {}
             Ok(Refined::Waiting(why)) => check_waiting(name, why, prefix, options),
@@ -406,6 +412,12 @@ fn share(share: usize) -> Vec<PathBuf> {
     let (header, rest): (Vec<_>, Vec<_>) = files(&fixtures())
         .into_iter()
         .partition(|path| path.strip_prefix(fixtures()).unwrap().starts_with("header"));
+    assert!(
+        header.len() <= SHARES,
+        "{} header/ fixtures but only {SHARES} shares, so two would share a test; \
+         raise SHARES and add a line to share_tests! for each new share",
+        header.len()
+    );
     let deal = |files: Vec<PathBuf>| {
         files
             .into_iter()
@@ -470,6 +482,17 @@ fn check_share(index: usize) {
 /// One test per share of the fixtures.
 macro_rules! share_tests {
     ($($name:ident => $index:literal,)*) => {
+        // The listed indices must be exactly 0..SHARES in order, so a share
+        // cannot be dropped, repeated, or left out of a raised SHARES.
+        const _: () = {
+            let indices = [$($index),*];
+            assert!(indices.len() == SHARES, "share_tests! lists a different number of shares than SHARES");
+            let mut i = 0;
+            while i < indices.len() {
+                assert!(indices[i] == i, "share_tests! indices must run 0, 1, 2, ... in order");
+                i += 1;
+            }
+        };
         $(
             #[test]
             fn $name() {

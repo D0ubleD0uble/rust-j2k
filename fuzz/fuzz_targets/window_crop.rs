@@ -27,6 +27,10 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../../tests/support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
+
 #[path = "../common/budget.rs"]
 mod budget;
 
@@ -117,7 +121,7 @@ fuzz_target!(|input: &[u8]| {
     } else {
         base.clone()
     };
-    let Ok(whole) = decode_with(data, &whole_options) else {
+    let Ok(whole) = checked(decode_with(data, &whole_options)) else {
         return;
     };
     let fits = whole.width == at(xs, 1, r) - at(xo, 1, r)
@@ -162,7 +166,7 @@ fuzz_target!(|input: &[u8]| {
         }
         _ => (0, 0, u32::MAX, u32::MAX),
     };
-    let part = match decode_with(data, &options) {
+    let part = match checked(decode_with(data, &options)) {
         Ok(part) => part,
         Err(Error::InvalidOptions(_)) => return,
         Err(e) => panic!("the whole image decodes, but {options:?} gives {e:?}"),

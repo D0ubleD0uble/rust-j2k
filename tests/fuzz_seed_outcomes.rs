@@ -20,6 +20,8 @@
 //! `J2K_BLESS_SEED_OUTCOMES=1 cargo test --test fuzz_seed_outcomes`.
 //! The script needs `python3` (standard library only), run with `-I`.
 
+#[path = "support/inconsistent.rs"]
+mod inconsistent;
 #[path = "support/synth.rs"]
 mod synth;
 use rust_j2k::{ColorOutput, ColorSpace, DecodeOptions, Error, Image, decode_with};
@@ -109,6 +111,7 @@ fn describe(result: Result<Image, Error>) -> (bool, String) {
             (true, format!("ok {color} {}", image.components.len()))
         }
         Err(e) => {
+            inconsistent::assert_not_inconsistent(&e);
             let debug = format!("{e:?}");
             let variant = debug.split('(').next().unwrap();
             let text = e.to_string();
@@ -131,7 +134,7 @@ fn fnv(text: &str) -> u64 {
 /// Hash of `fuzz/fuzz_targets/jp2_boxes.rs` from its `synth` include to
 /// the end of the file, which this file copies. If it changed, update the
 /// copy here, then both hashes.
-const TARGET_HASH: u64 = 8717021346891458917;
+const TARGET_HASH: u64 = 12327856190372563704;
 /// Hash of this file's copy and its use (from the `synth` include up to the test),
 /// without the two hash lines. An edit to either copy fails until both
 /// are reviewed.
@@ -139,7 +142,7 @@ const TARGET_HASH: u64 = 8717021346891458917;
 /// file (`ihdr_for` and `wrap_jp2_boxes`), which the target and this test
 /// share. If it changed, check both callers, then update this hash.
 const SYNTH_HASH: u64 = 13200082622892353052;
-const TEST_HASH: u64 = 902390728654288137;
+const TEST_HASH: u64 = 768500039184533603;
 
 fn target_hash() -> u64 {
     let target = include_str!("../fuzz/fuzz_targets/jp2_boxes.rs");
@@ -852,7 +855,7 @@ fn the_inputs_at_each_work_cap_fit_it_and_one_more_row_does_not() {
 /// checked tries and the draws of the changes and the probe, which
 /// `incremental_checked_tries_stay_within_the_work_weight` relies on. If it
 /// changed, check that test's count of bounds, then update this hash.
-const INCREMENTAL_HASH: u64 = 2603768640683838324;
+const INCREMENTAL_HASH: u64 = 9127388444275648024;
 
 #[test]
 fn incremental_checked_tries_stay_within_the_work_weight() {

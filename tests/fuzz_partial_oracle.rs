@@ -6,6 +6,8 @@
 
 #[path = "../fuzz/common/budget.rs"]
 mod budget;
+#[path = "support/inconsistent.rs"]
+mod inconsistent;
 #[path = "../fuzz/common/partial.rs"]
 mod partial;
 
@@ -31,7 +33,11 @@ fn window() -> Region {
 fn the_seed_passes_the_oracle_through_its_window() {
     let bytes = seed();
     let options = budget::options(4).with_region(window());
-    partial::check(&bytes, &options, &rust_j2k::decode_with(&bytes, &options));
+    partial::check(
+        &bytes,
+        &options,
+        &inconsistent::checked(rust_j2k::decode_with(&bytes, &options)),
+    );
 }
 
 /// The report holds one run per window row: more than five entries per
@@ -101,5 +107,9 @@ fn the_oracle_bounds_a_report_whose_strict_header_is_refused() {
     let options = budget::options(4)
         .with_resolution_reduction(1)
         .with_region(Region::Window(Window::new(22, 9, 39, 34)));
-    partial::check(&bytes, &options, &rust_j2k::decode_with(&bytes, &options));
+    partial::check(
+        &bytes,
+        &options,
+        &inconsistent::checked(rust_j2k::decode_with(&bytes, &options)),
+    );
 }

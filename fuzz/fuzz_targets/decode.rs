@@ -18,6 +18,10 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../../tests/support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
+
 #[path = "../common/budget.rs"]
 mod budget;
 #[path = "../common/partial.rs"]
@@ -36,19 +40,19 @@ fuzz_target!(|data: &[u8]| {
     let plain = base
         .clone()
         .with_code_block_work_limit(rust_j2k::WorkLimit::Raised(2));
-    let _ = rust_j2k::decode_with(data, &plain);
+    let _ = checked(rust_j2k::decode_with(data, &plain));
     let hash = fnv1a(data);
     if hash & 1 == 1 {
         let layers = 1 + ((hash >> 1) % 3) as u16;
         let options = base.clone().with_max_quality_layers(Some(layers));
-        let strict = rust_j2k::decode_with(data, &options);
+        let strict = checked(rust_j2k::decode_with(data, &options));
         // The same cap with `strict` off, where a block's last kept pass may
         // be cut short by the cap (#358). That bug gave a wrong image, not a
         // panic, so the decode is checked against the strict one.
         partial::check(data, &options, &strict);
     }
     if hash & 2 == 2 {
-        let _ = rust_j2k::decode_with(data, &part(base, hash >> 8));
+        let _ = checked(rust_j2k::decode_with(data, &part(base, hash >> 8)));
     }
 });
 
