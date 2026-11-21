@@ -80,13 +80,14 @@ use crate::{
 /// for the 65535 tiles a file can have (up to twice that in capacity as
 /// the table grows). What [`header`](Self::header) keeps between its calls
 /// comes to about 140 bytes for each tile counted under its own header and
-/// a byte for each other tile, plus a copy of the main header, `PPM` data
-/// included. Each refine also holds what [`decode_with`] holds for the same
+/// a byte for each other tile, plus a key of the main header, its length and
+/// a hash. Each refine also holds what [`decode_with`] holds for the same
 /// bytes, so the decoder holds at most about three times one
 /// decode's peak memory, plus the bytes fed. After the options change,
 /// these bounds hold from the first refine that decodes under the new
-/// options; until then the walks kept may stay within the room of the old
-/// options.
+/// options. A refine refused before that, partway through the tiles, can
+/// leave the walks of later tiles above the new room, but not above the
+/// larger of 1 MiB and 32 bytes per byte fed.
 ///
 /// The reduction, the layer cap and the region can change between refines,
 /// with [`set_resolution_reduction`](Self::set_resolution_reduction),
@@ -287,7 +288,11 @@ impl IncrementalDecoder {
     /// error.
     ///
     /// With `strict` left on, it refuses a stream that is cut short, as
-    /// [`finish`](Self::finish) does.
+    /// [`finish`](Self::finish) does. The kind differs where the bytes end
+    /// before the main header is whole: `decode_with` gives
+    /// [`Error::Incomplete`], which `finish` reports as [`Error::FileFormat`]
+    /// inside a JP2 file's boxes and as [`Error::Codestream`] inside the main
+    /// header.
     pub fn options(&self) -> &DecodeOptions {
         &self.options
     }
@@ -298,9 +303,12 @@ impl IncrementalDecoder {
     /// [`refine`](Self::refine) returns. `Ok(None)` means the bytes fed end
     /// before the first `SOT` marker, or, in a JP2 file, inside the boxes
     /// before it, so the main header is not complete yet. An error is the
-    /// one `read_header_with` gives on those bytes, so it refuses a region or
-    /// reduction the file cannot take ([`Error::InvalidOptions`]), such as
-    /// [`Region::Tile`]`(500)` on a one-tile file.
+    /// one `read_header_with` gives on those bytes with `strict` off, so it
+    /// refuses a region or reduction the file cannot take
+    /// ([`Error::InvalidOptions`]), such as [`Region::Tile`]`(500)` on a
+    /// one-tile file. A decoder with `strict` on can get a header here for a
+    /// file that `read_header_with` under the same options refuses for what
+    /// `strict` checks, such as a tile with no tile-part.
     /// [`read_header`](crate::read_header)`(decoder.bytes())` reads the
     /// header without the decoder's options. The default sample limit grows
     /// with the bytes fed, so a sample-limit [`Error::Limit`] here, of kind
@@ -310,8 +318,11 @@ impl IncrementalDecoder {
     /// once more bytes come in; [`refine`](Self::refine) waits
     /// on it instead ([`Waiting::SampleLimit`]). Under a ceiling of
     /// [`WorkLimit::AtMost`] it does not grow, so the refusal here is final,
-    /// and `refine` returns it as an error too: a server that streams files
-    /// in can refuse one as soon as its main header has come in.
+    /// and `refine` returns it as an error too, except that a later tile's
+    /// cap refusal met while a refine counts the code-block work ends the
+    /// count as [`Waiting::BoundSpent`] (see [`Waiting`]). A server that
+    /// streams files in can refuse a sample count as soon as its main header
+    /// has come in.
     ///
     /// Each call parses the main header again (its `PPM` data included), so
     /// a call costs the main header plus the tile-parts fed since. For the
@@ -772,7 +783,9 @@ pub enum Waiting {
     /// what the target can address ([`LimitKind::AddressSpace`]) is lifted
     /// by no limit, so neither is a wait: `refine` returns it as an error,
     /// and every later `refine` returns it again, whatever is fed, until a
-    /// change of options.
+    /// change of options. The exception is a later tile's cap refusal met
+    /// while a refine counts the code-block work: that ends the count as
+    /// [`BoundSpent`](Self::BoundSpent).
     #[non_exhaustive]
     SampleLimit {
         /// The refusal, as an error would carry it.

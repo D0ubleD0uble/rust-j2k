@@ -33,6 +33,12 @@ pub struct Header {
     pub height: u32,
     /// One entry per [`Image::components`](crate::Image::components) entry,
     /// in the same order: for a palettized JP2 file, the palette's channels.
+    /// That is not the number of components the decode holds: it decodes
+    /// every component the codestream codes, mapped or not. To bound a
+    /// decode's samples, set
+    /// [`sample_limit`](crate::DecodeOptions::sample_limit) to
+    /// [`WorkLimit::AtMost`](crate::WorkLimit::AtMost) rather than summing
+    /// these.
     pub components: Vec<ComponentInfo>,
     /// The largest
     /// [`resolution_reduction`](crate::DecodeOptions::resolution_reduction)

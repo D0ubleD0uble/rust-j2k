@@ -32,9 +32,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that. The input and the tile-part parse (under 1 KiB for each tile the
   input carries, at most about 52 times the input plus 128 KiB) are on top.
   It holds every count the default limit holds (the tiles a region reads, in
-  every component, a palette's expanded channels and sRGB output), so
-  `read_header_with` refuses what the decode would. A refusal under it gives
-  no retry, and in an `IncrementalDecoder` it is an error, not a wait.
+  every component the codestream codes, a palette's expanded channels and
+  sRGB output). `read_header_with` refuses the sample count as the decode
+  would, and the tile caps where the main header shows them. A refusal under
+  it gives no retry, and in an `IncrementalDecoder` it is an error, not a
+  wait, except a later tile's cap refusal met while a refine counts the
+  code-block work, which ends the count as `BoundSpent`.
   `AtMost(0)`, and `AtMost` on either work bound, is `InvalidOptions`. It
   replaces counting the samples by hand from the header (#475).
 - For a refusal by the code-block work bound or by a tile's cap on
@@ -45,8 +48,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `TilePrecincts`. The refusal `decode_with` and `read_header_with` give
   carries it, and so do `Waiting::WorkLimit` and a `Waiting::BoundSpent`
   where the whole bound refuses a tile. For other kinds it is `None` today
-  and a later release may set it; so is it for a `BoundSpent` that the
-  earlier refines alone refused (#493, #513).
+  and a later release may set it. It is also `None` for a `BoundSpent` whose
+  count found no tile the whole bound refuses, where only the work the
+  earlier refines spent refused it (#493, #513).
 
 ### Changed
 
@@ -65,8 +69,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from `WorkLimit`. An error it meets there ends that count, and the
   refine waits on `BoundSpent`: the code-blocks it skipped can hold the
   error `decode_with` gives first (#485). Where the count passes the whole
-  bound, the refine also waits on `BoundSpent`, whose message names the
-  tile the whole bound refuses: `decode_with` decodes the tiles counted
+  bound, the refine also waits on `BoundSpent`, whose `refused_at` gives
+  the tile the whole bound refuses: `decode_with` decodes the tiles counted
   first and can fail in one of them (#487). A `WorkLimit` of the
   code-block bound comes only where the refine decoded every tile before
   the one refused, and carries the refusal a decode of the bytes fed
@@ -104,7 +108,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the tiles it would read under the main header and refuses a tile past a
   cap that the decode refuses too, at any input size, where it used to
   return the header; it reads a tile's tile-part header only for a tile
-  over a cap there. A 40000 x 40000 one-tile file in 32x32 code-blocks padded to 210 MB, refused before
+  over a cap there. A 40000 x 40000 one-tile file in 32x32 code-blocks
+  padded to 210 MB, refused before
   at every option, now decodes at the defaults, bit-exact against
   `opj_decompress` (17.5 s and 7.65 GiB at full resolution, 0.43 s at
   reduction 3). The bookkeeping of a tile at the caps is at most about a

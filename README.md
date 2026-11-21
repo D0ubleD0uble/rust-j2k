@@ -320,25 +320,65 @@ needs (`LimitDetail::refused_at`). `DecodeOptions::with_retry` sets that limit
 for you:
 
 ```rust
-use rust_j2k::{DecodeOptions, Error, Image, decode_with};
+use rust_j2k::{DecodeOptions, Error, Image, LimitKind, WorkLimit, decode_with};
 
+/// For files you trust. Each retry decodes again and can ask for more, and a
+/// 100-byte file can name a factor of 8 or more. This loop raises a limit to
+/// at most `MAX_FACTOR` times the default. For a small file, 4 x 2^29 samples
+/// is 8 GiB of output and up to about 26 GiB of sample buffers, and each of
+/// the three bounds can reach 4 times its default, and the decode time grows
+/// with them. Pick the factor you can afford.
 fn decode_raising_limits(bytes: &[u8]) -> Result<Image, Error> {
+    const MAX_FACTOR: u32 = 4;
     let mut options = DecodeOptions::default();
     // A few retries; each one can ask for more.
     for _ in 0..4 {
-        match decode_with(bytes, &options) {
-            Err(Error::Limit(limit)) => match options.with_retry(&limit) {
-                Some(raised) => options = raised,
-                // No option raises this limit, or it gave no factor.
-                None => return Err(Error::Limit(limit)),
-            },
+        let limit = match decode_with(bytes, &options) {
+            Err(Error::Limit(limit)) => limit,
             result => return result,
+        };
+        let Some(WorkLimit::Raised(factor)) = limit.retry_with() else {
+            // No option raises this limit, or it gave no factor.
+            return Err(Error::Limit(limit));
+        };
+        if factor <= MAX_FACTOR {
+            options = options.with_retry(&limit).expect("it gave a factor");
+        } else {
+            // Past the maximum: one last try at the maximum, for the limit
+            // that refused.
+            let most = WorkLimit::Raised(MAX_FACTOR);
+            let (at_most, raised) = match limit.kind() {
+                LimitKind::PacketWork => (
+                    options.packet_work_limit == most,
+                    options.clone().with_packet_work_limit(most.clone()),
+                ),
+                LimitKind::CodeBlockWork => (
+                    options.code_block_work_limit == most,
+                    options.clone().with_code_block_work_limit(most.clone()),
+                ),
+                // The samples, and the caps on a tile's code-blocks and
+                // precincts, which the sample limit sets.
+                LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => (
+                    options.sample_limit == most,
+                    options.clone().with_sample_limit(most.clone()),
+                ),
+                _ => return Err(Error::Limit(limit)),
+            };
+            // Already at the maximum: the same options would refuse again.
+            if at_most {
+                return Err(Error::Limit(limit));
+            }
+            options = raised;
+            return decode_with(bytes, &options);
         }
     }
     decode_with(bytes, &options)
 }
 ```
 
+For files from outside, don't retry: set `sample_limit` to `WorkLimit::AtMost(n)`
+and run each decode under a timeout (see [Running a decode
+service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service)).
 A retry can be refused again, by the same limit or another, so the loop stops
 after a few. The [`WorkLimit`
 docs](https://docs.rs/rust-j2k/latest/rust_j2k/enum.WorkLimit.html) say how
