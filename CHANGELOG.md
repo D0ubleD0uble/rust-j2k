@@ -211,8 +211,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ReportEntry::TruncatedTilePart` (its `present` at least its `declared`).
   It was refused as "truncated marker segment", and a longer prefix then
   gave the whole file's error, such as `Psot` shorter than the header or a
-  bad `QCD` field: one error turned into another as the input grew. Which
-  whole files are refused does not change (#597).
+  bad `QCD` field: one error turned into another as the input grew. The
+  tile-parts the `Psot` chain reaches past such a cut are left out, by
+  `read_header_with` as by the decode. A file whose tile-part headers all
+  end within the input is refused as before (#597).
 - A `PPT` or `PPM` marker that holds only its `Zppt` or `Zppm` (`Lppt` or
   `Lppm` 3) is refused as `Error::Marker`, since the segment is too short
   for its fields, as OpenJPEG 2.5.0 refuses it. Such a `PPT` decoded before
