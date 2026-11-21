@@ -1450,14 +1450,18 @@ fn the_bound_spent_seed_waits_on_bound_spent_where_decode_with_is_refused_by_a_t
         panic!("not refused");
     };
     assert_eq!(expected.kind(), LimitKind::TilePrecincts, "{expected}");
-    let mut decoder = incremental_with_code_block_work_spent(options, u64::MAX).unwrap();
+    let mut decoder = incremental_with_code_block_work_spent(options.clone(), u64::MAX).unwrap();
     decoder.feed(&bytes);
-    let Ok(Refined::Waiting(Waiting::BoundSpent { limit, .. })) = decoder.refine() else {
-        panic!("not BoundSpent");
+    let Ok(Refined::Waiting(why)) = decoder.refine() else {
+        panic!("no wait");
+    };
+    let Waiting::BoundSpent { limit, .. } = &why else {
+        panic!("{why:?}");
     };
     // The wait names the code-block bound the spent work passes, not the
     // tile cap the one-shot decode gives.
     assert_eq!(limit.kind(), LimitKind::CodeBlockWork, "{limit}");
+    check_waiting("bound_spent", &why, &bytes, &options);
 }
 
 /// Where no amount spent cuts a refine before the tile the whole bound

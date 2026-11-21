@@ -555,22 +555,22 @@ is a seed of the `incremental_decode` fuzz target for a refine that waits on
 It is a 1036 x 1024 gray codestream, flat at 100, from
 `opj_compress -i flat.pgm -o base.j2k -d 4,0 -t 520,1024 -n 4 -r 1`
 (OpenJPEG 2.5.0; the PGM is `P5 1036 1024 255` with every sample 100). Tile 0
-is 516 samples wide, and under the target's cap its samples cost 4 sample-passes
-each, over half the bound of 2^22. Tile 1's tile-part gets a
+is 516 samples wide, and under the target's cap its samples cost 4
+sample-passes each, over half the bound of 2^22. Tile 1's tile-part gets a
 `COD` of its own (no wavelet levels, 1 x 1 precincts) in front of `SOD`, with
-`Psot` raised to match, so it holds 532480 precincts (520 x 1024), over the 2^18 a tile
-may. The main header's checks pass it, so `decode_with` decodes tile 0 and is
-refused at tile 1 as `LimitKind::TilePrecincts`. The `BoundSpent` arm is not
-reached by the decoder's own next refine, which waits on the sample limit for
-those precincts, but through the probe decoder
+`Psot` raised to match, so it holds 532480 precincts (520 x 1024), over the
+2^18 a tile may. The main header's checks pass it, so `decode_with` decodes
+tile 0 and is refused at tile 1 as `LimitKind::TilePrecincts`. The
+`BoundSpent` arm is not reached by the decoder's own next refine, which waits
+on the sample limit for those precincts, but through the probe decoder
 (`incremental_with_code_block_work_spent`, by the target's `hash % 8` draw of
-the work spent): with the bound spent, its refine is cut at tile 0 and counts on
-to tile 1. A `COM` of 47 bytes (`(7 * i + 47) & 0x7F | 0x20` for
-byte `i`) in front of the first `SOT` picks the pieces. It pins that
-`BoundSpent` may stand in for the cap kinds of a tile, as for any error of a
-later tile: an arm that excluded them would panic on it. `tests/incremental.rs` replays it with
-the bound spent. It starts with
-`SOC`, so the target reads it with all-zero control bytes. Replay it with the
+the work spent): with the bound spent, its refine is cut at tile 0 and counts
+on to tile 1. A `COM` of 47 bytes (`(7 * i + 47) & 0x7F | 0x20` for byte `i`)
+in front of the first `SOT` picks the pieces. It pins that `BoundSpent` may
+stand in for the cap kinds of a tile, as for any error of a later tile: an arm
+that excluded them would panic on it. `tests/incremental.rs` replays it with
+the bound spent. It starts with `SOC`, so the target reads it with all-zero
+control bytes. Replay it with the
 command above. It has no license restriction.
 
 `incremental/at_most_samples_sticky.seed` (94 bytes, SHA-256

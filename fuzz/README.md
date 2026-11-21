@@ -431,7 +431,7 @@ cargo +nightly fuzz run ht_block -- -max_total_time=60 -max_len=8192 -rss_limit_
 for t in decode decode_partial; do
   mkdir -p fuzz/corpus/$t
   cp tests/fixtures/*.j2k tests/fixtures/openjph/files/*.j2c fuzz/corpus/$t/
-  find tests/fixtures/conformance/ht/codestreams -size -6k -name '*.j2k' -exec cp {} fuzz/corpus/$t/ \;
+  find tests/fixtures/conformance/ht/codestreams -size -6145c -name '*.j2k' -exec cp {} fuzz/corpus/$t/ \;
   cp tests/fixtures/conformance/ht/codestreams/ds0_hm_15_b8.j2k fuzz/corpus/$t/
 done
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096
@@ -439,9 +439,9 @@ cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_li
 # The incremental target, seeded with the fixtures under 3 KB, and the same
 # behind control bytes that change the options between refines.
 mkdir -p fuzz/corpus/incremental_decode
-find tests/fixtures -maxdepth 1 -size -3k \( -name '*.j2k' -o -name '*.jp2' \) \
+find tests/fixtures -maxdepth 1 -size -3073c \( -name '*.j2k' -o -name '*.jp2' \) \
   -exec cp {} fuzz/corpus/incremental_decode/ \;
-for f in $(find tests/fixtures -maxdepth 1 -size -3k \( -name '*.j2k' -o -name '*.jp2' \)); do
+for f in $(find tests/fixtures -maxdepth 1 -size -3073c \( -name '*.j2k' -o -name '*.jp2' \)); do
   { printf '\100\0\0\0\0\0'; cat "$f"; } > "fuzz/corpus/incremental_decode/set_$(basename "$f")"
 done
 cargo +nightly fuzz run incremental_decode -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=300 -rss_limit_mb=4096
