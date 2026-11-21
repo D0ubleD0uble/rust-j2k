@@ -385,14 +385,36 @@ costs one session, so it stays.
 **Catches:** code that works only where `usize` is 64 bits: a size computed in
 `usize`, an index cast, or a limit that differs by word size.
 
-**Run:** the whole test suite under `wasm32-wasip1`, not only the two test
+**Run:** the whole test suite under `wasm32-wasip1`, not only the test
 binaries CI runs there, then the corpus hash from [Against the last
 release](#against-the-last-release) on both targets:
 
 ```sh
 CARGO_TARGET_WASM32_WASIP1_RUNNER="wasmtime run --dir=$PWD::$PWD" \
-  cargo test --target wasm32-wasip1
+  cargo test --target wasm32-wasip1 --tests
 ```
+
+Every test binary passes, with none skipped as slow: the whole run takes
+about six minutes, and the longest binary, `incremental`, about 90 s. A wasm
+test binary stops at its first failure, because a panic aborts there, so a
+failing run names one test a binary. To list them all, run each test in its
+own process (`<binary>.wasm --list`, then `--exact <name>`).
+
+Some tests write under the target directory. If `CARGO_TARGET_DIR` (or a
+`build.build-dir`) is outside the repository, the runner must preopen it too,
+with `--dir=<target>::<target>`.
+
+Tests that differ on a 32-bit target say so where they are. Most of the
+differences are in the tile caps: the sample limit tops out at 2^29 - 1
+samples there, so a tile over a cap's floor is currently `AddressSpace` with
+nothing to retry with and no `refused_at`, where a 64-bit target gives
+`TileCodeBlocks` or `TilePrecincts` with a `Raised` retry. These tests keep an
+expectation for each target, in `tests/tile_geometry_cap.rs`,
+`tests/work_limit.rs`, `tests/incremental.rs` and
+`tests/fuzz_seed_outcomes.rs`. What is gated to 64-bit has no 32-bit meaning
+(a ceiling past 2^29 samples, a retry that scales the cap). What is ignored
+on WASI needs what it lacks: a process to run `python3` in, or an unwinding
+panic.
 
 Print a hash of each corpus input's output (or its error text) from a small
 program built for each target, and compare the two lists.
