@@ -27,10 +27,7 @@ fn keyed<T>(result: Result<T, Error>) -> Result<(), String> {
 /// entry of `parts` is a tile-part of the tile it names, with the header
 /// markers it gives and no data, and `end` closes the codestream.
 fn row(tiles: u32, tile_0: &[u8], parts: &[(u16, Vec<u8>)], end: &[u8]) -> Vec<u8> {
-    let siz = synth::siz_body(
-        [1000 * tiles, 1000, 992, 0, 1000, 1000, 0, 0],
-        &[[7, 1, 1]],
-    );
+    let siz = synth::siz_body([1000 * tiles, 1000, 992, 0, 1000, 1000, 0, 0], &[[7, 1, 1]]);
     let mut cod = synth::cod_body(1, 1, 0, 0);
     cod[0] = 1;
     cod.extend([0x00, 0x11]);
@@ -183,7 +180,10 @@ fn with_strict_off_a_tile_parts_fault_can_follow_a_tile_refused() {
         assert_eq!(keyed(decode_with(bytes, &alone)), Err(fault.to_string()));
 
         let strict = DecodeOptions::default();
-        assert_eq!(keyed(read_header_with(bytes, &strict)), Err(fault.to_string()));
+        assert_eq!(
+            keyed(read_header_with(bytes, &strict)),
+            Err(fault.to_string())
+        );
         assert_eq!(keyed(decode_with(bytes, &strict)), Err(fault.to_string()));
     }
 }

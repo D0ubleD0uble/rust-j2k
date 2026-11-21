@@ -263,14 +263,21 @@ fn decode_finds_a_tile_parts_fault_first(
     };
     let debug = |result: rust_j2k::Result<rust_j2k::Image>| result.err().map(|e| format!("{e:?}"));
     let expected = Some(format!("{decode:?}"));
-    if debug(rust_j2k::decode_with(data, &lifted.with_region(Region::Tile(tile)))) != expected {
+    if debug(rust_j2k::decode_with(
+        data,
+        &lifted.with_region(Region::Tile(tile)),
+    )) != expected
+    {
         return false;
     }
     let other = u32::from(tile == 0);
     let alone = options.clone().with_region(Region::Tile(other));
     match rust_j2k::decode_with(data, &alone) {
         Err(Error::InvalidOptions(detail))
-            if other == 1 && detail.message().starts_with("tile 1 is past the image's 1 tile") =>
+            if other == 1
+                && detail
+                    .message()
+                    .starts_with("tile 1 is past the image's 1 tile") =>
         {
             true
         }
