@@ -449,8 +449,9 @@ fn tile_parts(tiles: u32, main: &[u8], parts: &[(u16, u8, u8, Vec<u8>)]) -> Vec<
 /// last call kept. These files put in that walk's way what it keeps
 /// between calls, or what a longer input changes:
 /// - the `TPsot == TNsot` look-ahead, whose answer changes once tile 0's
-///   third tile-part comes in, and raises both counts in the error for tile
-///   5, which declares 2 tile-parts and then 1;
+///   third tile-part comes in; with `strict` off the error for tile 5,
+///   which declares 2 tile-parts and then 1, gives those stated counts on
+///   every call;
 /// - `PPM` chunks, which run out at the eleventh of 16 tile-parts, or not;
 /// - a first tile-part header over 1 KiB, whose coding is kept for the
 ///   later tile-parts that restate it, and a short one, read again for
@@ -502,7 +503,7 @@ fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
         );
         parts.push((0, 2, 2, Vec::new()));
         let want = if mismatch {
-            "Err(Codestream(\"tile 5 declares 2 tile-parts in one `SOT` and 3 in another"
+            "Err(Codestream(\"tile 5 declares 1 tile-parts in one `SOT` and 2 in another"
         } else {
             "Err(Limit("
         };
