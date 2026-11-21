@@ -5291,6 +5291,34 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
             "Unsupported(\"unrecognized marker 0xFF7F in a tile-part header",
         ),
         (
+            "a whole empty COD, then the input ends in a `Psot` 0 header",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), {
+                    let mut bytes = last(&[0xFF, 0x52, 0, 2, 0xFF, 0x64, 0, 16, 1], &[]);
+                    bytes.truncate(bytes.len() - 2);
+                    bytes
+                }],
+                &[],
+            ),
+            "Codestream(\"truncated marker segment\")",
+        ),
+        (
+            "a whole empty COD, then the input ends in a cut tile-part header",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), {
+                    let mut bytes = past(&[0xFF, 0x52, 0, 2, 0xFF, 0x64, 0, 16, 1], &[]);
+                    bytes.truncate(bytes.len() - 2);
+                    bytes
+                }],
+                &[],
+            ),
+            "Codestream(\"truncated marker segment\")",
+        ),
+        (
             "a cut tile-part header the input ends inside",
             false,
             grid_of_four(

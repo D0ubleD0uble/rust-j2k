@@ -2,10 +2,11 @@
 //! with `strict` off: a last tile-part whose `Psot` is 0, or one whose
 //! `Psot` runs past the end.
 //!
-//! A header the input holds in full is the same in any longer input, so a
-//! fault in it is refused as with `strict` on. Only a header whose marker
-//! segments run to the end of the input before they reach `SOD` can be the
-//! input cut short, and that still decodes, with the loss in the report.
+//! A fault whose marker segment the input holds in full is the same in any
+//! longer input, so it is refused as with `strict` on. An unrecognized, Part
+//! 2 or reserved marker is judged by the markers after it, so it is refused
+//! once those reach `SOD` (or break). Otherwise the fault may be the input
+//! cut short, and the file still decodes, with the loss in the report.
 //!
 //! Each input is `tiles_multipart_lossless.j2k` with bytes put in front of a
 //! tile-part's `SOD`: its last tile-part (tile 8, part 2 of 3, the 27th in
@@ -14,10 +15,12 @@
 //! (`opj_decompress -allow-partial`) refuses every one of them: "Not sure how
 //! that happened." for `FF7F`, "Marker size inconsistent with stream length"
 //! for `FF30` and the two over-long lengths, "Inconsistent marker size" for a
-//! length of 1, "Error reading COD marker" and "Error reading MCC marker",
-//! and "Stream too short" for the cut headers. Reading a cut header as the
-//! input cut short, with the loss reported, is how this decoder already
-//! treated a tile-part cut inside its header.
+//! length of 1, "Error reading COD marker", "Error reading PPT marker" and
+//! "Error reading MCC marker", "Marker is not compliant with its position"
+//! for `SOP` and `SIZ` (each also cut right after the marker), and "Stream
+//! too short" for the cut headers. Reading a cut header as the input cut
+//! short, with the loss reported, is how this decoder already treated a
+//! tile-part cut inside its header (see `docs/openjpeg-departures.md`).
 
 use rust_j2k::{DecodeOptions, IncrementalDecoder, Refined, ReportEntry, decode_with};
 
@@ -96,18 +99,37 @@ fn a_fault_in_a_whole_psot_zero_header_is_refused() {
     }
 }
 
-/// The decode with `strict` off is `Ok`, and its report says the codestream
-/// ended early and tile 8 has two of its three tile-parts: the one lost is
-/// part 2, the last.
+/// The decode with `strict` off is `Ok`, and its report names the lost
+/// tile-part, tile 8 part 2, as `TruncatedTilePart` with `declared` 0 (its
+/// `Psot`), says tile 8 has two of its three tile-parts, and gives
+/// `MissingEoc` only when the input does not end in `FF D9`.
 fn assert_read_as_cut(name: &str, bytes: &[u8]) {
     rust_j2k::fuzz::tile_parts_walks_agree(bytes);
     assert!(decode_with(bytes, &options(true)).is_err(), "{name}");
     let image = decode_with(bytes, &options(false)).unwrap_or_else(|e| panic!("{name}: {e}"));
     let entries = &image.report.entries;
+    let at = sots(bytes)[26];
     assert!(
+        entries.iter().any(|entry| matches!(
+            entry,
+            ReportEntry::TruncatedTilePart { tile: 8, tile_part: 2, declared: 0, present, .. }
+                if *present == (bytes.len() - at) as u64
+        )),
+        "{name}: {entries:?}"
+    );
+    let named = entries
+        .iter()
+        .find(|entry| matches!(entry, ReportEntry::TruncatedTilePart { .. }))
+        .unwrap();
+    assert!(
+        named.to_string().contains("is cut short in its header"),
+        "{name}: {named}"
+    );
+    assert_eq!(
         entries
             .iter()
             .any(|entry| matches!(entry, ReportEntry::MissingEoc { .. })),
+        !bytes.ends_with(&[0xFF, 0xD9]),
         "{name}: {entries:?}"
     );
     assert!(
@@ -127,10 +149,13 @@ fn assert_read_as_cut(name: &str, bytes: &[u8]) {
 /// A header whose markers run to the end of the input before `SOD` may be
 /// the input cut short, so it decodes as one: a length that runs past the
 /// end of the input (the issue's third repro, `FF7F 7FF0`) reads as the
-/// input cut inside that segment, as the real cuts here do.
+/// input cut inside that segment, as the real cuts here do. That file ends
+/// in its `EOC`, so the report has no `MissingEoc`.
 #[test]
 fn a_psot_zero_header_the_input_ends_inside_is_a_cut() {
-    assert_read_as_cut("FF7F 7FF0", &last_part_with(&[0xFF, 0x7F, 0x7F, 0xF0]).0);
+    let (long, _) = last_part_with(&[0xFF, 0x7F, 0x7F, 0xF0]);
+    assert!(long.ends_with(&[0xFF, 0xD9]));
+    assert_read_as_cut("FF7F 7FF0", &long);
     let com: Vec<u8> = [&[0xFF, 0x64, 0, 16][..], &[0; 14]].concat();
     let (bytes, at) = last_part_with(&com);
     for keep in [0, 1, 2, 3, 6, com.len(), com.len() + 1] {
@@ -245,6 +270,94 @@ fn a_cut_tile_part_header_fault_is_refused_only_once_its_header_is_in() {
             assert!(decoded.is_ok(), "{length}: {decoded:?}");
         } else {
             assert_eq!(format!("{:?}", decoded.unwrap_err()), strict, "{length}");
+        }
+    }
+}
+
+/// Faults whose marker segment is whole, each put in front of `SOD`: an
+/// empty `COD`, a `COD` of length 3 then a whole `COM`, an empty `PPT`, a
+/// `SOP`, a `SIZ`, and the `MCC` of the repro above. OpenJPEG 2.5.0
+/// (`-allow-partial`) refuses each with the input cut right after it.
+const WHOLE_SEGMENTS: [(&str, &[u8]); 6] = [
+    ("an empty COD", &[0xFF, 0x52, 0, 2]),
+    (
+        "a short COD, then a COM",
+        &[0xFF, 0x52, 0, 3, 0, 0xFF, 0x64, 0, 4, 0, 0],
+    ),
+    ("an empty PPT", &[0xFF, 0x61, 0, 2]),
+    ("SOP", &[0xFF, 0x91, 0, 4, 0, 0]),
+    ("SIZ", &[0xFF, 0x51, 0, 4, 0, 0]),
+    ("MCC", &[0xFF, 0x75, 0, 4, 0, 0]),
+];
+
+/// The two tile-parts the faults go in: the last, with `Psot` 0, and the
+/// sixth, with its `Psot` raised. Each is the file and its `SOT` offset.
+fn both_parts(header: &[u8]) -> [(Vec<u8>, usize); 2] {
+    let (sixth, at, _) = sixth_part_with(header);
+    [last_part_with(header), (sixth, at)]
+}
+
+/// Cut right after such a segment, the input holds all the fault depends
+/// on, so the decode with `strict` off gives the strict error of the whole
+/// file. `MCC` is the exception: whether it is refused as a Part 2 marker
+/// or as lost sync depends on the markers after it, so cut there it reads
+/// as a cut.
+#[test]
+fn a_whole_faulty_segment_before_the_cut_is_refused() {
+    for (name, header) in WHOLE_SEGMENTS {
+        for (bytes, at) in both_parts(header) {
+            let cut = &bytes[..at + 12 + header.len()];
+            rust_j2k::fuzz::tile_parts_walks_agree(cut);
+            let whole = decode_with(&bytes, &options(true)).expect_err(name);
+            let found = decode_with(cut, &options(false));
+            if name == "MCC" {
+                assert!(found.is_ok(), "{name} at {at}: {found:?}");
+            } else {
+                assert_eq!(
+                    format!("{:?}", found.expect_err(name)),
+                    format!("{whole:?}"),
+                    "{name} at {at}"
+                );
+            }
+        }
+    }
+}
+
+/// Every prefix from the tile-part's `SOT` on, with `strict` off, is `Ok`
+/// until the first one that fails, and every longer one fails with the
+/// same error, the whole file's. The walks agree on each. With `strict`
+/// off the whole file gives the strict error, or decodes for `FF7F 7FF0`.
+#[test]
+fn a_prefix_moves_from_ok_to_one_final_error() {
+    let mut cases: Vec<(&str, &[u8])> = WHOLE_SEGMENTS.to_vec();
+    cases.extend([
+        ("FF7F", &[0xFF, 0x7F, 0, 2][..]),
+        ("FF30", &[0xFF, 0x30]),
+        ("a COM over SOD", &[0xFF, 0x64, 0, 4]),
+        ("a length below 2", &[0xFF, 0x64, 0, 1]),
+        ("FF7F 7FF0", &[0xFF, 0x7F, 0x7F, 0xF0]),
+    ]);
+    for (name, header) in cases {
+        for (bytes, at) in both_parts(header) {
+            let last = decode_with(&bytes, &options(false))
+                .err()
+                .map(|e| format!("{e:?}"));
+            let mut failed: Option<String> = None;
+            for length in at..=bytes.len() {
+                let prefix = &bytes[..length];
+                if length < at + 40 {
+                    rust_j2k::fuzz::tile_parts_walks_agree(prefix);
+                }
+                match (decode_with(prefix, &options(false)), &failed) {
+                    (Ok(_), None) => {}
+                    (Ok(_), Some(error)) => panic!("{name} at {at}, {length}: Ok after {error}"),
+                    (Err(error), None) => failed = Some(format!("{error:?}")),
+                    (Err(error), Some(first)) => {
+                        assert_eq!(&format!("{error:?}"), first, "{name} at {at}, {length}")
+                    }
+                }
+            }
+            assert_eq!(failed, last, "{name} at {at}");
         }
     }
 }

@@ -24,10 +24,10 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use super::{
-    Cursor, Error, MAX_POC_VOLUMES, Overrides, ParsedHeader, Restated, Result, TileHeader,
-    both_packed_headers, check_poc_budget, check_restatement, check_tile_in_full,
-    count_is_one_short, decode_sot, header_may_be_cut, marker, part_end, read_tile_part_header,
-    read_u16, segment, sot_at, tile_overrides_are_valid,
+    Cursor, Error, FaultSite, MAX_POC_VOLUMES, Overrides, ParsedHeader, Restated, Result,
+    TileHeader, both_packed_headers, check_poc_budget, check_restatement, check_tile_in_full,
+    count_is_one_short, decode_sot, fault_may_be_cut, marker, part_end, read_tile_part_header,
+    read_tile_part_header_at, read_u16, segment, sot_at, tile_overrides_are_valid,
 };
 
 impl ParsedHeader {
@@ -225,6 +225,7 @@ fn walk(
 
         let first_part = sot.tile_part_index == 0;
         let header_at = cur.pos;
+        let mut site = FaultSite::default();
         // A header of `SOD` alone, as most later tile-parts have, reads as
         // nothing: no marker of its own, no `POC` volume and no packed
         // header. It is stepped over rather than read.
@@ -233,11 +234,11 @@ fn walk(
             Ok(None)
         } else {
             let end = part_end(bytes.len(), part_offset, sot.psot);
-            read_tile_part_header(&mut cur, end, main, first_part).map(Some)
+            read_tile_part_header_at(&mut cur, end, main, first_part, &mut site).map(Some)
         };
         let read = match read {
             Ok(read) => read,
-            Err(_) if !strict && header_may_be_cut(bytes, part_offset, sot.psot, header_at) => {
+            Err(_) if !strict && fault_may_be_cut(bytes, part_offset, sot.psot, site) => {
                 ended_early = true;
                 break;
             }
