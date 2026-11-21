@@ -309,12 +309,16 @@ impl IncrementalDecoder {
     /// and `refine` returns it as an error too: a server that streams files
     /// in can refuse one as soon as its main header has come in.
     ///
-    /// Call it after a feed rather than after each byte: each call parses
-    /// the main header again and counts again the tiles over the caps under
-    /// it. For a tile over a cap that is one walk of the tile-parts fed so
-    /// far, no further than the last tile it counts, plus up to the read's
-    /// budget: 45 ms for a window of 1530 tiles of a 235 MB file of 16.7
-    /// million tile-parts, and 63 ms for 1000 tiles of 4096 components.
+    /// Each call parses the main header again. For the tiles over a cap
+    /// under it, the decoder keeps what the last call found: the walk of the
+    /// tile-parts and the counts of the tiles' own headers. A call goes on
+    /// from there, so the calls after each feed walk the tile-parts about
+    /// once in all, and each call costs the tile-parts fed since plus up to
+    /// the read's budget. On a window of 1530 tiles of a 235 MB file of 16.7
+    /// million tile-parts, a call after each 256 KiB fed costs 66 ms in all,
+    /// where a read from the start on each would cost 5.9 s. A change of
+    /// options drops what is kept. A call made while another thread is in
+    /// one reads from the start.
     pub fn header(&self) -> Result<Option<Header>> {
         // A call on another thread holding the lock reads from the start. A
         // call that panicked may have left the walk half done, so it is
