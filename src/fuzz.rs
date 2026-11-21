@@ -302,6 +302,31 @@ pub fn tile_parts_walks_agree(data: &[u8]) {
             "the walks differ with `strict` {strict}"
         );
     }
+    // The walk kept from call to call on prefixes that grow, as
+    // `IncrementalDecoder::header` keeps it, gives on each what a walk from
+    // the start gives, and so does a call with `strict` on after them.
+    let mut kept = None;
+    let agree = |prefix: &[u8], strict: bool, kept: &mut Option<codestream::KeptWalk>| {
+        let Ok(parsed) = codestream::parse_header(prefix) else {
+            return;
+        };
+        let resumed = codestream::tile_parts_fault_kept(prefix, &parsed, strict, kept);
+        let afresh = codestream::tile_parts_fault(prefix, &parsed, strict);
+        assert_eq!(
+            format!("{resumed:?}"),
+            format!("{afresh:?}"),
+            "the kept walk differs on {} bytes with `strict` {strict}",
+            prefix.len()
+        );
+    };
+    let len = codestream.len();
+    for cut in
+        (1..=16).map(|k| parsed.main_header_len() + (len - parsed.main_header_len()) * k / 16)
+    {
+        agree(&codestream[..cut], false, &mut kept);
+    }
+    agree(codestream, true, &mut kept);
+    agree(codestream, false, &mut kept);
 }
 
 /// An [`IncrementalDecoder`](crate::IncrementalDecoder) as if its earlier

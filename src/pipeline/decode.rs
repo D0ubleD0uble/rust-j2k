@@ -178,22 +178,80 @@ fn check_geometry(
     strict: bool,
     kept: Option<(&mut HeaderCache, usize)>,
 ) -> Result<()> {
-    let counted = count_geometry(bytes, parsed, selection, reduction, cap, strict, kept);
+    let (mut cache, start) = kept.map_or((None, 0), |(kept, start)| (Some(kept), start));
+    // Hashed only for a call that keeps, as a read from the start has no use
+    // for it.
+    let main = cache.is_some().then(|| MainKey::of(bytes, parsed));
+    let mut faults = Faults {
+        keeps: cache.is_some(),
+        walk: cache
+            .as_deref_mut()
+            .zip(main)
+            .and_then(|(cache, main)| cache.take_fault(start, main)),
+    };
+    let counted = count_geometry(
+        bytes,
+        parsed,
+        selection,
+        reduction,
+        cap,
+        strict,
+        cache
+            .as_deref_mut()
+            .zip(main)
+            .map(|(cache, main)| (cache, start, main)),
+        &mut faults,
+    );
     // The decode parses every tile-part before it counts any tile, whatever
     // the selection, so where the count refuses a tile or stops at a budget,
     // that parse's fault comes first.
-    let fault = || codestream::tile_parts_fault(bytes, parsed, strict);
-    match counted {
+    let mut fault = || faults.find(bytes, parsed, strict);
+    let checked = match counted {
         Ok(true) => Ok(()),
         Ok(false) => fault().map_or(Ok(()), Err),
         Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => Err(fault().unwrap_or(error)),
         Err(error) => Err(error),
+    };
+    if let (Some(cache), Some(main), Some(walk)) = (cache, main, faults.walk) {
+        cache.fault = Some(Box::new(KeptFault { start, main, walk }));
+    }
+    checked
+}
+
+/// The walk of the tile-parts for the decode's error for them
+/// ([`codestream::tile_parts_fault`]): from the start, or, for a call that
+/// keeps, from where the last such call left it on the start of the same
+/// input ([`codestream::tile_parts_fault_kept`]).
+#[derive(Default)]
+struct Faults {
+    /// Whether the call keeps.
+    keeps: bool,
+    walk: Option<codestream::KeptWalk>,
+}
+
+impl Faults {
+    /// The error of the decode's parse of the tile-parts of `bytes`, with
+    /// `strict` as given, or `None` if it finds none.
+    fn find(
+        &mut self,
+        bytes: &[u8],
+        parsed: &codestream::ParsedHeader,
+        strict: bool,
+    ) -> Option<Error> {
+        if self.keeps {
+            codestream::tile_parts_fault_kept(bytes, parsed, strict, &mut self.walk)
+        } else {
+            codestream::tile_parts_fault(bytes, parsed, strict)
+        }
     }
 }
 
 /// The count of [`check_geometry`], before a refusal or a stop at a budget
 /// meets the decode's parse of the tile-parts. `Ok(false)` means the count
-/// stopped at a budget, leaving the tiles past it to the decode.
+/// stopped at a budget, leaving the tiles past it to the decode. `faults`
+/// is the walk for the decode's error for the tile-parts, which a tile
+/// counted can need.
+#[allow(clippy::too_many_arguments)]
 fn count_geometry(
     bytes: &[u8],
     parsed: &codestream::ParsedHeader,
@@ -201,7 +259,8 @@ fn count_geometry(
     reduction: u8,
     cap: samples::Cap,
     strict: bool,
-    kept: Option<(&mut HeaderCache, usize)>,
+    kept: Option<(&mut HeaderCache, usize, MainKey)>,
+    faults: &mut Faults,
 ) -> Result<bool> {
     let header = &parsed.header;
     let siz = &header.siz;
@@ -213,10 +272,10 @@ fn count_geometry(
     // What an earlier call kept, if it was kept for this codestream, main
     // header, selected area and reduction.
     let area = selection.area.image_rect();
-    let (mut kept, start) = kept.map_or((None, 0), |(kept, start)| (Some(kept), start));
-    // Hashed only for a call that keeps, as a read from the start has no use
-    // for it.
-    let main = kept.is_some().then(|| MainKey::of(bytes, parsed));
+    let (mut kept, start, main) = match kept {
+        Some((kept, start, main)) => (Some(kept), start, Some(main)),
+        None => (None, 0, None),
+    };
     let mut earlier = kept
         .as_deref_mut()
         .zip(main)
@@ -272,6 +331,7 @@ fn count_geometry(
         },
         steps: 0,
         fault_free: false,
+        faults: std::mem::take(faults),
     };
     let mut count = || {
         let mut steps = 0u64;
@@ -329,6 +389,7 @@ fn count_geometry(
         Ok(true)
     };
     let counted = count();
+    *faults = std::mem::take(&mut rescue.faults);
     if let (Some(kept), Some(main)) = (kept, main) {
         let (walk, known) = (rescue.walk, rescue.known);
         let (counts, known) = (counts.unwrap_or_default(), known.unwrap_or_default());
@@ -404,7 +465,8 @@ impl Over {
 /// of the tile-parts, with where it found the first tile-part of each tile
 /// the selection reads, the precincts and code-blocks of each tile counted
 /// under the main header, and what the count read of each tile-part that
-/// is whole in the input ([`Own`]). The bytes fed only grow, so what a call
+/// is whole in the input ([`Own`]), and, apart, the walk for the decode's
+/// error for the tile-parts ([`Faults`]). The bytes fed only grow, so what a call
 /// found in them stays so, and a call gives what a read from the start
 /// gives. It is kept for one codestream, main header, selection and
 /// reduction; a call that reads another, as after a change of region,
@@ -413,6 +475,18 @@ impl Over {
 pub(crate) struct HeaderCache {
     /// Boxed, so a decoder with nothing kept holds a pointer.
     kept: Option<Box<Kept>>,
+    /// The walk for the decode's error for the tile-parts, which does not
+    /// depend on the selection or the reduction, so it is kept apart.
+    fault: Option<Box<KeptFault>>,
+}
+
+/// [`HeaderCache::fault`], and what it was kept for.
+struct KeptFault {
+    /// Where the codestream starts in the input.
+    start: usize,
+    main: MainKey,
+    /// It holds the bytes of the codestream it was kept for.
+    walk: codestream::KeptWalk,
 }
 
 /// What a main header is keyed on: its length and a hash of its bytes, so
@@ -488,6 +562,23 @@ impl HeaderCache {
     fn keep(&mut self, kept: Box<Kept>) {
         self.kept = Some(kept);
     }
+
+    /// Let go of what was kept for the selection and the reduction. The
+    /// walk for the decode's error for the tile-parts depends on neither,
+    /// and the header read always reads with `strict` off, so it is kept.
+    pub(crate) fn clear_selection(&mut self) {
+        self.kept = None;
+    }
+
+    /// The fault walk kept, if it was kept for a codestream at `start` of
+    /// the input with the main header keyed `main`. It checks itself that
+    /// the input has not shrunk. Anything else kept is dropped.
+    fn take_fault(&mut self, start: usize, main: MainKey) -> Option<codestream::KeptWalk> {
+        self.fault
+            .take()
+            .filter(|kept| kept.start == start && kept.main == main)
+            .map(|kept| kept.walk)
+    }
 }
 
 /// The resolutions of tile-components `header` gives a tile.
@@ -528,6 +619,8 @@ struct Rescue<'a> {
     /// Whether [`own_fault`](Self::own_fault) has walked the tile-parts and
     /// found no fault, so that it walks them once at most.
     fault_free: bool,
+    /// The walk for the decode's error for the tile-parts.
+    faults: Faults,
 }
 
 /// What [`Rescue::count`] read of a tile's first tile-part, whole in the
@@ -706,7 +799,7 @@ impl<'a> Rescue<'a> {
             if !self.strict && part.header_fault_may_be_cut() {
                 return Ok(true);
             }
-            return self.own_fault(true);
+            return self.own_fault();
         };
         let resolutions = resolutions(&own);
         if !self.charge(resolutions) {
@@ -727,7 +820,7 @@ impl<'a> Rescue<'a> {
                 counts,
             }),
         );
-        self.check_own(index, counts, whole)
+        self.check_own(index, counts)
     }
 
     /// [`count`](Self::count) for a tile whose own header gave `header`.
@@ -740,22 +833,21 @@ impl<'a> Rescue<'a> {
             counts,
         } = header
         else {
-            return self.own_fault(true);
+            return self.own_fault();
         };
         if !self.charge(resolutions) {
             return Ok(false);
         }
         // It was within the reduction when it was read, and is whole.
-        self.check_own(index, counts, true)
+        self.check_own(index, counts)
     }
 
     /// Hold tile `index` to the caps under its own header, which gave its
     /// tile `counts`, as [`tier2::check_tile`] holds it. Counts at fault
-    /// (`None`) are [`own_fault`](Self::own_fault)'s, for a tile-part that
-    /// is `whole` in the input or not.
-    fn check_own(&mut self, index: u32, counts: Option<(u64, u64)>, whole: bool) -> Result<bool> {
+    /// (`None`) are [`own_fault`](Self::own_fault)'s.
+    fn check_own(&mut self, index: u32, counts: Option<(u64, u64)>) -> Result<bool> {
         let Some(counts) = counts else {
-            return self.own_fault(whole);
+            return self.own_fault();
         };
         match tier2::check_counts(index, counts, self.cap) {
             Err(error @ Error::Limit(_)) => Err(error),
@@ -772,17 +864,14 @@ impl<'a> Rescue<'a> {
     /// yet complete, which [`count`](Self::count) leaves to the decode
     /// unwalked. Where the parse finds none (counts at fault that only the
     /// decode's count of the tile finds), the tile is left to the decode.
-    ///
-    /// Counts at fault in a tile-part not `whole` in the input (cut, or
-    /// with a `Psot` of 0), with `strict` off, are left to the decode
-    /// unwalked. So a call on a prefix whose last tile-part is not whole,
-    /// as each call of
-    /// [`IncrementalDecoder::header`](crate::IncrementalDecoder::header) on
-    /// a stream fed so far can be, does not walk the tile-parts again for
-    /// a cut. The tile-parts are walked once at most.
-    fn own_fault(&mut self, whole: bool) -> Result<bool> {
-        if !self.fault_free && (whole || self.strict) {
-            match codestream::tile_parts_fault(self.bytes, self.parsed, self.strict) {
+    /// So are counts at fault in a tile-part not whole in the input (cut,
+    /// or with a `Psot` of 0), where the parse with `strict` off finds no
+    /// fault. The tile-parts are walked once at most a call, and a call of
+    /// [`IncrementalDecoder::header`](crate::IncrementalDecoder::header)
+    /// goes on from the walk the last one kept ([`Faults`]).
+    fn own_fault(&mut self) -> Result<bool> {
+        if !self.fault_free {
+            match self.faults.find(self.bytes, self.parsed, self.strict) {
                 Some(fault) => return Err(fault),
                 None => self.fault_free = true,
             }
@@ -827,8 +916,8 @@ impl<'a> Rescue<'a> {
     /// main header in place, the tile-part headers and not the tile data,
     /// and keeps no tile record. `None` only if the parse finds no fault,
     /// which the walk finding no tile-part rules out.
-    fn walk_fault(&self) -> Option<Error> {
-        codestream::tile_parts_fault(self.bytes, self.parsed, true)
+    fn walk_fault(&mut self) -> Option<Error> {
+        self.faults.find(self.bytes, self.parsed, true)
     }
 }
 
@@ -1945,22 +2034,23 @@ pub(crate) mod tests {
     /// and reads tiles 0 and 1 by offset. The refusal then looks for the
     /// error of the decode's parse of the tile-parts, which the decode runs
     /// before it counts any tile ([`codestream::tile_parts_fault`]). That
-    /// walk reads the `SOT` of every tile-part, and once, when tile 0 has
-    /// all 16 of its tile-parts, looks ahead for a 17th (the `TPsot ==
-    /// TNsot` correction), which reads each `SOT` after it up to the `EOC`.
-    /// A tile with no tile-part takes the first walk to the end of the
-    /// tile-parts.
+    /// walk reads the `SOT` of every tile-part, and with `strict` on, once,
+    /// when tile 0 has all 16 of its tile-parts, looks ahead for a 17th (the
+    /// `TPsot == TNsot` correction), which reads each `SOT` after it up to
+    /// the `EOC`. With `strict` off the look-ahead only changes the counts
+    /// in an error, so it is not taken here. A tile with no tile-part takes
+    /// the first walk to the end of the tile-parts.
     #[test]
     fn a_refusal_at_an_early_tile_walks_little() {
         // The `SOT`s the fault walk reads over `parts` tile-parts of 16 a
         // tile.
-        let fault_walk = |parts: u64| parts + (parts - 16 + 1);
+        let fault_walk = |parts: u64, strict: bool| parts + if strict { parts - 16 + 1 } else { 0 };
         let bytes = rescued_tiles(64, 16, &[1], &[]);
         for strict in [false, true] {
             let options = DecodeOptions::default().with_strict(strict);
             let (reads, header) = sot_reads_of(&bytes, &options);
             assert!(matches!(header, Err(Error::Limit(_))), "{header:?}");
-            assert_eq!(reads, 16 + 1 + 2 + fault_walk(64 * 16));
+            assert_eq!(reads, 16 + 1 + 2 + fault_walk(64 * 16, strict));
         }
         // Tile 1's tile-parts left out: with `strict` on the walk runs to
         // `EOC` to find it has none, and the file is refused with the
@@ -1973,7 +2063,7 @@ pub(crate) mod tests {
             format!("{:?}", header.err()),
             format!("{:?}", decoded.err())
         );
-        assert_eq!(reads, 63 * 16 + 1 + 1 + fault_walk(63 * 16));
+        assert_eq!(reads, 63 * 16 + 1 + 1 + fault_walk(63 * 16, true));
         // With it off the tile is left out and the rest are read by offset.
         assert_eq!(
             sot_reads(&missing, &DecodeOptions::default().with_strict(false)),
@@ -2017,17 +2107,112 @@ pub(crate) mod tests {
         assert!(kept * 100 < afresh, "{kept} reads, {afresh} from the start");
     }
 
-    /// The calls of `IncrementalDecoder::header` after each feed walk every
-    /// tile-part fed for a tile whose counts under its own header are at
-    /// fault, where the parse finds no fault: the walk is not kept between
-    /// calls. Two tiles of 255 tile-parts each, read at a reduction of 1:
-    /// tile 0, one sample wide, has an empty area on component 1 and a
-    /// tile-part `COD`, and tile 1 is over the caps under the main header
-    /// and within them under its own. Fed 5 bytes at a time, this pins the
-    /// bound of a walk on each call; a walk kept between calls would bring
-    /// it to about one walk in all.
+    /// The same where each call refuses tile 1, and so walks the tile-parts
+    /// fed for the decode's error for them first: the walk goes on from
+    /// where the last call kept it, so the calls read each `SOT` about once
+    /// in all. A walk from the start on each call read 3,083,441 here.
     #[test]
-    fn header_after_each_feed_walks_for_counts_at_fault_on_each_call() {
+    fn header_after_each_feed_of_a_refused_tile_walks_about_once() {
+        let bytes = rescued_tiles(64, 16, &[1], &[]);
+        let lenient = DecodeOptions::default().with_strict(false);
+        let mut decoder =
+            crate::IncrementalDecoder::new(DecodeOptions::default()).expect("valid options");
+        let (mut kept, mut calls, mut refusals) = (0, 0u64, 0);
+        for chunk in bytes.chunks(5) {
+            decoder.feed(chunk);
+            codestream::tests::SOT_READS.with(|reads| reads.set(0));
+            let header = decoder.header();
+            kept += codestream::tests::SOT_READS.with(std::cell::Cell::get);
+            calls += 1;
+            refusals += u64::from(matches!(header, Err(Error::Limit(_))));
+            let alone = match read_header(decoder.bytes(), &lenient) {
+                Ok(header) => Ok(Some(header)),
+                Err(Error::Incomplete(_)) => Ok(None),
+                Err(error) => Err(error),
+            };
+            assert_eq!(format!("{header:?}"), format!("{alone:?}"));
+        }
+        let parts = 64 * 16;
+        eprintln!("{kept} reads in {calls} calls, {refusals} refusals");
+        assert!(refusals * 10 > calls * 9, "{refusals} of {calls}");
+        assert!(kept <= parts + 2 * calls, "{kept} reads in {calls} calls");
+    }
+
+    /// The same where tile 0 is refused and tile 1's own header is at
+    /// fault: a `COD` of one level under a main `QCD` of one step, which
+    /// the decode's parse refuses for the tile-parts. The walk that gathers
+    /// tile 1's header is kept with the fault walk, so the calls still read
+    /// each `SOT` about once in all. A walk from the start for that header
+    /// on each call read 1,566,568 here.
+    #[test]
+    fn header_after_each_feed_of_a_tile_header_at_fault_walks_about_once() {
+        use crate::synth;
+        let mut cod = synth::cod_body(1, 0, 4, 0);
+        cod[0] = 1;
+        cod.push(0x00);
+        let siz = synth::siz_body([520 * 64, 512, 0, 0, 520, 512, 0, 0], &[[7, 1, 1]]);
+        let mut bytes = [
+            vec![0xFF, 0x4F],
+            synth::seg(0xFF51, &siz),
+            synth::seg(0xFF52, &cod),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+        ]
+        .concat();
+        let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
+        let at_fault = synth::seg(0xFF52, &synth::cod_body(1, 1, 4, 0));
+        for tile in 0..64u16 {
+            let header: &[u8] = match tile {
+                0 => &[],
+                1 => &at_fault,
+                _ => &own,
+            };
+            bytes.extend(synth::tile_part(tile, 0, 16, header, &[0]));
+            for part in 1..16 {
+                bytes.extend(synth::tile_part(tile, part, 16, &[], &[]));
+            }
+        }
+        bytes.extend([0xFF, 0xD9]);
+        let lenient = DecodeOptions::default().with_strict(false);
+        assert!(
+            matches!(read_header(&bytes, &lenient), Err(Error::Marker(_))),
+            "{:?}",
+            read_header(&bytes, &lenient)
+        );
+        let mut decoder =
+            crate::IncrementalDecoder::new(DecodeOptions::default()).expect("valid options");
+        let (mut kept, mut calls, mut faults) = (0, 0u64, 0);
+        for chunk in bytes.chunks(5) {
+            decoder.feed(chunk);
+            codestream::tests::SOT_READS.with(|reads| reads.set(0));
+            let header = decoder.header();
+            kept += codestream::tests::SOT_READS.with(std::cell::Cell::get);
+            calls += 1;
+            faults += u64::from(matches!(header, Err(Error::Marker(_))));
+            let alone = match read_header(decoder.bytes(), &lenient) {
+                Ok(header) => Ok(Some(header)),
+                Err(Error::Incomplete(_)) => Ok(None),
+                Err(error) => Err(error),
+            };
+            assert_eq!(format!("{header:?}"), format!("{alone:?}"));
+        }
+        let parts = 64 * 16;
+        eprintln!("{kept} reads in {calls} calls, {faults} at fault");
+        assert!(faults * 10 > calls * 9, "{faults} of {calls}");
+        assert!(kept <= parts + 2 * calls, "{kept} reads in {calls} calls");
+    }
+
+    /// The calls of `IncrementalDecoder::header` after each feed walk the
+    /// tile-parts about once in all for a tile whose counts under its own
+    /// header are at fault, where the parse finds no fault, as each call
+    /// goes on from the fault walk the last one kept. Two tiles of 255
+    /// tile-parts each, read at a reduction of 1: tile 0, one sample wide,
+    /// has an empty area on component 1 and a tile-part `COD`, and tile 1 is
+    /// over the caps under the main header and within them under its own.
+    /// Fed 5 bytes at a time, a call reads the `SOT`s fed since the last one
+    /// and the one where the walk was kept. A walk from the start on each
+    /// call read 364,368 `SOT`s here.
+    #[test]
+    fn header_after_each_feed_walks_for_counts_at_fault_about_once() {
         use crate::synth::{cod_body, qcd_none_body, seg, siz_body, tile_part};
         let mut main_cod = cod_body(1, 1, 4, 0);
         main_cod[0] = 1;
@@ -2063,13 +2248,20 @@ pub(crate) mod tests {
         for chunk in bytes.chunks(5) {
             decoder.feed(chunk);
             codestream::tests::SOT_READS.with(|reads| reads.set(0));
-            decoder.header().expect("the header reads");
+            let header = decoder.header();
             kept += codestream::tests::SOT_READS.with(std::cell::Cell::get);
             calls += 1;
+            let alone = match read_header(decoder.bytes(), &lenient) {
+                Ok(header) => Ok(Some(header)),
+                Err(Error::Incomplete(_)) => Ok(None),
+                Err(error) => Err(error),
+            };
+            assert_eq!(format!("{header:?}"), format!("{alone:?}"));
         }
         let parts = 2 * 255;
         eprintln!("{kept} reads in {calls} calls of {parts} tile-parts");
-        assert!(kept <= (parts + 2) * calls, "{kept} reads in {calls} calls");
+        assert!(kept > 0);
+        assert!(kept <= parts + calls, "{kept} reads in {calls} calls");
     }
 
     /// A gray codestream of `tiles` tiles in a row, whose main header and
@@ -2229,5 +2421,27 @@ pub(crate) mod tests {
         check(&file(over, true), &jp2);
         // Another main header: one whose tiles are within the caps first.
         check(&file([0x11, 0x11], false), &refused);
+        // The fault walk kept by a refusal is for one main header too: tile
+        // 0's `COM` turned into an `MCC`, which the walk kept for the first
+        // file has passed, under a main `QCD` of one guard bit, not two.
+        let mut mcc = refused.clone();
+        let at = mcc
+            .windows(2)
+            .rposition(|code| code == [0xFF, 0x64])
+            .expect("the COM");
+        mcc[at + 1] = 0x75;
+        let qcd = mcc
+            .windows(2)
+            .position(|code| code == [0xFF, 0x5C])
+            .expect("the QCD");
+        assert_eq!(mcc[qcd + 4], 2 << 5);
+        mcc[qcd + 4] = 1 << 5;
+        let want = read_header(&mcc, &lenient);
+        assert!(matches!(&want, Err(Error::Unsupported(_))), "{want:?}");
+        let mut kept = HeaderCache::default();
+        let first = read_header_kept(&refused, &lenient, Some(&mut kept));
+        assert!(matches!(first, Err(Error::Limit(_))), "{first:?}");
+        let got = read_header_kept(&mcc, &lenient, Some(&mut kept));
+        assert_eq!(format!("{got:?}"), format!("{want:?}"));
     }
 }
