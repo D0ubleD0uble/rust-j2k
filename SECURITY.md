@@ -42,11 +42,12 @@ input may be hostile. With the default limits, the public functions (`decode`,
 a typed `Error` for any input. They never panic, read out of bounds or hang,
 and they allocate at most what the limits allow: about 6.4 GiB at peak
 for an input of up to 64 MiB, and about 102 bytes per byte of input past
-that, for the shapes measured; files of many one-pass codeword segments need
-more (step 2 of [Running a decode service](#running-a-decode-service)). If the
+that, except files of many pass-terminated (`termall`) codeword segments, a
+known gap ([#585](https://github.com/D0ubleD0uble/rust-j2k/issues/585); step 2
+of [Running a decode service](#running-a-decode-service) sizes for it). If the
 machine can't supply that, the process aborts, as any Rust program does; that
 is not a bug. If a panic, an out-of-bounds read, a hang or a larger allocation
-happens, report it as above.
+from any other input happens, report it as above.
 
 By default the decoded image may hold 2^29 samples (2 GiB as `i32`), or 8
 samples per byte of input when that is more, so the limit grows past 64 MiB of
@@ -156,7 +157,7 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    GiB peak). `AtMost(n)` bounds that term to about 7 ns x n. Padding after
    the tile data adds about 175 ns a byte, measured. Zero bytes inside a
    code-block's data count as tile data, and cost much more: a file that
-   gzips to under 1 KB (196,526 bytes, 120,000 of them zeros in one
+   gzips to about 1 KB (196,526 bytes, 120,000 of them zeros in one
    code-block) measured 13 s at the defaults, about 108 µs a byte.
    `Raised(n)` on a work bound multiplies the time by up to `n`. Pick the
    timeout from your largest legitimate file, not from these figures. The

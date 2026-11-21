@@ -274,8 +274,8 @@ the samples, set the peak. The figure to plan on is 3.2 x 4n for the samples,
 plus about 0.8 GiB for one tile's records, plus up to about 350 bytes for each
 byte of input for [segment records](#segment-records), plus the input. The
 measured peaks against `n` are in that section. An `IncrementalDecoder` can
-hold up to about three times one decode's peak, plus the bytes fed. What to set around a decode besides the
-ceiling (the input size, a timeout, memory for each concurrent decode) is in
+hold up to about three times one decode's peak, plus the bytes fed. What to
+set around a decode besides the ceiling (the input size, a timeout, memory for each concurrent decode) is in
 [Running a decode service](../SECURITY.md#running-a-decode-service).
 
 A refusal under `AtMost(n)` has kind `Samples` (or `TileCodeBlocks` or
@@ -363,8 +363,7 @@ PEAK_LOG2_N=20 /usr/bin/time -v cargo test --release --test sample_limit --
 --ignored decode_the_file_in_peak_file` (read "Maximum resident set size":
 737,632 KiB with the harness). Leave `PEAK_LOG2_N` unset for the
 defaults. The peaks are about 320 to 350 bytes a byte of input, against the 43
-to 102 of the default-limit table above. #585 tracks the fix; until it lands,
-size memory for this shape.
+to 102 of the default-limit table above. Size memory for this shape (#585).
 
 **The sample path.** A 102-byte file of 23170 x 23170 samples (536,848,900,
 under 2^29), one tile of five levels and an empty packet for each
@@ -379,16 +378,16 @@ it with `/usr/bin/time -v cargo test --release --test sample_limit --
 **Zero bytes inside a code-block.** Zero bytes in a code-block's data count as
 tile data, so they raise the work bound, and the decode still runs its passes
 over them. `t1bomb(8192, 6, 88)` with a 120,000-byte last code-block of zeros
-is 196,526 bytes, gzips to 944 bytes, and decodes at the defaults in 13.0 s
-(peak 275 MiB), about 108 µs a byte. The same file without the zeros (76,525
+is 196,526 bytes, gzips to about 930 bytes with `gzip -9`, and decodes at the defaults in 13.0 s
+(peak 269 MiB), about 108 µs a byte. The same file without the zeros (76,525
 bytes) is refused in 10 ms by the code-block work bound. The file was made by
 `scripts/gen-tier1-work-bound-fixtures.py --memory DIR`
 (`zeros_8192_6_88.j2k`, and `zeros_none_8192_6_88.j2k` without the zeros). A
 length of 120,000 needs its Lblock raised: Lblock starts at 3 and the length
 field is Lblock + floor(log2(88)) bits, so 8 increments (eight 1 bits and a
-0) put the field at 17 bits, enough for 120,000. Neither file is committed. Reproduce the time
-with `PEAK_FILE=DIR/zeros_8192_6_88.j2k /usr/bin/time -v cargo test --release
---test sample_limit -- --ignored decode_the_file_in_peak_file` (13.1 s, 275
+0) put the field at 17 bits, enough for 120,000. Neither file is committed.
+Reproduce the time with `PEAK_FILE=DIR/zeros_8192_6_88.j2k /usr/bin/time -v cargo test --release
+--test sample_limit -- --ignored decode_the_file_in_peak_file` (13.1 s, 269
 MiB).
 
 **The retry loop.** The README's loop makes at most five decodes (the first
