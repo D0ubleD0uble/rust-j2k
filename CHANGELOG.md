@@ -230,9 +230,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   counts (#560).
 - That walk reads a tile's first tile-part header again at most twice,
   however many later tile-parts restate its coding. It read a header of
-  1 KiB or less again for each, so a refusal of a 13 MB file of 2048
+  1 KiB or less again for each, so a refusal of a 12.5 MB file of 2048
   tiles, whose first headers of 143 `QCC`s each 254 later tile-parts
-  restate, took 9.8 s where the decode takes 130 ms; it now takes 150 ms
+  restate, took 9.8 s where the decode takes 130 ms; it now takes 135 ms
   (#590).
 - With `strict` off, a fault in the header of a tile-part that runs to the
   end of the input, a last one with `Psot` 0 or one whose `Psot` runs past
