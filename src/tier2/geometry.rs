@@ -37,8 +37,10 @@ pub(crate) const MAX_PRECINCTS: usize = crate::samples::TILE_PRECINCTS_FLOOR as 
 /// at 4/3 a leaf) give about 133 bytes a block, a lower bound; a coded block
 /// adds its boxed `SegmentStates` of 80 bytes and its lists. Measured on a
 /// 4096² tile in 4×4 blocks (2^20 of them), every block coded with one pass
-/// (`shaped_bomb(4096, 2, 1)` in `scripts/gen-tier1-work-bound-fixtures.py`),
-/// a decode peaks at about 434 MiB resident. [`check_tile`] holds a tile to the cap
+/// (`t1bomb(4096, 2, 1)` in `scripts/gen-tier1-work-bound-fixtures.py`), a
+/// decode under `AtMost(2^24)` peaks at about 429 MiB resident, as the table
+/// in `docs/resource-bounds.md` ("Figures for a decode service") has it.
+/// [`check_tile`] holds a tile to the cap
 /// before its geometry is built, and [`band_geom`] spends a walk's budget
 /// before anything sized by a band's block count is allocated.
 pub(crate) const MAX_CODE_BLOCKS: usize = crate::samples::TILE_BLOCKS_FLOOR as usize;

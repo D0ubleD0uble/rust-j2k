@@ -180,13 +180,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - A code-block's codeword segments cost about 15 bytes of heap each, or
-  about 110 with bytes, where they cost about 130 with none. A file of
+  about 85 with a byte, where they cost about 130 with none. A file of
   many pass-terminated (`termall`) segments peaked at up to about 350
   bytes for each byte of input, past the documented bound: a 37 MB
   4096 x 4096 file peaked at 11.2 GiB at the defaults. It now peaks at
-  1.48 GiB, and such files stay within about 65 bytes for each byte of
-  input. The segment records are also freed before the inverse wavelet.
-  Decoded images do not change (#585).
+  1.50 GiB. A tile's segment records take up to about 65 bytes of heap
+  for each byte of input, and a file of such a tile after tiles of
+  samples stays within the bound of about 6.4 GiB up to 64 MiB of input
+  and about 102 bytes for each byte past it. A packet's notes of its
+  segments are freed before the records Tier-1 reads are built, and the
+  records before the inverse wavelet. Decoded images do not change
+  (#585).
 - `read_header_with` gives the decode's error for a file where the
   tile-part header it reads to count a tile is at fault (a Part 2 marker
   such as `MCC`, a reserved marker, or a tile `COC` that mixes the wavelets

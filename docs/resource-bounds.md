@@ -208,9 +208,11 @@ other docs come from this table and include the input.
 Past 64 MiB of input that is about 43 bytes of peak memory per byte of input
 for a square tile, and up to about 102 for a tile one sample wide. The
 figures past the floor are scaled from the measured multiples, not measured.
-A file of many codeword segments stays under them too: see [Segment
-records](#segment-records), which peak at up to about 65 bytes of heap per
-byte of input.
+They are for a file whose peak is its samples. A file that spends its bytes
+on codeword segments peaks past 43 with square tiles, but stays under about
+102: see [Segment records](#segment-records), where the records take up to
+about 65 bytes of heap per byte of input and a 96 MB file peaks at about 77
+bytes per byte resident.
 A tiled image peaks lower, as each tile is reconstructed in turn, and a
 one-tile image is also held to the code-blocks and precincts a tile allows
 ([Code-blocks and precincts per tile](#code-blocks-and-precincts-per-tile)),
@@ -311,14 +313,15 @@ the same header, cut before its tile data.
 **The peak under `AtMost(n)`.** Each file was decoded once with
 `DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(n))` in a
 release build, `strict` on, and the peak is `/usr/bin/time -v`'s "Maximum
-resident set size", with a small program that reads the file and calls
-`decode_with`. The `t1bomb` files come from
+resident set size". The `t1bomb` files come from
 `scripts/gen-tier1-work-bound-fixtures.py` (`t1bomb(size, cb, passes)` with
-the arguments in the table, `cb` the log2 of the code-block side). The 2^20
+the arguments in the table, `cb` the log2 of the code-block side), decoded
+with `decode_the_file_in_peak_file` as in [Segment
+records](#segment-records). The 2^20
 row is `at_most_2_to_the_20_peaks_on_the_tile_caps` in
 `tests/sample_limit.rs`, which asserts the file and decodes it: reproduce it
 with `/usr/bin/time -v cargo test --release --test sample_limit -- --ignored
-at_most_2_to_the_20_peaks_on_the_tile_caps` (238,860 KiB with the harness).
+at_most_2_to_the_20_peaks_on_the_tile_caps` (238,784 KiB with the harness).
 The 2^18 row is a 512 x 512 tile in 1 x 1 precincts of empty packets, from the
 same builder.
 
@@ -326,17 +329,16 @@ same builder.
 | ----------- | -------- | ---- | ------------- |
 | 2^18 | 3.2 MiB | 512 x 512, 1 x 1 precincts, 262,226 bytes | 81 MiB |
 | 2^20 | 13 MiB | 1024 x 1022, 2 x 2 precincts, 261,719 bytes | 233 MiB |
-| 2^22 | 51 MiB | `t1bomb(2048, 2, 1)`, 513,720 bytes | 110 MiB |
-| 2^24 | 205 MiB | `t1bomb(4096, 2, 1)`, 2,054,638 bytes | 434 MiB |
+| 2^22 | 51 MiB | `t1bomb(2048, 2, 1)`, 513,720 bytes | 105 MiB |
+| 2^24 | 205 MiB | `t1bomb(4096, 2, 1)`, 2,054,638 bytes | 429 MiB |
 | 2^26 | 820 MiB | `t1bomb(8192, 3, 1)`, 2,054,638 bytes | 621 MiB |
 
 Every file decoded. Past about 2^26 the sample buffers dominate. The 0.8 GiB
 planning term is an estimate. The 2^24 row gives the cost of a code-block: its
 sample buffers of a square tile are about 1.35 x 4n = 86 MiB, which leaves
-(434 - 86) MiB over about 2^20 code-blocks, about 330 bytes each. The 0.8
+(429 - 86) MiB over about 2^20 code-blocks, about 340 bytes each. The 0.8
 GiB estimate uses 560, measured before the segment records shrank (#585), so
-it is on the high side. The 2^20 row
-holds 261,632 precincts and about 800,000 code-blocks, nearly both caps, and
+it is on the high side. The 2^20 row holds 261,632 precincts and about 800,000 code-blocks, nearly both caps, and
 peaks at 233 MiB, so the two caps together have not been shown to reach the
 estimate; the precinct figure of 750 bytes is from #583's probes and is not
 isolated here.
@@ -345,40 +347,61 @@ isolated here.
 
 The caps count code-blocks, not codeword segments. With the code-block style
 `termall` (0x04) each coding pass is its own segment, and a file can code a
-segment of no bytes in about 3 header bits, since `Lblock` is at least 3. The
-decoder keeps a 4-byte pass count and an 8-byte head for each segment; a
-segment with bytes adds a 16-byte chunk, a 24-byte note in the packet being
-read and a 16-byte slice for tier-1. With the room a list keeps as it grows,
-that is about 15 bytes of heap for a segment of no bytes and about 110 for
-one of a byte. A one-shot decode frees the records before the inverse
-wavelet, so they do not add to its peak. Neither the caps nor `AtMost(n)`
-hold them down; the input's length does.
+segment of no bytes in about 3 header bits, since `Lblock` is at least 3; a
+segment of one byte takes 11 bits with its body. The walk keeps a 4-byte
+pass count for each segment and, for a segment with bytes, a 16-byte chunk,
+and the packet being read a 24-byte note of it. Once the walk is done, the
+packet's notes are freed and tier-1's records are built beside the walk's:
+an 8-byte head for each segment and a 16-byte slice for each chunk. With the
+room a list keeps as it grows, a segment of no bytes costs about 15 bytes of
+heap and one of a byte about 85. The lists keep the most room when a block
+holds just past a power of two of segments, 33 or 65. Neither the caps nor
+`AtMost(n)` hold the records down; the input's length does.
 
-Each file below is 4 x 4 code-blocks of 88 one-pass segments, decoded once in
-a release build with `/usr/bin/time -v`. The `termall_SIZE_2_88.j2k` files,
-of segments of no bytes, are from `scripts/gen-tier1-work-bound-fixtures.py
---memory DIR`; the one-byte file is `termall(2048, 88, 1)` in
-`tests/segment_records_alloc.rs`. Before is the decoder that kept about 130
-bytes a segment (#585).
+A one-shot decode frees a tile's records before its inverse wavelet, so they
+do not add to that tile's peak. They do add to the samples the earlier tiles
+have put in the image, which is held until the decode returns.
 
-| File | Size | Limit | Peak | Before |
-| ---- | ---- | ----- | ---- | ------ |
-| 1024 x 1024 | 2.3 MB | `AtMost(2^20)` | 97 MiB | 720 MiB |
-| 2048 x 2048 | 9.3 MB | `AtMost(2^22)` | 381 MiB | 2.80 GiB |
-| 4096 x 4096 | 37 MB | `AtMost(2^24)` | 1.48 GiB | 11.2 GiB |
-| 4096 x 4096 | 37 MB | the defaults | 1.48 GiB | 11.2 GiB |
-| 2048 x 2048, one-byte segments | 32 MB | the defaults | 1.76 GiB | 5.93 GiB |
+Each file below is from `scripts/gen-tier1-work-bound-fixtures.py --memory
+DIR`, decoded once in a release build, and the peak is "Maximum resident set
+size" from `/usr/bin/time -v`. `termall_SIZE_2_P.j2k` is one tile in 4 x 4
+code-blocks of `P` one-pass segments of no bytes, and `termall_SIZE_2_P_1.j2k`
+the same with segments of one byte. `filled_8xR_4096_P_1.j2k` is 8 x `R`
+tiles of 4096 x 4096, each an empty packet but the last, which is
+`termall_4096_2_P_1`. Before is the decoder that kept about 130 bytes a
+segment (#585); the runs past 20 GiB were stopped at a 20 GiB memory cap.
 
-That is about 43 bytes of peak a byte of input for segments of no bytes and
-about 58 for segments of a byte, input included. The heap allocated peaks
-at about 40 and 64 bytes a byte, as some of the room the lists keep is never
-written. A segment of more bytes costs less per byte. Reproduce the
-first row with `PEAK_FILE=DIR/termall_1024_2_88.j2k PEAK_LOG2_N=20
+| File | Size | Limit | Peak | Per byte | Before |
+| ---- | ---- | ----- | ---- | -------- | ------ |
+| `termall_1024_2_88` | 2.3 MB | `AtMost(2^20)` | 98 MiB | 44 | 720 MiB |
+| `termall_2048_2_88` | 9.3 MB | `AtMost(2^22)` | 381 MiB | 43 | 2.80 GiB |
+| `termall_4096_2_88` | 37 MB | `AtMost(2^24)` | 1.50 GiB | 43 | 11.2 GiB |
+| `termall_4096_2_88` | 37 MB | the defaults | 1.50 GiB | 43 | 11.2 GiB |
+| `termall_2048_2_88_1` | 32 MB | the defaults | 1.25 GiB | 41 | 5.93 GiB |
+| `termall_2048_2_65_1` | 24 MB | the defaults | 1.10 GiB | 49 | 5.11 GiB |
+| `termall_2048_2_33_1` | 12 MB | the defaults | 604 MiB | 51 | 2.60 GiB |
+| `termall_4096_2_65_1` | 96 MB | `AtMost(2^24)` | 4.41 GiB | 49 | over 20 GiB |
+| `filled_8x4_4096_33_1` | 49 MB | the defaults | 4.39 GiB | 96 | 12.3 GiB |
+| `filled_8x5_4096_65_1` | 96 MB | the defaults | 6.91 GiB | 77 | over 20 GiB |
+
+The per-byte figures are bytes of peak for each byte of input, input
+included. One tile of segments peaks at up to about 51 bytes a byte, and the
+heap allocated at up to about 63, as some of the room the lists keep is never
+written: the segment term of the `AtMost(n)` plan is about 65. The last two
+rows add the 2^29 and 40 x 2^24 samples of the earlier tiles: 4.39 GiB is
+under the 6.4 GiB of a file of up to 64 MiB, and 77 bytes a byte under the
+102 past it. `termall_4096_2_65_1` under `AtMost(2^24)` peaks at 4.41 GiB
+against the 6.9 GiB the plan gives (3.2 x 4n + 0.8 GiB + 65 bytes a byte of
+input + the input).
+
+Reproduce a row with `PEAK_FILE=DIR/termall_1024_2_88.j2k PEAK_LOG2_N=20
 /usr/bin/time -v cargo test --release --test sample_limit -- --ignored
-decode_the_file_in_peak_file` (read "Maximum resident set size": 100,064 KiB
-with the harness). Leave `PEAK_LOG2_N` unset for the defaults. `cargo test
---release --test segment_records_alloc -- --ignored` decodes the large rows
-and checks the heap stays under 80 bytes a byte of input.
+decode_the_file_in_peak_file` (100,044 KiB with the harness), and leave
+`PEAK_LOG2_N` unset for the defaults. `cargo test --release --test
+segment_records_alloc -- --ignored` decodes the same shapes, built in the
+test, and checks their heap: a single tile under 72 bytes a byte, the
+`AtMost(2^24)` file under its plan, and the filled files under 6.4 GiB and
+102 bytes a byte.
 
 **The sample path.** A 102-byte file of 23170 x 23170 samples (536,848,900,
 under 2^29), one tile of five levels and an empty packet for each

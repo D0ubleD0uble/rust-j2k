@@ -154,17 +154,19 @@ def t1bomb(size: int, cb: int, passes: int, tiles: int = 1) -> bytes:
     return b"\xff\x4f" + siz + cod + qcd + parts + b"\xff\xd9"
 
 
-def shaped_bomb(size: int, cb: int, passes: int, termall: bool = False, last_len: int = 1) -> bytes:
+def shaped_bomb(
+    size: int, cb: int, passes: int, termall: bool = False, last_len: int = 1, seg_len: int = 0
+) -> bytes:
     """A `t1bomb` variant for the memory and time figures in
     docs/resource-bounds.md. With `termall`, the COD code-block style is 0x04
-    (terminate on each pass): each pass is its own codeword segment of zero
-    bytes, which costs about 3 header bits and the decoder about 15 bytes of
-    heap. Otherwise each code-block has one segment of one byte, except the
+    (terminate on each pass): each pass is its own codeword segment of
+    `seg_len` bytes (below 8, so Lblock stays 3). A segment of no bytes costs
+    about 3 header bits and the decoder about 15 bytes of heap. Otherwise each code-block has one segment of one byte, except the
     last, which has `last_len` bytes of zeros. A length of `last_len` needs
     its Lblock raised: Lblock starts at 3 and the length field has
     Lblock + floor(log2(passes)) bits, so one 1 bit per increment and a 0 go
     before the field (B.10.7.1)."""
-    assert 2 <= cb <= 6 and 1 <= passes <= 164
+    assert 2 <= cb <= 6 and 1 <= passes <= 164 and 0 <= seg_len < 8
     cols = rows = ceil(size, 1 << cb)
     levels = tag_tree_nodes(cols, rows)
     bits = Bits()
@@ -184,7 +186,8 @@ def shaped_bomb(size: int, cb: int, passes: int, termall: bool = False, last_len
             if termall:
                 bits.put(0)
                 for _ in range(passes):
-                    bits.put_int(0, 3)  # one pass: 3 + floor(log2(1)) bits
+                    bits.put_int(seg_len, 3)  # one pass: 3 + floor(log2(1)) bits
+                body += passes * seg_len
             elif last_len > 1 and y == rows - 1 and x == cols - 1:
                 k = max(0, last_len.bit_length() - lg - 3)
                 for _ in range(k):
@@ -204,6 +207,28 @@ def shaped_bomb(size: int, cb: int, passes: int, termall: bool = False, last_len
     psot = 12 + 2 + len(data)
     part = struct.pack(">HHHIBB", 0xFF90, 10, 0, psot, 0, 1) + b"\xff\x93" + data
     return b"\xff\x4f" + siz + cod + qcd + part + b"\xff\xd9"
+
+
+def filled_then_termall(size: int, cols: int, rows: int, passes: int, seg_len: int) -> bytes:
+    """`cols` x `rows` tiles of `size` x `size`, each an empty packet but the
+    last, which is the tile of `shaped_bomb(size, 2, passes, termall=True,
+    seg_len=seg_len)`."""
+    one = shaped_bomb(size, 2, passes, termall=True, seg_len=seg_len)
+    # The one tile's tile-part: SOT (12 bytes) to the end, less EOC.
+    sot = one.index(b"\xff\x90")
+    main, part = one[:sot], one[sot:-2]
+    siz = seg(
+        0xFF51,
+        struct.pack(">HIIIIIIIIH", 0, size * cols, size * rows, 0, 0, size, size, 0, 0, 1)
+        + bytes([7, 1, 1]),
+    )
+    main = main[:2] + siz + main[2 + len(siz):]
+    last = cols * rows - 1
+    empty = b"".join(
+        struct.pack(">HHHIBB", 0xFF90, 10, tile, 15, 0, 1) + b"\xff\x93\x00" for tile in range(last)
+    )
+    part = part[:4] + struct.pack(">H", last) + part[6:]
+    return main + empty + part + b"\xff\xd9"
 
 
 # Committed: name -> bytes.
@@ -226,10 +251,22 @@ INCREMENTAL = {
 # figures in docs/resource-bounds.md ("Figures for a decode service").
 MEMORY = {
     # Code-blocks of 4x4 with one pass-terminated segment per pass: 1024^2 is
-    # 2.3 MB and peaks at 97 MiB under AtMost(2^20); 2048^2 is 9.3 MB.
+    # 2.3 MB and peaks at 98 MiB under AtMost(2^20); 2048^2 is 9.3 MB.
     "termall_1024_2_88.j2k": lambda: shaped_bomb(1024, 2, 88, termall=True),
     "termall_2048_2_88.j2k": lambda: shaped_bomb(2048, 2, 88, termall=True),
     "termall_4096_2_88.j2k": lambda: shaped_bomb(4096, 2, 88, termall=True),
+    # The same with segments of one byte. At 65 and 33 passes a block's lists
+    # have just grown, so they keep the most room: these peak the highest a
+    # byte of input.
+    "termall_2048_2_88_1.j2k": lambda: shaped_bomb(2048, 2, 88, termall=True, seg_len=1),
+    "termall_2048_2_65_1.j2k": lambda: shaped_bomb(2048, 2, 65, termall=True, seg_len=1),
+    "termall_2048_2_33_1.j2k": lambda: shaped_bomb(2048, 2, 33, termall=True, seg_len=1),
+    "termall_4096_2_65_1.j2k": lambda: shaped_bomb(4096, 2, 65, termall=True, seg_len=1),
+    # Tiles of 4096^2 with an empty packet each, then a termall tile of
+    # one-byte segments last: its records sit on top of the image the others
+    # filled. 8x4 is 49 MB and 2^29 samples; 8x5 is 96 MB.
+    "filled_8x4_4096_33_1.j2k": lambda: filled_then_termall(4096, 8, 4, 33, 1),
+    "filled_8x5_4096_65_1.j2k": lambda: filled_then_termall(4096, 8, 5, 65, 1),
     # The last code-block of an 8192^2 tile holds 120,000 zero bytes: 196,526
     # bytes that gzip to 944 and decode in 13 s at the defaults.
     "zeros_8192_6_88.j2k": lambda: shaped_bomb(8192, 6, 88, last_len=120000),
