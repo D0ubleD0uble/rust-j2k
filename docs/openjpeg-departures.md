@@ -1104,6 +1104,19 @@ there, followed by the end of the input is refused at once. OpenJPEG
 size inconsistent with stream length"), so the refusal matches the whole
 file's result.
 
+A tile-part that ends inside the input, by its `Psot`, is not cut short, so
+its header is read no further than its `Psot`. A marker or segment that runs
+past it is refused at once, with `strict` on or off, as a `Psot` shorter
+than its header (`Error::Codestream`), whatever its fields hold. That holds
+for a segment length damaged to run past the end of an input that ends in
+an `EOC`: it is refused, not read as a cut. OpenJPEG 2.5.0 refuses such a
+whole file ("Tile part length size inconsistent with stream length"), and
+with `-allow-partial` decodes some of them with that as a warning; it
+refuses the input cut inside the header ("Stream too short"), and a length
+damaged past the end of the input, with or without `-allow-partial`. An
+unrecognized, Part 2 or reserved marker within the `Psot` keeps its own
+refusal, that the markers after it do not reach `SOD` within the tile-part.
+
 For a tile-part whose `Psot` is 0, a segment whose length runs past the end
 of the input is also read as the input ending, even when the file ends in an
 `EOC`. OpenJPEG refuses it ("Marker size inconsistent with stream length").
@@ -1116,7 +1129,8 @@ does not. The report then has no `MissingEoc`, since the input ends in
 
 `tests/tile_part_header_cut.rs` checks each case, on prefixes of a tiled
 fixture with a fault put in its last tile-part (`Psot` 0) and in a middle
-one (`Psot` past the end).
+one (`Psot` past the end). `tests/tile_part_header_past_psot.rs` checks a
+header that runs past its `Psot`, on every prefix.
 
 ## Signed 32-bit components
 
