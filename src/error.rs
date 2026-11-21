@@ -369,29 +369,25 @@ impl Error {
     }
 
     /// This [`Error::Limit`] of a kind that carries it, with the tile it
-    /// refused and the amount that tile needs as data: the figures its
-    /// message names. An error of another kind is returned as it is.
-    pub(crate) fn refused_at(self, tile: u32, amount: u64) -> Error {
+    /// refused and the amount that tile needs, in `unit`, as data: the
+    /// figures its message names. An error of another kind is returned as it
+    /// is.
+    pub(crate) fn refused_at(self, tile: u32, amount: u64, unit: AmountUnit) -> Error {
         match self {
             Error::Limit(mut limit) => {
-                let named = match limit.kind {
-                    LimitKind::CodeBlockWork => {
-                        format!("tile {tile} needs {amount} sample-passes ")
-                    }
-                    LimitKind::TileCodeBlocks => {
-                        format!("tile {tile} holds {amount} code-blocks, ")
-                    }
-                    LimitKind::TilePrecincts => format!("tile {tile} holds {amount} precincts, "),
-                    kind => {
-                        debug_assert!(
-                            matches!(kind, LimitKind::AddressSpace),
-                            "{kind:?} carries no refused_at"
-                        );
-                        return Error::Limit(limit);
-                    }
-                };
-                debug_assert!(limit.message.starts_with(&named), "{}", limit.message);
-                limit.refused_at = Some(RefusedAt { tile, amount });
+                debug_assert!(
+                    match limit.kind {
+                        LimitKind::CodeBlockWork => unit == AmountUnit::SamplePasses,
+                        LimitKind::TileCodeBlocks => unit == AmountUnit::CodeBlocks,
+                        LimitKind::TilePrecincts => unit == AmountUnit::Precincts,
+                        LimitKind::AddressSpace =>
+                            matches!(unit, AmountUnit::CodeBlocks | AmountUnit::Precincts),
+                        _ => false,
+                    },
+                    "{:?} carries no refused_at in {unit:?}",
+                    limit.kind
+                );
+                limit.refused_at = Some(RefusedAt { tile, amount, unit });
                 Error::Limit(limit)
             }
             other => other,
@@ -567,8 +563,12 @@ impl LimitDetail {
     ///
     /// For other kinds it is `None` today, and a later release may set it.
     /// So is it for a `BoundSpent` whose count ended within the whole bound.
-    /// On a target that cannot address the tile's samples, a tile cap
-    /// refusal is [`AddressSpace`](LimitKind::AddressSpace) and gives `None`.
+    ///
+    /// On a target that cannot address the tile's samples, as every tile cap
+    /// refusal is on a 32-bit target, the refusal is
+    /// [`AddressSpace`](LimitKind::AddressSpace) and carries it too, in the
+    /// tile's code-blocks or precincts as [`unit`](RefusedAt::unit) says. The
+    /// refusal of the image's own samples gives `None`.
     ///
     /// The tile pairs with [`TileGrid::tile`](crate::TileGrid::tile) and
     /// [`Region::Tile`](crate::Region::Tile), so a caller can decode around
@@ -614,12 +614,14 @@ impl fmt::Display for LimitDetail {
 }
 
 /// Where a limit refused the input, from
-/// [`LimitDetail::refused_at`]: the tile, and the amount it needs.
+/// [`LimitDetail::refused_at`]: the tile, the amount it needs, and the unit
+/// of that amount.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct RefusedAt {
     tile: u32,
     amount: u64,
+    unit: AmountUnit,
 }
 
 impl RefusedAt {
@@ -629,18 +631,34 @@ impl RefusedAt {
         self.tile
     }
 
-    /// The amount the tile needs, in the unit of the limit's
-    /// [`kind`](LimitDetail::kind): sample-passes for
-    /// [`CodeBlockWork`](LimitKind::CodeBlockWork) (the work of the
-    /// code-blocks this decode reads under its options, the reduction,
-    /// region and components, not of the whole tile), code-blocks for
-    /// [`TileCodeBlocks`](LimitKind::TileCodeBlocks) and precincts for
-    /// [`TilePrecincts`](LimitKind::TilePrecincts). The last two count the
-    /// whole tile, every component and resolution, whatever the reduction,
-    /// region or components.
+    /// The amount the tile needs, in the [`unit`](Self::unit) this gives.
+    /// Code-blocks and precincts count the whole tile, every component and
+    /// resolution, whatever the reduction, region or components; the
+    /// sample-passes of the code-block work bound are only those of the
+    /// code-blocks this decode reads under its options.
     pub fn amount(&self) -> u64 {
         self.amount
     }
+
+    /// What [`amount`](Self::amount) counts. It does not depend on the
+    /// limit's [`kind`](LimitDetail::kind): an
+    /// [`AddressSpace`](LimitKind::AddressSpace) refusal of a tile counts
+    /// code-blocks or precincts.
+    pub fn unit(&self) -> AmountUnit {
+        self.unit
+    }
+}
+
+/// What the [`amount`](RefusedAt::amount) of a [`RefusedAt`] counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AmountUnit {
+    /// Sample-passes, the work of the code-block work bound.
+    SamplePasses,
+    /// Code-blocks, counted over the whole tile.
+    CodeBlocks,
+    /// Precincts, counted over the whole tile.
+    Precincts,
 }
 
 /// Which limit an [`Error::Limit`] names.

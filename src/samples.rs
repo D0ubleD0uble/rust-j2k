@@ -225,6 +225,10 @@ pub(crate) fn over_tile(
         crate::LimitKind::TilePrecincts => precincts,
         _ => blocks,
     };
+    let unit = match kind {
+        crate::LimitKind::TilePrecincts => crate::AmountUnit::Precincts,
+        _ => crate::AmountUnit::CodeBlocks,
+    };
     let (noun, limit, per, floor) = match kind {
         crate::LimitKind::TilePrecincts => (
             "precincts",
@@ -256,7 +260,8 @@ pub(crate) fn over_tile(
                 "{head}, and the sample limit that would admit it is past what this target \
                  can address{tail}"
             ),
-        );
+        )
+        .refused_at(tile, count, unit);
     }
     // The precincts are checked first, so only a precinct refusal can find
     // the code-blocks over their cap too.
@@ -270,7 +275,8 @@ pub(crate) fn over_tile(
                 "{head}, and its {blocks} code-blocks need a sample limit past what this \
                  target can address (at most {most} code-blocks a tile)"
             ),
-        );
+        )
+        .refused_at(tile, count, unit);
     }
     let other = if blocks_over {
         format!(
@@ -287,7 +293,7 @@ pub(crate) fn over_tile(
                 "{head} under `SampleLimit::AtMost({n})` (see `DecodeOptions::sample_limit`){other}"
             ),
         )
-        .refused_at(tile, count);
+        .refused_at(tile, count, unit);
     }
     // The sample limit that admits the code-blocks too: within what the
     // target addresses, as both counts are by here.
@@ -305,7 +311,7 @@ pub(crate) fn over_tile(
         cap.allowed,
         cap.default,
     );
-    refusal.refused_at(tile, count)
+    refusal.refused_at(tile, count, unit)
 }
 
 /// " at resolution reduction `reduction`", or nothing at full resolution:

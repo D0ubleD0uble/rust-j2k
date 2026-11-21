@@ -315,8 +315,8 @@ returning an error. Damage can also look like a limit, since one flipped bit
 in the header can declare an absurd size, so don't lift the limits on that
 evidence alone. The error says which limit refused the file and what to
 raise it to, as data: `LimitDetail::kind` and `LimitDetail::retry_with`.
-A code-block work or tile cap refusal also gives the tile and the amount it
-needs (`LimitDetail::refused_at`). `DecodeOptions::raised_for` sets that limit
+A code-block work or tile cap refusal also gives the tile, the amount it
+needs and the amount's unit (`LimitDetail::refused_at`), on every target. `DecodeOptions::raised_for` sets that limit
 for you:
 
 ```rust

@@ -1513,7 +1513,11 @@ fn decode_codestream(
                              decode them on their own, or start a new decoder"
                         ),
                     )
-                    .refused_at(tile.index, work));
+                    .refused_at(
+                        tile.index,
+                        work,
+                        crate::AmountUnit::SamplePasses,
+                    ));
                 }
                 *own += work;
                 continue;
