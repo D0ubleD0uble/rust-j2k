@@ -5240,9 +5240,10 @@ fn poc(volumes: usize) -> Vec<u8> {
 /// above and its error checked, so a shape that stops reaching its branch
 /// is seen: restated and differing values in a later tile-part, `POC`
 /// volumes joined over the tile-parts past the budget, a tile header at
-/// fault behind tiles left out with `strict` off (the full check numbers a
-/// tile by its place among those found), the two packed-header faults, the
-/// `TPsot == TNsot` count correction, and the chain's own faults.
+/// fault behind tiles left out with `strict` off (the full check names a
+/// tile by its index, not its place among those found), the two
+/// packed-header faults, the `TPsot == TNsot` count correction, and the
+/// chain's own faults.
 #[test]
 fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
     use synth::tile_part as part;
@@ -5484,7 +5485,7 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
                 ],
                 &eoc,
             ),
-            "Unsupported(\"tile 1 codes component 0 with the Irreversible97 wavelet",
+            "Unsupported(\"tile 3 codes component 0 with the Irreversible97 wavelet",
         ),
         (
             "the first tile's header at fault",

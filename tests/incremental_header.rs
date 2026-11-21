@@ -456,9 +456,11 @@ fn tile_parts(tiles: u32, main: &[u8], parts: &[(u16, u8, u8, Vec<u8>)]) -> Vec<
 ///   later tile-parts that restate it, and a short one, read again for
 ///   each, with a later `COD` that differs;
 /// - bytes after a tile-part that are neither `SOT` nor `EOC`;
-/// - tile headers at fault: one, one under a lower tile at fault fed
-///   later, and one whose `POC` volumes, joined over its tile-parts, take
-///   it in place of another, gathered on a call whose step is taken back.
+/// - tile headers at fault: one, one before a lower tile at fault, which
+///   does not take its place, and one before or after a tile whose `POC`
+///   volumes, joined over its tile-parts, go over the budget: the first
+///   fault in the input is the error, as the stopped step is taken back
+///   and read again on each call.
 #[test]
 fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
     let rescue = synth::seg(0xFF52, &synth::cod_body(1, 1, 4, 0));
@@ -560,8 +562,8 @@ fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
         "Err(Marker(\"component 0 carries 4 quantization step entries",
     ));
     // Tile 3's own `COD` of two levels, and tile 1's of three, whose
-    // tile-parts come last: the first tile at fault turns from tile 3 to
-    // tile 1 once tile 1 is fed, and its header is gathered afresh.
+    // tile-parts come last: tile 3's fault comes first in the input, so it
+    // stays the error once tile 1 is fed.
     let three = synth::seg(0xFF52, &synth::cod_body(1, 3, 4, 0));
     let mut parts: Vec<_> = two_each(&|_, _| 2, &nothing)
         .into_iter()
@@ -575,7 +577,7 @@ fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
     cases.push((
         "a lower tile at fault later",
         tile_parts(8, &[], &parts),
-        "Err(Marker(\"component 0 carries 4 quantization step entries but its 3",
+        "Err(Marker(\"component 0 carries 4 quantization step entries but its 2",
     ));
     // 20 `POC` volumes in the main header, and 4 in each later tile-part of
     // tile 1: the tile goes over 32 at its fourth tile-part, and the volumes
@@ -606,9 +608,9 @@ fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
     // 25 `POC` volumes in the main header; tile 2 refused; tile 1's own
     // `QCD` at fault, of one step for one level; tile 0's later tile-parts
     // with 4, 3, 2 and 1 volumes of its own, which take it over 32 at the
-    // third and make it the first tile at fault in place of tile 1. Its
-    // header is gathered on the call that stops in that tile-part, which
-    // that call's own step then takes back.
+    // third. Tile 1's first tile-part comes first, so its fault is the
+    // error; with it after tile 0's third later tile-part, tile 0's volumes
+    // are, and a call that stops in that tile-part takes its step back.
     let orders = |volumes: usize| {
         let mut body = Vec::new();
         for order in 0..volumes {
@@ -622,7 +624,7 @@ fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
     ]
     .concat();
     let parts = [
-        (1, 0, 3, one_step),
+        (1, 0, 3, one_step.clone()),
         (2, 0, 1, Vec::new()),
         (0, 0, 5, rescue.clone()),
         (0, 1, 5, orders(4)),
@@ -633,10 +635,26 @@ fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
         (0, 4, 5, orders(1)),
     ];
     cases.push((
-        "the first at fault moves to a tile of POC volumes",
+        "a tile at fault before a tile of POC volumes",
+        tile_parts(3, &orders(25), &parts),
+        "Err(Marker(\"component 0 carries 1 quantization step entries",
+    ));
+    let parts = [
+        (2, 0, 1, Vec::new()),
+        (0, 0, 5, rescue.clone()),
+        (0, 1, 5, orders(4)),
+        (0, 2, 5, orders(3)),
+        (0, 3, 5, orders(2)),
+        (1, 0, 3, one_step),
+        (0, 4, 5, orders(1)),
+        (1, 1, 3, Vec::new()),
+        (1, 2, 3, Vec::new()),
+    ];
+    cases.push((
+        "a tile of POC volumes before a tile at fault",
         tile_parts(3, &orders(25), &parts),
         "Err(Limit(LimitDetail { kind: PocVolumes, retry_with: None, refused_at: None, \
-         message: \"the `POC` markers declare 35",
+         message: \"the `POC` markers declare 34",
     ));
     let mut junk = tile_parts(8, &[], &two_each(&|_, _| 2, &nothing));
     let end = junk.len() - 2;

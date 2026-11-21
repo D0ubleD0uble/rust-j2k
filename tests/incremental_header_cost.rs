@@ -181,9 +181,9 @@ fn header_after_each_feed_of_a_refused_tile_costs_about_one_walk() {
 }
 
 /// The same with tile 1's own header at fault, which the decode's parse
-/// refuses: the header of that tile is gathered once and kept with the
-/// walk. The calls at 1 MiB took 18.0 s with a walk from the start for it
-/// on each.
+/// refuses: the walk stops in tile 1's first tile-part and is kept there.
+/// The calls at 1 MiB took 18.0 s with a walk from the start for that
+/// tile's header on each, and take about 1.3 ms.
 #[test]
 #[ignore = "builds a 235 MB file; run in release"]
 fn header_after_each_feed_of_a_tile_header_at_fault_costs_about_one_walk() {
