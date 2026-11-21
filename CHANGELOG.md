@@ -29,8 +29,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `WorkLimit::AtMost(n)` on `DecodeOptions::sample_limit` sets a fixed
   ceiling of `n` samples, whatever the input's length or padding: at most
   `4·n` bytes of output, and sample buffers of no more than about 3.2 times
-  that. The input and the tile-part parse (under 1 KiB for each tile the
-  input carries, at most about 52 times the input plus 128 KiB) are on top.
+  that. The input, the tile-part parse (under 1 KiB for each tile the
+  input carries, at most about 52 times the input plus 128 KiB) and one
+  tile's code-block and precinct records are on top. The records do not
+  shrink with `n`: a tile may hold at least 2^20 code-blocks and 2^18
+  precincts at any ceiling, estimated at about 0.8 GiB. Below about
+  `n` = 2^26 they, not the samples, set the peak. Code-block segment
+  records add up to about 350 bytes for each byte of input (estimated:
+  about 130 bytes a segment, one segment per 3 header bits; measured 11.2
+  GiB for a 37 MB file under `AtMost(2^24)`).
   It holds every count the default limit holds (the tiles a region reads, in
   every component the codestream codes, a palette's expanded channels and
   sRGB output). `read_header_with` refuses the sample count as the decode
@@ -54,6 +61,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The refusal of a Part 2 marker names `DCO`, `VMS`, `DFS`, `ADS` and `ATK`
+  (0xFF70 to 0xFF73 and 0xFF79) as it does the others, where it called them
+  unrecognized. The error variant is unchanged (`Unsupported`) (#579).
+- `docs/openjpeg-departures.md` records two refusals OpenJPEG does not make:
+  an unknown marker in the main header, and a color transform over mixed
+  wavelets (#579).
 - `IncrementalDecoder::refine` returns `Result<Refined>` in place of
   `Result<Option<Image>>`. To migrate, call `.image()`:
   `decoder.refine()?.image()` is the `Option<Image>` it returned before.
@@ -179,6 +192,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tile-part the input holds whole (a `Psot` of 0 is never whole), so
   `IncrementalDecoder::header` gives the error once the tile-part is
   whole (#578).
+- With `strict` off, a fault in the header of a tile-part that runs to the
+  end of the input, a last one with `Psot` 0 or one whose `Psot` runs past
+  the end, is refused with the error a strict decode gives when the input
+  holds the marker segment the fault is in. The decode returned `Ok`
+  without the tile-part, as if the input had been cut inside its header.
+  An unrecognized, Part 2 or reserved marker is refused once the input
+  holds the header's markers through `SOD`, as the error depends on them.
+  A header the input ends inside still decodes, with the loss in the
+  report. Files that change: those with such a header holding a malformed
+  segment, a marker not allowed there, or a segment length that runs past
+  `SOD` within the input. Each was refused with `strict` on, and is now
+  refused with `strict` off too, as `opj_decompress -allow-partial`
+  refuses it (#574).
+- With `strict` off, a last tile-part with `Psot` 0 that the input ends
+  inside the header of is reported as `ReportEntry::TruncatedTilePart`,
+  with `declared` 0. It was dropped with only `MissingEoc`, and that
+  `MissingEoc` is no longer given when the input ends in `FF D9` (#574).
 - A tile over both the precinct and the code-block cap is still refused for
   its precincts (`LimitKind::TilePrecincts`), but `retry_with` now names a
   `WorkLimit::Raised` factor that admits its code-blocks too, and the

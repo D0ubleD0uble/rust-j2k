@@ -1755,6 +1755,41 @@ fn a_tile_part_header_maps_an_unread_marker_as_the_main_header_does() {
     }
 }
 
+/// Every Part 2 marker is named in the message, in either header, and stays
+/// `Unsupported` (#579). `DCO`, `VMS`, `DFS`, `ADS` and `ATK` sit outside the
+/// `MCT..=CBD` run and were once reported as an unrecognized code.
+#[test]
+fn each_part_2_marker_is_named_in_the_message() {
+    for (name, code) in [
+        ("DCO", 0xFF70u16),
+        ("VMS", 0xFF71),
+        ("DFS", 0xFF72),
+        ("ADS", 0xFF73),
+        ("MCT", 0xFF74),
+        ("MCC", 0xFF75),
+        ("NLT", 0xFF76),
+        ("MCO", 0xFF77),
+        ("CBD", 0xFF78),
+        ("ATK", 0xFF79),
+    ] {
+        let named = format!("`{name}` ({code:#06X}) is a JPEG 2000 Part 2 marker");
+        let in_main = err(&header_with(&seg(code, &[0, 0])));
+        assert!(
+            matches!(&in_main, Error::Unsupported(m) if m.message().contains(&named)),
+            "{name} in the main header: got {in_main:?}"
+        );
+        let in_tile = perr(&assemble_with_tile_markers(
+            &default_header(),
+            &[seg(code, &[0, 0])],
+            &[0],
+        ));
+        assert!(
+            matches!(&in_tile, Error::Unsupported(m) if m.message().contains(&named)),
+            "{name} in a tile-part header: got {in_tile:?}"
+        );
+    }
+}
+
 /// A damaged length in a tile-part header can step past `SOD` into the
 /// packet data, where `0xFF` and a byte below `0x90` may follow each other.
 /// Read there, such a pair is damage, not a marker this decoder does not
@@ -2144,15 +2179,15 @@ fn reserved_markers_carry_no_segment() {
 /// the packet data means, so silently ignoring it would risk a wrong image.
 #[test]
 fn unknown_marker_segments_are_walked_then_reported_unsupported() {
-    // Codes this decoder names — the Part 2 block (0xFF74..=0xFF78) among them —
+    // Codes this decoder names — the Part 2 block (0xFF70..=0xFF79) among them —
     // reject under their own message, checked in the reject matrix. These are the
     // ones it genuinely does not recognize, which the walk must still step over.
     for code in [
         0xFF01u16, // no part of the standard we implement
         0xFF2F,    // just below the reserved segment-less range
         0xFF40,    // just above it
-        0xFF73,    // just below the Part 2 block
-        0xFF79,    // just above the Part 2 block
+        0xFF6F,    // just below the Part 2 block
+        0xFF7A,    // just above the Part 2 block
     ] {
         let bytes = header_with(&seg(code, &[1, 2, 3, 4]));
 
@@ -2749,10 +2784,15 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
         rows.push((name, error, Variant::Codestream));
     }
 
-    // Every JPEG 2000 Part 2 codestream marker (0xFF74..=0xFF78): out of the
+    // Every JPEG 2000 Part 2 codestream marker (0xFF70..=0xFF79): out of the
     // Part 1 subset, so each is an `Unsupported` feature the moment it appears,
     // in either header, never half-parsed as Part 1 (issue #78).
     for (name, code) in [
+        ("DCO", marker::DCO),
+        ("VMS", marker::VMS),
+        ("DFS", marker::DFS),
+        ("ADS", marker::ADS),
+        ("ATK", marker::ATK),
         ("MCT", marker::MCT),
         ("MCC", marker::MCC),
         ("NLT", marker::NLT),
@@ -5218,8 +5258,121 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
     let other_qcd = seg(0xFF5C, &synth::qcd_none_body(1, &[8]));
     let coc = seg(0xFF53, &[0, 0, 0, 1, 1, 0, 1]);
     let all = |tile: u16| part(tile, 0, 1, &[], &[]);
+    // A last tile-part of tile 3 with `Psot` 0, `extra` in its header and
+    // `data` after its `SOD`.
+    let last = |extra: &[u8], data: &[u8]| {
+        let mut bytes = part(3, 0, 1, extra, data);
+        bytes[6..10].fill(0);
+        bytes
+    };
+    // The same, with the input ending inside a `COM` in its header.
+    let cut_last = {
+        let mut bytes = last(&[0xFF, 0x64, 0, 16, 1, 2, 3], &[]);
+        bytes.truncate(bytes.len() - 2);
+        bytes
+    };
+    // A tile-part of tile 3 whose `Psot` runs 100 bytes past the input.
+    let past = |extra: &[u8], data: &[u8]| {
+        let mut bytes = part(3, 0, 1, extra, data);
+        let psot = u32::try_from(bytes.len() + 100).unwrap();
+        bytes[6..10].copy_from_slice(&psot.to_be_bytes());
+        bytes
+    };
     // (name, strict, bytes, the start of the error, or "" for none)
     let cases: Vec<(&str, bool, Vec<u8>, &str)> = vec![
+        (
+            "an unrecognized marker in a whole header of a cut tile-part",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), past(&seg(0xFF7F, &[]), &[1, 2])],
+                &[],
+            ),
+            "Unsupported(\"unrecognized marker 0xFF7F in a tile-part header",
+        ),
+        (
+            "a whole empty COD, then the input ends in a `Psot` 0 header",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), {
+                    let mut bytes = last(&[0xFF, 0x52, 0, 2, 0xFF, 0x64, 0, 16, 1], &[]);
+                    bytes.truncate(bytes.len() - 2);
+                    bytes
+                }],
+                &[],
+            ),
+            "Codestream(\"truncated marker segment\")",
+        ),
+        (
+            "a whole empty COD, then the input ends in a cut tile-part header",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), {
+                    let mut bytes = past(&[0xFF, 0x52, 0, 2, 0xFF, 0x64, 0, 16, 1], &[]);
+                    bytes.truncate(bytes.len() - 2);
+                    bytes
+                }],
+                &[],
+            ),
+            "Codestream(\"truncated marker segment\")",
+        ),
+        (
+            "a cut tile-part header the input ends inside",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), {
+                    let mut bytes = past(&[0xFF, 0x64, 0, 16, 1, 2, 3], &[]);
+                    bytes.truncate(bytes.len() - 2);
+                    bytes
+                }],
+                &[],
+            ),
+            "",
+        ),
+        (
+            "an unrecognized marker in a whole `Psot` 0 header",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), last(&seg(0xFF7F, &[]), &[])],
+                &eoc,
+            ),
+            "Unsupported(\"unrecognized marker 0xFF7F in a tile-part header",
+        ),
+        (
+            "a reserved marker in a whole `Psot` 0 header",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), last(&[0xFF, 0x30], &[])],
+                &eoc,
+            ),
+            "Unsupported(\"reserved marker 0xFF30 in a tile-part header",
+        ),
+        (
+            "a `Psot` 0 header segment whose length runs past `SOD`",
+            false,
+            grid_of_four(
+                &[],
+                &[
+                    all(0),
+                    all(1),
+                    all(2),
+                    last(&[0xFF, 0x64, 0, 4], &[0x12, 0x34]),
+                ],
+                &eoc,
+            ),
+            "Codestream(\"expected a marker in a tile-part header, found 0x1234\")",
+        ),
+        (
+            "a `Psot` 0 header the input ends inside",
+            false,
+            grid_of_four(&[], &[all(0), all(1), all(2), cut_last], &[]),
+            "",
+        ),
         (
             "restated COD and QCD",
             true,
