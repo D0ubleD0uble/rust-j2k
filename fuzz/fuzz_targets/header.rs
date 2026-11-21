@@ -258,7 +258,7 @@ fn refusal_of(
                 LimitKind::TilePrecincts | LimitKind::TileCodeBlocks | LimitKind::AddressSpace
             ) =>
         {
-            let tile = refused_tile(limit.message())?;
+            let tile = limit.refused_at()?.tile();
             Some((
                 tile,
                 options.raised_for(limit).unwrap_or_else(|| options.clone()),
@@ -297,11 +297,4 @@ fn reduced_tile(message: &str) -> Option<u32> {
         .strip_prefix("resolution reduction ")?
         .rsplit_once(" in tile ")?;
     tile.parse().ok()
-}
-
-/// The tile a tile cap refusal's message names: "tile T holds ...".
-fn refused_tile(message: &str) -> Option<u32> {
-    let rest = message.strip_prefix("tile ")?;
-    let (tile, rest) = rest.split_once(' ')?;
-    rest.starts_with("holds ").then(|| tile.parse().ok())?
 }

@@ -12,7 +12,9 @@
 #[path = "support/synth.rs"]
 mod synth;
 
-use rust_j2k::{DecodeOptions, Error, LimitKind, SampleLimit, decode_with, read_header_with};
+use rust_j2k::{
+    AmountUnit, DecodeOptions, Error, LimitKind, SampleLimit, decode_with, read_header_with,
+};
 
 /// One 520 x 512 tile with no wavelet levels and 1x1 precincts: 266,240 of
 /// them, and an empty packet each.
@@ -49,7 +51,64 @@ fn a_tile_over_the_address_space_is_refused_with_nothing_to_retry() {
             assert_eq!(refusal.kind(), LimitKind::AddressSpace, "{refusal}");
             assert!(!refusal.kind().is_adjustable(), "{refusal}");
             assert_eq!(refusal.retry_with(), None, "{refusal}");
+            let at = refusal.refused_at().expect("the tile and its precincts");
+            assert_eq!(
+                (at.tile(), at.amount(), at.unit()),
+                (0, 266_240, AmountUnit::Precincts),
+                "{refusal}"
+            );
         }
+    }
+}
+
+/// A JP2 file of two tiles, the second over the code-block cap: 7200 x 7168
+/// samples in 4x4 code-blocks is 3,225,600 of them. The first tile is 16
+/// samples wide, so the image stays within the default sample limit on a
+/// 64-bit target.
+fn two_tiles_the_second_over_the_code_block_cap() -> Vec<u8> {
+    let (side, height) = (7200, 7168);
+    let codestream = synth::empty_tiles(
+        [2 * side, height, side - 16, 0, side, height, 0, 0],
+        0,
+        0,
+        &[],
+        &[1, 1],
+        0,
+    );
+    synth::jp2_file(
+        &[synth::ihdr_for(&codestream), synth::bx(b"colr", &synth::colr_enum(17))],
+        &[],
+        &codestream,
+        &[],
+    )
+}
+
+/// The tile, its amount and the unit come as data on every target: on a
+/// 64-bit one as `TileCodeBlocks`, on a 32-bit one as `AddressSpace`, whose
+/// tile cap never rises above its floor.
+#[test]
+fn a_tile_over_the_code_block_cap_gives_its_tile_amount_and_unit() {
+    let bytes = two_tiles_the_second_over_the_code_block_cap();
+    let options = DecodeOptions::default();
+    for result in [
+        read_header_with(&bytes, &options).map(|_| ()),
+        decode_with(&bytes, &options).map(|_| ()),
+    ] {
+        let Err(Error::Limit(refusal)) = result else {
+            panic!("{result:?}");
+        };
+        let kind = if cfg!(target_pointer_width = "64") {
+            LimitKind::TileCodeBlocks
+        } else {
+            LimitKind::AddressSpace
+        };
+        assert_eq!(refusal.kind(), kind, "{refusal}");
+        let at = refusal.refused_at().expect("the tile and its code-blocks");
+        assert_eq!(
+            (at.tile(), at.amount(), at.unit()),
+            (1, 3_225_600, AmountUnit::CodeBlocks),
+            "{refusal}"
+        );
     }
 }
 

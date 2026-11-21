@@ -8,7 +8,7 @@
 
 use rust_j2k::fuzz::RepeatWork;
 use rust_j2k::{
-    Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
+    AmountUnit, Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
     ColorOutput, ColorSpace, ColorSpecification, Component, ComponentInfo, DecodeOptions,
     DecodeReport, Error, ErrorDetail, FileType, Header, Image, ImageHeader, IncrementalDecoder,
     IprBox, Jp2Metadata, LimitDetail, LimitKind, MappingKind, Palette, PaletteColumn, Raise, Ratio,
@@ -32,6 +32,7 @@ const _: () = {
     holds::<LimitDetail>();
     holds::<LimitKind>();
     holds::<RefusedAt>();
+    holds::<AmountUnit>();
     holds::<DecodeOptions>();
     holds::<DecodeReport>();
     holds::<ReportEntry>();

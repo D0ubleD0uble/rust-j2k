@@ -430,8 +430,9 @@ with `--dir=<target>::<target>`.
 Tests that differ on a 32-bit target say so where they are. Most of the
 differences are in the tile caps: the sample limit tops out at 2^29 - 1
 samples there, so a tile over a cap's floor is currently `AddressSpace` with
-nothing to retry with and no `refused_at`, where a 64-bit target gives
-`TileCodeBlocks` or `TilePrecincts` with a `Raised` retry. These tests keep an
+nothing to retry with, where a 64-bit target gives
+`TileCodeBlocks` or `TilePrecincts` with a `Raised` retry. Both give the
+same `refused_at`: the tile, the amount and its unit. These tests keep an
 expectation for each target, in `tests/tile_geometry_cap.rs`,
 `tests/work_limit.rs`, `tests/incremental.rs` and
 `tests/fuzz_seed_outcomes.rs`. What is gated to 64-bit has no 32-bit meaning

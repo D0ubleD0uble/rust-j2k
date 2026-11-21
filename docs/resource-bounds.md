@@ -13,8 +13,10 @@ is done. The error's `LimitDetail` says which cap it was (`kind()`, a
 option's type: a `SampleLimit` for the sample limit and the tile caps it
 sets, a `WorkLimit` for a work bound. A code-block work refusal, and
 a refusal of a tile over the cap on code-blocks or precincts, also gives the
-tile refused and the amount it needs (`refused_at()`: sample-passes,
-code-blocks or precincts by `kind()`). Under a sample
+tile refused and the amount it needs, with its unit (`refused_at()`: a
+`RefusedAt` with `tile()`, `amount()` and `unit()`, an `AmountUnit` of
+sample-passes, code-blocks or precincts). Where such a refusal is
+`AddressSpace` (see below), it gives them too. Under a sample
 limit of `SampleLimit::AtMost` it gives no factor to retry with (see
 [A fixed ceiling](#a-fixed-ceiling)).
 For the samples it is the smallest factor that admits the image. For the two
@@ -49,8 +51,9 @@ refused with `Limit` of kind `TileCodeBlocks` or `TilePrecincts`, which
 `raised_for` raises through `sample_limit`
 ([Code-blocks and precincts per tile](#code-blocks-and-precincts-per-tile)).
 Where the sample limit that would admit the tile is past what the target
-can address, the kind is `AddressSpace` instead. On a 32-bit target, where
-that is 2^29 - 1 samples, every tile past a cap is refused so.
+can address, the kind is `AddressSpace` instead, with nothing to retry with
+and the same `refused_at`. On a 32-bit target, where that is 2^29 - 1
+samples, every tile past a cap is refused so.
 
 A few fixed guards also return `Limit`, and no option lifts them: 32 POC
 progression volumes, 30 coded bit-planes per code-block, and an image too

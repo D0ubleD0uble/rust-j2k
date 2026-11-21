@@ -107,6 +107,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a later release may set it. It is also `None` for a `BoundSpent` whose
   count found no tile the whole bound refuses, where only the work the
   earlier refines spent refused it (#493, #513).
+- `RefusedAt` has a `unit()`, an `AmountUnit` (`SamplePasses`, `CodeBlocks`
+  or `Precincts`), so `amount()` no longer depends on the limit's `kind()`.
+  A tile over a cap that is refused as `AddressSpace` now carries
+  `refused_at` too, as every tile cap refusal does on a 32-bit target, where
+  it was `None` (#613).
 
 ### Changed
 
