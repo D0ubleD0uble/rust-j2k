@@ -388,20 +388,26 @@ fn jp2_with_ihdr(width: u32, height: u32, codestream: &[u8]) -> Vec<u8> {
     .concat()
 }
 
-/// That the header of `file`, which ends at a bare `SOT` marker, reads. On a
-/// 32-bit target that read gives a `Codestream` error for the cut marker
-/// where a 64-bit one reads (the precedence between the two is #419); the
-/// skip these tests check counts the declared samples either way.
-fn assert_reads_or_ends_in_a_bare_sot(file: &[u8], options: &rust_j2k::DecodeOptions) {
-    let header = rust_j2k::read_header_with(file, options).map(|_| ());
+/// That the header of `file`, which ends at a bare `SOT` marker, reads on a
+/// 64-bit target. On a 32-bit one the tile is over the cap even under
+/// `Unlimited`, so the read parses the marker and gives the decode's one
+/// error, `truncated marker segment` (`tests/error_precedence.rs`).
+fn assert_reads_or_is_a_cut_sot(file: &[u8], options: &rust_j2k::DecodeOptions) {
     if cfg!(target_pointer_width = "64") {
+        let header = rust_j2k::read_header_with(file, options).map(|_| ());
         assert!(header.is_ok(), "{header:?}");
     } else {
-        assert!(
-            matches!(header, Ok(()) | Err(rust_j2k::Error::Codestream(_))),
-            "{header:?}"
-        );
+        assert_is_a_cut_sot(file, options);
     }
+}
+
+/// That the header read of `file` gives the cut-`SOT` error.
+fn assert_is_a_cut_sot(file: &[u8], options: &rust_j2k::DecodeOptions) {
+    let header = rust_j2k::read_header_with(file, options).map(|_| ());
+    assert!(
+        matches!(&header, Err(rust_j2k::Error::Codestream(d)) if d.message() == "truncated marker segment"),
+        "{header:?}"
+    );
 }
 
 #[test]
@@ -418,7 +424,7 @@ fn the_fuzz_skip_counts_siz_when_the_ihdr_box_disagrees() {
     assert!(!over_once(&under));
     // A box layer that agrees reads, and is over.
     let agrees = jp2_with_ihdr(SIDE, SIDE + 1, &header_only(SIDE, SIDE + 1));
-    assert_reads_or_ends_in_a_bare_sot(&agrees, &opts);
+    assert_reads_or_is_a_cut_sot(&agrees, &opts);
     assert!(over_once(&agrees));
     // Sub-sampling and an image offset shrink the count the way the decoder
     // sees it: 2 x 2 sub-sampling of 2 * SIDE x (2 * SIDE + 2) is SIDE x
@@ -505,11 +511,6 @@ fn the_fuzz_skip_counts_every_siz_component_of_a_palettized_file() {
     assert!(over_once(&jp2));
 }
 
-// Gated to 64-bit: the count reads the header for the palette's channels, and
-// on a 32-bit target the header of this file, which ends at a bare `SOT`
-// marker, is a `Codestream` error (the precedence between the two is #419),
-// so only `SIZ` is counted.
-#[cfg(target_pointer_width = "64")]
 #[test]
 fn the_fuzz_skip_counts_the_header_when_a_palette_makes_more_channels() {
     let bx = |kind: &[u8; 4], body: &[u8]| {
@@ -546,13 +547,27 @@ fn the_fuzz_skip_counts_the_header_when_a_palette_makes_more_channels() {
     ]
     .concat();
     let opts = rust_j2k::DecodeOptions::default().with_sample_limit(rust_j2k::WorkLimit::Unlimited);
-    let header = rust_j2k::read_header_with(&jp2, &opts).expect("the palette file reads");
-    assert_eq!(header.components.len(), 3);
-    assert_eq!(
-        budget::declared(&jp2),
-        3 * u128::from(budget::MAX_FUZZ_SAMPLES) / 2
-    );
-    assert!(over_once(&jp2));
+    if cfg!(target_pointer_width = "64") {
+        let header = rust_j2k::read_header_with(&jp2, &opts).expect("the palette file reads");
+        assert_eq!(header.components.len(), 3);
+        assert_eq!(
+            budget::declared(&jp2),
+            3 * u128::from(budget::MAX_FUZZ_SAMPLES) / 2
+        );
+        assert!(over_once(&jp2));
+    } else {
+        // On a 32-bit target the tile is over the cap even under `Unlimited`,
+        // so the header read parses the file's bare `SOT` and gives that
+        // error (`tests/error_precedence.rs`). The count takes the header's
+        // channels only from a header that reads, so it is `SIZ`'s alone and
+        // under the budget.
+        assert_is_a_cut_sot(&jp2, &opts);
+        assert_eq!(
+            budget::declared(&jp2),
+            u128::from(budget::MAX_FUZZ_SAMPLES) / 2
+        );
+        assert!(!over_once(&jp2));
+    }
 }
 
 #[test]
