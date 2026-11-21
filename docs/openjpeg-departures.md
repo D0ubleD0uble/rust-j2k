@@ -662,14 +662,15 @@ bit 14 cleared, or both, to the same samples as the file as made (measured on
 
 Three `CAP` fields bound what follows, and this decoder holds the codestream
 to them. A MIXED style or an `RGN` that `CAP` rules out is `Marker`; a
-magnitude past the bound is `Codestream`, since it is in the coded data. `Ccap15` bits 15-14 at `10` (HTDECLARED, T.814
-A.3.2) say no code-block style sets bit 7, so a MIXED style in the main header
-or a tile-part header is refused. At `00` (HTONLY), A.3.2's note allows a
-MIXED style, and every block of it is read as an HT block. `Ccap15` bit 12
-clear says no `RGN` marker is present (T.814 A.3.4), so an `RGN` in the main
-header, before or after the `CAP`, or in a tile-part header is refused. Bits 0 to 4 give the magnitude bound `B` (A.3.7),
-and an HT cleanup magnitude at or past `2^B` (or the per-level bound 8.7.3 gives
-an irreversible subband) is refused.
+magnitude past the bound is `Codestream`, since it is in the coded data.
+`Ccap15` bits 15-14 at `10` (HTDECLARED, T.814 A.3.2) say no code-block style
+sets bit 7, so a MIXED style in the main header or a tile-part header is
+refused. At `00` (HTONLY), A.3.2's note allows a MIXED style, and every block
+of it is read as an HT block. `Ccap15` bit 12 clear says no `RGN` marker is
+present (T.814 A.3.4), so an `RGN` in the main header, before or after the
+`CAP`, or in a tile-part header is refused. Bits 0 to 4 give the magnitude
+bound `B` (A.3.7), and an HT cleanup magnitude at or past `2^B` (or the
+per-level bound 8.7.3 gives an irreversible subband) is refused.
 
 OpenJPEG treats the two refusals differently. Past the magnitude bound it decodes
 on. An `RGN` on HT code-blocks it refuses ("We do not support ROI in decoding

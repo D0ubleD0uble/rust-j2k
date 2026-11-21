@@ -1972,6 +1972,26 @@ fn a_ppt_of_lppt_3_is_marker() {
     }
 }
 
+/// A `PPM` record whose `Nppm`, or the chunk it counts, runs past the joined
+/// `PPM` payload is `Codestream`, with its own message: the segments are
+/// whole, so this is not a segment too short for its fields.
+#[test]
+fn a_ppm_chunk_past_the_ppm_payload_is_codestream() {
+    for body in [vec![0u8, 0, 0, 0, 9, 0xC4], vec![0u8, 0, 0, 0]] {
+        let bytes = assemble_with_tile_markers(
+            &[default_header(), vec![seg(marker::PPM, &body)]].concat(),
+            &[],
+            &[0],
+        );
+        let e = err(&bytes);
+        assert!(
+            matches!(&e, Error::Codestream(m)
+                if m.message() == "a `PPM` packet-header chunk runs past the `PPM` payload"),
+            "{body:?}: {e:?}"
+        );
+    }
+}
+
 /// A `PPM` that carries only its `Zppm` (`Lppm` 3) is too short for its
 /// fields: `Marker`, as OpenJPEG 2.5.0 refuses it ("Error reading PPM
 /// marker"). Such a `PPM` gives no packet-header chunk, so with it refused a

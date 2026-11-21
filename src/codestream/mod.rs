@@ -3197,9 +3197,9 @@ fn decode_plt(mut b: Cursor<'_>) -> Result<()> {
 /// Each `PPM` marker carries `Zppm` (its position) and `Ippm` (payload). Joined
 /// across every marker in `Zppm` order, the payload is a run of `(Nppm, bytes)`
 /// records — `Nppm` a 4-byte length, `bytes` that tile-part's packet headers —
-/// one record per tile-part. `Nppm` may straddle a marker boundary, so the
-/// payloads are concatenated before the records are read, matching OpenJPEG's
-/// `opj_j2k_merge_ppm`. Each returned chunk feeds a tile-part's packet-header
+/// one record per tile-part. The payloads are concatenated before the
+/// records are read, so an `Nppm` may straddle a marker boundary; OpenJPEG's
+/// `opj_j2k_merge_ppm` refuses that, and an `Nppm` of 0. Each returned chunk feeds a tile-part's packet-header
 /// stream in [`walk_tiles`], the same role `PPT` plays for a single tile-part.
 ///
 /// A `PPM` that carries only `Zppm` (`Lppm` 3) is refused, as OpenJPEG's
@@ -3229,8 +3229,13 @@ fn decode_ppm_chunks(mut markers: Vec<(u8, Vec<u8>)>) -> Result<Vec<Vec<u8>>> {
     let mut chunks = Vec::new();
     while cur.remaining() > 0 {
         // Nppm: the byte count of this tile-part's packet headers (may be 0).
-        let nppm = cur.u32()? as usize;
-        chunks.push(cur.take(nppm)?.to_vec());
+        let chunk = cur
+            .u32()
+            .and_then(|nppm| cur.take(nppm as usize))
+            .map_err(|_| {
+                Error::codestream("a `PPM` packet-header chunk runs past the `PPM` payload")
+            })?;
+        chunks.push(chunk.to_vec());
     }
     if let Some(zppm) = short {
         return Err(Error::marker(format!(

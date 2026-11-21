@@ -101,13 +101,20 @@ pub enum Error {
     /// is a marker that is missing, repeated or out of place (a `PPT` beside
     /// a `PPM` included); the tile-parts that `SOT` lays out (its tile
     /// index, `Psot`, `TPsot` and `TNsot`) and the `PPM` chunks they take;
-    /// a segment that runs past its tile-part, or anything that runs past
-    /// the end of the input; packets the `POC` volumes leave out; and
+    /// a tile-part header that runs past its `Psot`, or anything that runs
+    /// past the end of the input; packets the `POC` volumes leave out; and
     /// corrupt packet or coded data, `SOP` sequence numbers and `EPH`
     /// included. Input that ends before the main header is whole is
     /// [`Error::Incomplete`] instead. Any input that is not JPEG 2000 at all
     /// (text, another image format) is this variant, since it has no `SOC`
     /// marker.
+    ///
+    /// A tile-part header's segments are read before its end is checked
+    /// against `Psot`, as OpenJPEG reads them, so a segment that runs past
+    /// `Psot` and has a bad field gives that field's [`Error::Marker`]. A
+    /// later tile-part that restates `COD`, `COC`, `QCD` or `QCC` with
+    /// values other than the first tile-part's is out of place, so it is
+    /// this variant too.
     ///
     /// A main header of more than 65,536 marker segments is this variant
     /// too, not [`Error::Limit`]: no valid main header comes near it, and no

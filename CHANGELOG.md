@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Migrating from 0.5
+
+- Some refusals move from `Error::Codestream` to `Error::Marker`, with the
+  same messages. `Marker` is now a marker segment that says something
+  invalid: a field, a length that does not fit its fields, or a coding
+  parameter another segment rules out. `Codestream` is the layout of the
+  markers, tile-parts and packets, input that runs out, and corrupt coded
+  data. A match that took these faults as `Codestream` needs a `Marker`
+  arm too. The moved faults are:
+  - a marker segment length below 2;
+  - a segment body too short for its fields ("truncated marker segment"
+    where the whole segment is there), or with bytes left over;
+  - `SIZ` component records that do not match `Csiz`, `TLM` entries that
+    are not whole, a `PLT` that ends inside an entry, and a `QCD` or `QCC`
+    step table of the wrong length for its style;
+  - an `SOP` whose `Lsop` is not 4;
+  - an `RGN`, or a MIXED code-block style, that `CAP` rules out.
+- A `PPT` or `PPM` of length 3 (only its `Zppt` or `Zppm`) is refused as
+  `Error::Marker`, where some such files decoded before.
+
 ### Added
 
 - `IncrementalDecoder::header` reads the header of the bytes fed so far
@@ -59,24 +79,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `Error::Marker` and `Error::Codestream` no longer overlap. `Marker` is a
-  marker segment that says something invalid: a field, a length that does
-  not fit its fields, or a coding parameter another segment rules out.
-  `Codestream` is the layout of the markers, the tile-parts and the packets,
-  input that runs out, and corrupt coded data. These refusals move from
-  `Codestream` to `Marker`; which fault a file reports is unchanged (#564):
-  - a marker segment length below 2;
-  - a segment body too short for its fields ("truncated marker segment"
-    where the whole segment is there), or with bytes left over;
-  - `SIZ` component records that do not match `Csiz`, `TLM` entries that are
-    not whole, a `PLT` that ends inside an entry, and a `QCD` or `QCC` step
-    table of the wrong length for its style;
-  - an `SOP` whose `Lsop` is not 4;
-  - an `RGN`, or a MIXED code-block style, that `CAP` rules out.
-
-  A segment that runs past the end of the input stays `Codestream` (or
-  `Incomplete` in the main header). The cap of 65,536 main-header marker
-  segments stays `Codestream`.
+- `Error::Marker` and `Error::Codestream` no longer overlap, and the
+  faults listed under Migrating from 0.5 move from `Codestream` to
+  `Marker`. Which fault a file reports is unchanged. A segment that runs
+  past the end of the input stays `Codestream` (or `Incomplete` in the main
+  header), and so does the cap of 65,536 main-header marker segments. A
+  `PPM` chunk that runs past the joined `PPM` payload is `Codestream` with
+  its own message, "a `PPM` packet-header chunk runs past the `PPM`
+  payload", where it read "truncated marker segment" (#564).
 - The refusal of a Part 2 marker names `DCO`, `VMS`, `DFS`, `ADS` and `ATK`
   (0xFF70 to 0xFF73 and 0xFF79) as it does the others, where it called them
   unrecognized. The error variant is unchanged (`Unsupported`) (#579).
