@@ -23,18 +23,17 @@
 //!   if decoding that tile alone (`Region::Tile`, in the color the file
 //!   codes) gives the header's error too, so a header that refuses a tile
 //!   the decode accepts is still caught;
-//! - with `strict` off, also where the header refuses that tile and the
-//!   decode refuses the file first for a fault in the tile-parts, which the
-//!   decode's parse finds before it counts any tile and the header read does
-//!   not look for with `strict` off (`decode_finds_a_tile_parts_fault_first`).
-//!   That excuse holds only if the header read with `strict` on, which runs
-//!   that parse, gives the fault, and decoding that tile alone with its
-//!   refusal lifted, and another tile alone, give it too;
 //! - when `decode_with` succeeds, `read_header_with` reports the decoded
 //!   image's area, each channel's format, and the same JP2 metadata.
 //!
 //! `decode_with` may still fail where `read_header_with` succeeds: a fault in
 //! the tile data is only found by decoding it.
+//!
+//! Where a tile is refused, the header read finds the decode's error for the
+//! tile-parts with a walk of its own that keeps no tile record. Each input up
+//! to `MAX_DECODED_INPUT` bytes is also run through
+//! `rust_j2k::fuzz::tile_parts_walks_agree`, which checks that walk against
+//! the decode's parse directly, with `strict` on and off.
 //!
 //! A full decode costs far more than the header, so when the header reads and
 //! the input or the image is large, the decode is skipped and only
@@ -89,6 +88,9 @@ fuzz_target!(|data: &[u8]| {
     for (i, (options, header)) in option_sets.iter().zip(headers).enumerate() {
         check(data, options, header, picked == Some(i));
     }
+    if data.len() <= MAX_DECODED_INPUT {
+        rust_j2k::fuzz::tile_parts_walks_agree(data);
+    }
 });
 
 /// Whether `rust_j2k` reads `data` as a raw codestream: a JP2 file opens
@@ -129,7 +131,6 @@ fn check(
     let decoded = rust_j2k::decode_with(data, options);
     match (&header, &decoded) {
         (Err(h), Err(d)) if decode_finds_first_in_a_lower_tile(data, options, h, d) => {}
-        (Err(h), Err(d)) if decode_finds_a_tile_parts_fault_first(data, options, h, d) => {}
         (Err(h), _) => assert_eq!(
             decoded.as_ref().err().map(|e| format!("{e:?}")),
             Some(format!("{h:?}")),
@@ -229,80 +230,6 @@ fn tile_alone(options: &rust_j2k::DecodeOptions, tile: u32) -> rust_j2k::DecodeO
         .clone()
         .with_color(rust_j2k::ColorOutput::AsCoded)
         .with_region(rust_j2k::Region::Tile(tile))
-}
-
-/// Whether, with `strict` off, `decode` is a fault in the tile-parts that the
-/// decode finds before it counts the tile that the header's refusal `header`
-/// names. The decode parses every tile-part first, whatever the selection.
-/// With `strict` on the header read runs that parse where it refuses a
-/// tile; with it off it does not, as the parse keeps a record of every
-/// tile-part. The `read_header_with` rustdoc and `docs/resource-bounds.md`
-/// list this difference. A strict-off walk that finds these faults (#545)
-/// removes it, and this excuse with it.
-///
-/// It holds only when all of these do:
-///
-/// - `strict` is off. With it on the header read gives the parse's fault,
-///   so this excuse never loosens a strict check.
-/// - `header` is a refusal of one tile, T, as for
-///   [`decode_finds_first_in_a_lower_tile`], and `decode` is not an error
-///   the header itself gives from a tile's own header.
-/// - The header read with `strict` on fails, and gives `decode` or what the
-///   decode with `strict` on gives. Where it refuses a tile it runs the
-///   decode's parse of the tile-parts and gives its fault, and that parse
-///   reads no packet data, so the fault is in the tile-parts: not in packet
-///   data, such as an `SOP` out of sequence, whatever tile it is in. The
-///   strict-on fault can be one only a strict walk finds (a missing tile, a
-///   tile-part past its `TNsot`) ahead of `decode`; then both strict-on reads
-///   must agree on it.
-/// - The decode of T alone, with T's refusal lifted, gives `decode`.
-/// - The decode of another tile alone (tile 0, or tile 1 for T = 0), under
-///   the options as given, gives `decode` too. A grid of one tile has no
-///   other tile.
-///
-/// The decode never gets to T, so the strict-off refusal of T is checked
-/// only through the strict-on header read: one that admits T reads `Ok`,
-/// and the excuse fails. A wrong strict-off refusal of T is missed only
-/// where the strict-on read wrongly refuses T too, or where a strict-only
-/// fault comes first and the strict-on read never gets to T.
-fn decode_finds_a_tile_parts_fault_first(
-    data: &[u8],
-    options: &rust_j2k::DecodeOptions,
-    header: &rust_j2k::Error,
-    decode: &rust_j2k::Error,
-) -> bool {
-    use rust_j2k::Error;
-    if options.strict || from_own_header(decode) {
-        return false;
-    }
-    let Some((tile, lifted)) = refusal_of(options, header) else {
-        return false;
-    };
-    let expected = Some(format!("{decode:?}"));
-    let debug = |result: rust_j2k::Result<rust_j2k::Image>| result.err().map(|e| format!("{e:?}"));
-    let strict = options.clone().with_strict(true);
-    let Err(strict_header) = rust_j2k::read_header_with(data, &strict) else {
-        return false;
-    };
-    let strict_header = Some(format!("{strict_header:?}"));
-    if strict_header != expected && strict_header != debug(rust_j2k::decode_with(data, &strict)) {
-        return false;
-    }
-    if debug(rust_j2k::decode_with(data, &tile_alone(&lifted, tile))) != expected {
-        return false;
-    }
-    let other = u32::from(tile == 0);
-    match rust_j2k::decode_with(data, &tile_alone(options, other)) {
-        Err(Error::InvalidOptions(detail))
-            if other == 1
-                && detail
-                    .message()
-                    .starts_with("tile 1 is past the image's 1 tile") =>
-        {
-            true
-        }
-        result => debug(result) == expected,
-    }
 }
 
 /// The tile that `header` refuses and the options with that refusal

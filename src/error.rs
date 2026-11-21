@@ -60,8 +60,8 @@ pub type Result<T> = core::result::Result<T, Error>;
 ///   Past 64 MiB the wrapper can admit what the bare codestream refuses, or
 ///   name a smaller factor to retry with.
 /// - A [`Error::Limit`] or [`Error::InvalidOptions`] the header read gives for
-///   a tile, where the decode first refuses the file for an earlier fault: in
-///   a tile-part (with `strict` off), or in a lower tile's data.
+///   a tile, where the decode first refuses the file for a fault in a lower
+///   tile's data.
 ///
 /// Separately, the header read can return `Ok` for a fault only decoding
 /// finds.
