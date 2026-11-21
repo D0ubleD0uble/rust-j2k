@@ -420,3 +420,19 @@ fn a_file_openjpeg_fails_whole_decodes_tile_by_tile_as_it_does() {
         assert_eq!(comp.samples, placed);
     }
 }
+
+/// `probe_none_l1` has a tile that holds no sample of any of its
+/// components, which OpenJPEG 2.5.0 fails to decode ("Failed to decode
+/// tile 2/2"). The whole image is tile 0's, as `opj_decompress -t 0` gives
+/// it, strict and lenient, and tile 0 alone decodes to the same.
+#[test]
+fn a_tile_with_no_sample_of_any_component_adds_none() {
+    let bytes = read("probe_none_l1.j2k");
+    let oracle = read("probe_none_l1.tiles.opj.raw");
+    for strict in [true, false] {
+        let options = DecodeOptions::default().with_strict(strict);
+        assert_eq!(flat(&decode_with(&bytes, &options).unwrap()), oracle);
+    }
+    let tile = DecodeOptions::default().with_region(Region::Tile(0));
+    assert_eq!(flat(&decode_with(&bytes, &tile).unwrap()), oracle);
+}

@@ -4,8 +4,8 @@ Used by `tests/empty_tile_component.rs`. Each codestream has a tile narrower
 or shorter than a component's sub-sampling, so the tile holds no sample of
 that component (ISO B.3, Eq. B-12 gives `tcx0 == tcx1` or `tcy0 == tcy1`).
 SIZ allows it. The tile-component has no precinct, so no packet (#595).
-OpenJPEG 2.5.0 decodes every file here but `opjfail_l1_lrcp`, which it
-fails to decode whole (see below).
+OpenJPEG 2.5.0 decodes every file here but `opjfail_l1_lrcp` and
+`probe_none_l1`, which it fails to decode whole (see below).
 
 ## Source
 
@@ -16,7 +16,8 @@ file is synthetic: no outside image goes in.
 - The encodes are `opj_compress` output from raw sources the script makes:
   one byte per sample from a fixed LCG, seed 595, each component at its
   sub-sampled size. The script checks that `opj_decompress` gives the source
-  back, and, for `opjfail_l1_lrcp`, that it fails to decode the whole file.
+  back, and, for `opjfail_l1_lrcp` and `probe_none_l1`, that it fails to
+  decode the whole file.
 - The probes are written byte by byte in 1x1 tiles, every packet empty
   (0x00): one packet for each component and resolution that holds a sample.
 
@@ -39,6 +40,9 @@ another, 8 bits each:
   origin, and returns false. The source cannot serve as the oracle, since
   under the image offset `opj_compress` reads the sub-sampled components
   at sizes that differ from the codestream's.
+- `probe_none_l1.tiles.opj.raw`: `opj_decompress -t 0`, tile 0 alone.
+  Tile 1 holds no sample of the one component, and `opj_decompress` of
+  the whole file fails ("Failed to decode tile 2/2").
 
 ## Files
 
@@ -55,6 +59,7 @@ another, 8 bits each:
 | `probe_2pkt` | `probe_1pkt` with a byte after tile 1's packet, which OpenJPEG ignores and a strict decode here refuses | 0 | LRCP |
 | `probe_ht_1pkt` | `probe_1pkt` with a `CAP` and HT code-blocks | 0 | LRCP |
 | `probe_y_1pkt` | 1 x 2, (1x1, 1x2), 1 x 1 | 0 | LRCP |
+| `probe_none_l1` | 2 x 1, (2x1), 1 x 1: tile 1 holds no sample of any component | 1 | LRCP |
 | `probe_xy_l2` | 3 x 3, (1x1, 2x2), 1 x 1: column 1 and row 1 hold no sample of component 1 | 2 | LRCP |
 
 OpenJPEG 2.5.0 does not give the source back where the image width is not a

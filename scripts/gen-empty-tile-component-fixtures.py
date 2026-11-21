@@ -24,7 +24,8 @@ Two kinds of file:
 One more encode, `opjfail_l1_lrcp`, is a file OpenJPEG 2.5.0 fails to
 decode whole (see `OPJ_FAILS`). Its oracle `<name>.tiles.opj.raw` is
 `opj_decompress -t <N> -c <the components tile N holds a sample of>` for
-each tile in turn, one after another.
+each tile in turn, one after another. So is the probe `probe_none_l1`
+(see `OPJ_FAILS_NO_SAMPLE`), whose oracle is tile 0 alone.
 
 For each other file the oracle `<name>.opj.raw` is the `opj_decompress` output,
 the components' samples one after another. For each encode, the oracle
@@ -163,6 +164,15 @@ OPJ_FAILS = {
 }
 
 
+# A probe whose tile 1 holds no sample of any of its components (one
+# component, `XRsiz` 2, one wavelet level). OpenJPEG 2.5.0 fails it at any
+# number of levels ("Failed to decode tile 2/2"). Its oracle is tile 0 alone,
+# `opj_decompress -t 0`; tile 1 has no sample to compare.
+OPJ_FAILS_NO_SAMPLE = {
+    "probe_none_l1": probe(2, 1, [(2, 1)], 1),
+}
+
+
 def held(flags: list[str], width: int, height: int,
          subs: list[tuple[int, int]]) -> list[list[int]]:
     """For each tile, in index order, the components it holds a sample of
@@ -255,6 +265,16 @@ def main() -> None:
                     tiles += data[data.index(b"\n") + 1 :]
             (DIR / f"{name}.tiles.opj.raw").write_bytes(tiles)
             print(f"{name}: whole decode fails, tiles: {len(tiles)} samples")
+        for name, data in OPJ_FAILS_NO_SAMPLE.items():
+            j2k = DIR / f"{name}.j2k"
+            j2k.write_bytes(data)
+            whole = subprocess.run(["opj_decompress", "-i", str(j2k), "-o",
+                                    str(tmp / "whole.pgx")], capture_output=True)
+            if whole.returncode == 0:
+                sys.exit(f"{name}: opj_decompress decodes it; it should fail")
+            oracle = opj_decode(j2k, 1, tmp, "-t", "0")
+            (DIR / f"{name}.tiles.opj.raw").write_bytes(oracle)
+            print(f"{name}: whole decode fails, tile 0: {list(oracle)}")
         for name, data in PROBES.items():
             j2k = DIR / f"{name}.j2k"
             j2k.write_bytes(data)

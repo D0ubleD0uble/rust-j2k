@@ -1504,12 +1504,13 @@ with `YTsiz` patched to the image height.
 | OpenJPEG 2.5.0 | decodes most such files to the same image; fails some ("failed to decode image") |
 | Standard | Eq. B-12 gives `tcx0 == tcx1` or `tcy0 == tcy1`; B-15 and B.6 give such a tile-component no precinct, so no packet |
 | Rule | 1 |
-| Tests and fixtures | `tests/empty_tile_component.rs`; `tests/fixtures/empty_tile_component/opjfail_l1_lrcp.j2k` |
+| Tests and fixtures | `tests/empty_tile_component.rs`; `tests/fixtures/empty_tile_component/opjfail_l1_lrcp.j2k`, `probe_none_l1.j2k` |
 | Decided | #595, 2026-11-21 |
 
 A tile narrower than a component's `XRsiz` or shorter than its `YRsiz` can
 hold no sample of it, and SIZ allows that. Where OpenJPEG decodes such a
-file, its image is this decoder's, bit for bit. It fails two kinds:
+file, its image is this decoder's, bit for bit (the files are lossless,
+5/3). It fails two kinds:
 
 - With a wavelet level or more, a tile with no sample of a component after
   a tile that has some. The earlier tile allocated the component's output,
@@ -1520,8 +1521,11 @@ file, its image is this decoder's, bit for bit. It fails two kinds:
   kind. Each of its tiles, with the components it holds a sample of,
   decodes under `opj_decompress -t <N> -c <those>` to this decoder's tile,
   and the whole image is those tiles put in place.
-- With no wavelet level, a single-component image with tiles that hold no
-  sample.
+- A tile that holds no sample of any of its components, at any number of
+  wavelet levels ("Failed to decode tile N/M"). This is a separate path
+  from `opj_j2k_update_image_data`. `probe_none_l1` is one: one component,
+  `XRsiz` 2, one level, and tile 1 holds no sample. Its tile 0 decodes
+  under `opj_decompress -t 0` to this decoder's image.
 
 A component with no sample in the whole image is refused with `SIZ`
 (`Error::Marker`), as OpenJPEG fails to decode it.

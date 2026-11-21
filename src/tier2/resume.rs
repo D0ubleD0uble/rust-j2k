@@ -489,7 +489,9 @@ enum Advanced {
 // [`TileWalk::bytes`] counts the walk's own size against the room the
 // walks may keep, so a change to it moves where an `IncrementalDecoder`
 // keeps or lets go of a walk, and so what a refine spends. A field added
-// here is a change to that behavior, not only to the struct.
+// here is a change to that behavior, not only to the struct: a new size
+// means measuring the spend again against main's, not only updating the
+// number.
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<TileWalk>() == 1200);
 
