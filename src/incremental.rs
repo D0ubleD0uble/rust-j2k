@@ -334,7 +334,10 @@ impl IncrementalDecoder {
     /// of a last tile-part whose `Psot` is 0, is read again on each call. A
     /// call that refuses a tile or stops at a budget also walks every
     /// tile-part fed, as `read_header_with` does, for the error the decode
-    /// would give for the tile-parts first; that walk is not kept. On
+    /// would give for the tile-parts first; that walk is not kept. So does
+    /// each call that meets a tile whose precincts and code-blocks under its
+    /// own tile-part header are at fault (a component with no sample in the
+    /// tile), which the decode refuses. On
     /// a window of 1530 tiles of a 235 MB file of 16.7 million tile-parts,
     /// calls after each 256 KiB fed took 5.9 s in all and now take 66 ms.
     /// What is kept, about 140 bytes for each tile counted under its own
