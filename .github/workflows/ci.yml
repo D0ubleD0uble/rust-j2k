@@ -136,11 +136,14 @@ jobs:
       # incremental_decode takes the fixtures under 3 KB, the same behind
       # control bytes that change the options between refines (bit 6), and its
       # own seeds of 4096 bytes or less (-max_len=4096 would truncate the others),
-      # and runs with -max_len=4096. decode_partial is seeded as in fuzz/README.md.
+      # and runs with -max_len=4096. decode_partial is seeded as in fuzz/README.md,
+      # but only with the conformance codestreams of 300000 bytes or less: the
+      # larger ones are cut to 1 MiB, and mutating those costs about a second a run.
       - name: Seed decode_partial and incremental_decode from the fixtures
         run: |
           mkdir -p fuzz/corpus/decode_partial fuzz/corpus/incremental_decode
-          cp tests/fixtures/*.j2k tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus/decode_partial/
+          cp tests/fixtures/*.j2k fuzz/corpus/decode_partial/
+          find tests/fixtures/conformance/codestreams -name '*.j2k' -size -300001c -exec cp {} fuzz/corpus/decode_partial/ \;
           cp tests/fixtures/openjph/files/*.j2c tests/fixtures/partial/*.j2k fuzz/corpus/decode_partial/
           find tests/fixtures/conformance/ht/codestreams -size -6145c -name '*.j2k' -exec cp {} fuzz/corpus/decode_partial/ \;
           cp tests/fixtures/conformance/ht/codestreams/ds0_hm_15_b8.j2k fuzz/corpus/decode_partial/

@@ -167,7 +167,8 @@ two, plus one for each row of tiles a window reads), a tile with leftover bytes 
 and a complete report must hold no missing tiles. `tile_body` makes the same
 check on each of its inputs, so the steered shapes (POC, packed headers,
 tile-parts) reach the strict-off walk too. Seed `decode_partial` as
-`decode`.
+`decode`, but copy only the conformance codestreams of 300000 bytes or less: the
+larger ones are cut to 1 MiB, and mutating those costs about a second a run.
 
 `incremental_decode` feeds each input to an `IncrementalDecoder` in pieces
 whose sizes a hash of the file picks, and refines after each piece. The first
