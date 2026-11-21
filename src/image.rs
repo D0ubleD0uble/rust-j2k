@@ -217,7 +217,7 @@ impl Canvas {
         Self::over(header, &header.siz, reduction, &order)
     }
 
-    /// Record each component's grid at the reduced size [`assemble`] will
+    /// Record each component's grid at the reduced size [`assemble_over`] will
     /// expect, and its wavelet. `area` is the SIZ of what the decode returns:
     /// `header`'s own, or one [`Siz::windowed`] to a window. `order` lists the
     /// components to keep, in output order, each at most once.
@@ -351,7 +351,7 @@ impl Canvas {
     }
 
     /// The finished planes of the components the decode returns, in output
-    /// order, ready for [`assemble`]. A plane no tile reached is all zeros.
+    /// order, ready for [`assemble_over`]. A plane no tile reached is all zeros.
     pub(crate) fn into_planes(mut self) -> Vec<Samples> {
         let mut out = Vec::with_capacity(self.order.len());
         for &index in &self.order {
@@ -443,7 +443,7 @@ pub(crate) fn assemble(header: &MainHeader, samples: Vec<Samples>, reduction: u8
     assemble_over(&header.siz, samples, &order, reduction)
 }
 
-/// [`assemble`] over `area`, the SIZ of what the decode returns (the
+/// `assemble` over `area`, the SIZ of what the decode returns (the
 /// codestream's own, or one [`Siz::windowed`] to a window), for the
 /// components `order` lists: `samples[i]` is component `order[i]`'s plane.
 pub(crate) fn assemble_over(
