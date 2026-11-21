@@ -1871,4 +1871,39 @@ pub(crate) mod tests {
         // With it off the tile is left out and the rest are read by offset.
         assert_eq!(sot_reads(&missing, &lenient), 63 * 16 + 1 + 63);
     }
+
+    /// `IncrementalDecoder::header` goes on from what its last call found,
+    /// so calling it after each feed reads each `SOT` about once in all: 64
+    /// tiles of 16 tile-parts, each over the cap under the main header and
+    /// brought within by its own `COD`, fed 5 bytes at a time. A call reads
+    /// the `SOT`s fed since the last one, the one where the walk stopped for
+    /// want of bytes, and that of a first tile-part not yet whole. A read
+    /// from the start on each call reads them all again.
+    #[test]
+    fn header_after_each_feed_reads_each_sot_about_once() {
+        let bytes = rescued_tiles(64, 16, &[], &[]);
+        let lenient = DecodeOptions::default().with_strict(false);
+        let mut decoder =
+            crate::IncrementalDecoder::new(DecodeOptions::default()).expect("valid options");
+        let (mut kept, mut afresh, mut calls) = (0, 0, 0u64);
+        for chunk in bytes.chunks(5) {
+            decoder.feed(chunk);
+            codestream::tests::SOT_READS.with(|reads| reads.set(0));
+            let header = decoder.header();
+            kept += codestream::tests::SOT_READS.with(std::cell::Cell::get);
+            let (reads, alone) = sot_reads_of(decoder.bytes(), &lenient);
+            afresh += reads;
+            calls += 1;
+            let alone = match alone {
+                Ok(header) => Ok(Some(header)),
+                Err(Error::Incomplete(_)) => Ok(None),
+                Err(error) => Err(error),
+            };
+            assert_eq!(format!("{header:?}"), format!("{alone:?}"));
+        }
+        let parts = 64 * 16;
+        eprintln!("{kept} reads in {calls} calls, {afresh} from the start");
+        assert!(kept <= parts + 2 * calls, "{kept} reads in {calls} calls");
+        assert!(kept * 100 < afresh, "{kept} reads, {afresh} from the start");
+    }
 }
