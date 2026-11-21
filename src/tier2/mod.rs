@@ -2181,7 +2181,7 @@ fn parse_packet(
 ///
 /// With `keep` false the entries are read the same way, and the passes still
 /// fill the segments so that the next layer's lengths are read at the right
-/// width, but they are not counted as kept (see [`SegmentState::kept`]).
+/// width, but they are not counted as kept (see [`SegmentStates::kept`]).
 #[allow(clippy::too_many_arguments)]
 fn parse_band_header(
     meter: &Meter,

@@ -188,9 +188,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `COD` that differs, took its place. With `strict` off a longer prefix
   could then turn one error into another, and `IncrementalDecoder::refine`
   gave a different error from `finish`. Which files are refused does not
-  change. The error names the tile by its index: with `strict` off and a
-  lower tile missing, it named the tile by its place among the tiles
-  present (#587, #561).
+  change. A tile refused for its `POC` volumes is refused at the
+  tile-part that takes it over the limit, so the count in the message is
+  the count at that tile-part, not the whole tile's. The error names the
+  tile by its index: with `strict` off and a lower tile missing, it named
+  the tile by its place among the tiles present (#587, #561).
 - A code-block's codeword segments cost about 15 bytes of heap each, or
   about 85 with a byte, where they cost about 130 with none. A file of
   many pass-terminated (`termall`) segments peaked at up to about 350
@@ -221,7 +223,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fault walked every tile-part fed again, so calls after each feed took
   time quadratic in the input: 21.5 s for calls after each 1 MiB of a
   235 MB file with tile 0 refused, now 170 ms; with tile 1's own header
-  at fault as well, 18 s, now 1.3 ms, as the walk stops at that header.
+  at fault as well, 18 s, now 1.3 ms, as the walk stops at the faulty
+  header and is kept there.
   The walk is kept over a change of options. With `strict` off the
   `TNsot` look-ahead is taken only where its answer changes an error's
   counts (#560).

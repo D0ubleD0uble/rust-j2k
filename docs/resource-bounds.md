@@ -529,9 +529,9 @@ tile-parts at most plus the budgets, and the heap one tile's header, a byte
 a tile for the tiles the selection reads, and 8 bytes a tile for the
 offsets, except where the count refuses a tile, stops at a budget, or with
 `strict` on finds a tile with no tile-part: that costs the walk for the
-decode's error too: one more pass over the tile-parts, each restated tile's first header read once
-more where it is over 1 KiB and for each restating tile-part where it is
-not, and up to 10 bytes a tile (14 on an input of 4 GiB or more) plus the
+decode's error too: one more pass over the tile-parts, each restated
+tile's first header read once more where it is over 1 KiB and for each
+restating tile-part where it is not, and up to 10 bytes a tile (14 on an input of 4 GiB or more) plus the
 coding kept for the restated tiles of long first headers. Where each of
 254 later tile-parts
 restates a `COD` over a first tile-part header of 2^18 empty `COM`s, a
@@ -601,15 +601,15 @@ kept before. It checks each tile's own header as it reads the tile's first
 tile-part, and the tile's `POC` volumes as each later one adds to them, so
 a walk that stops on a fault is kept at the start of that tile-part and
 reads it again on the next call. The walk depends on no option but
-`strict`, which the header read always has off, so it is kept over a change of options. With tile 0
-refused and `Region::Tile(0)`, calls after each 1 MiB fed of the 235 MB
-file took 21.5 s in all with a walk from the start on each, and take
-170 ms; with tile 1's own header at fault as well, they took 18 s and
-take 1.3 ms, as the walk stops at that header. On a
-file of 65535 tiles of 4096 components and 255 tile-parts each (233 MB),
-whose count runs out of its budget and whose header reads, they took
-6.9 s and take 410 ms, most of it the budget each call spends. These
-are in `tests/incremental_header_cost.rs`, which bounds each by 8 times
+`strict`, which the header read always has off, so it is kept over a
+change of options. With tile 0 refused and `Region::Tile(0)`, calls after
+each 1 MiB fed of the 235 MB file took 21.5 s in all with a walk from the
+start on each, and take 170 ms. With tile 1's own header at fault as
+well they took 18 s and take 1.3 ms: the walk stops at that header and
+is kept there, so a call reads only the tile-part at fault. On a file of
+65535 tiles of 4096 components and 255 tile-parts each (233 MB), whose
+count runs out of its budget and whose header reads, they took 6.9 s and
+take 410 ms, most of it the budget each call spends. These are in `tests/incremental_header_cost.rs`, which bounds each by 8 times
 one read of the whole file. With `strict` off, as
 `IncrementalDecoder::header` reads, the `TNsot` look-ahead is taken only
 when the error it changes is built (it raises both counts in "tile N
