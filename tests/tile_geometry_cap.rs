@@ -769,13 +769,15 @@ fn a_fault_in_another_tiles_header_is_the_decode_error() {
     }
 }
 
-/// A tile-part header the decode finds at fault is the decode's to report,
-/// so the header read does not count its tile under the main header, over
-/// whose caps it is: not where the input ends inside its `COD` (which the
-/// decode leaves out with `strict` off), nor where the header runs past its
-/// `Psot` or `Psot` is shorter than the `SOT` (which the decode refuses).
+/// The header read does not count a tile under the main header, over whose
+/// caps it is, where the tile's own tile-part header is at fault. Where the
+/// input ends inside its `COD` with `strict` off, the decode leaves the tile
+/// out and the read admits the file. Where the input ends there with
+/// `strict` on, or the header runs past its `Psot` or `Psot` is shorter
+/// than the `SOT` with `strict` on or off, the decode refuses the file for
+/// the tile-parts, and the read gives that error.
 #[test]
-fn a_tile_part_header_at_fault_is_left_to_the_decode() {
+fn a_tile_part_header_at_fault_gets_the_decode_error() {
     let (width, height) = (4096, 4160);
     let main = blocks_tile(width, height, 0);
     let main = &main[..main.len() - 17];
@@ -795,25 +797,23 @@ fn a_tile_part_header_at_fault_is_left_to_the_decode() {
     let image = decode_with(&cut, &lenient).expect("the decode is admitted");
     assert!(!image.report.is_complete());
     for bytes in [&cut, &with_psot(14), &with_psot(8)] {
-        let header =
-            read_header_with(bytes, &DecodeOptions::default()).expect("the header is admitted");
-        assert_eq!((header.width, header.height), (width, height));
         let decoded = decode_with(bytes, &DecodeOptions::default());
         assert!(matches!(decoded, Err(Error::Codestream(_))), "{decoded:?}");
+        assert_same_error(bytes, &DecodeOptions::default());
     }
+    // A `Psot` that cuts the header is a fault with `strict` off too.
     for psot in [14, 8] {
         let bytes = with_psot(psot);
-        let header = read_header_with(&bytes, &lenient).expect("the header is admitted");
-        assert_eq!((header.width, header.height), (width, height));
         let decoded = decode_with(&bytes, &lenient);
         assert!(matches!(decoded, Err(Error::Codestream(_))), "{decoded:?}");
+        assert_same_error(&bytes, &lenient);
     }
 }
 
 /// A tile-part header is read within its `Psot`: where each tile-part's
 /// `Psot` ends inside a `COM` that holds the next `SOT`, so that each header
 /// read past its `Psot` would run through every `COM` after it, the header
-/// read still takes time linear in the file. 1024 tiles over the precinct
+/// read still takes time linear in the file, and gives the decode's error. 1024 tiles over the precinct
 /// cap and 4 MiB of `COM` would take minutes in a debug build so.
 #[test]
 fn a_tile_part_header_is_read_within_its_psot() {
@@ -848,13 +848,12 @@ fn a_tile_part_header_is_read_within_its_psot() {
         let start = std::time::Instant::now();
         let header = read_header_with(&bytes, &options);
         let spent = start.elapsed();
-        // Every tile-part header runs past its `Psot`, so none is counted.
-        assert!(header.is_ok(), "{header:?}");
+        // Every tile-part header runs past its `Psot`, so none is counted,
+        // and the first is the decode's error for the tile-parts.
         assert!(spent.as_secs() < 5, "{spent:?}");
-        assert!(matches!(
-            decode_with(&bytes, &options),
-            Err(Error::Codestream(_))
-        ));
+        let decoded = decode_with(&bytes, &options).map(|_| ());
+        assert!(matches!(decoded, Err(Error::Codestream(_))), "{decoded:?}");
+        assert_eq!(format!("{header:?}"), format!("{decoded:?}"));
     }
 }
 
