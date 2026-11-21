@@ -350,8 +350,9 @@ impl IncrementalDecoder {
     /// header (not a copy of it), is held until the options change, which
     /// drops it. The walk for the decode's error, once it has run, is kept
     /// over a change of options, as it depends on none of them, with its
-    /// heap as `read_header_with` documents it (up to 10 bytes a tile of
-    /// the grid, and the codings later tile-parts restate). Nothing is
+    /// heap as `read_header_with` documents it (up to 14 bytes a tile of
+    /// the grid, and the coding of each tile that later tile-parts restate
+    /// with headers that differ). Nothing is
     /// kept for a file whose tiles' sizes show them within the caps;
     /// otherwise a few hundred bytes, plus the counts above. A call made
     /// while another thread is in one reads from the start.

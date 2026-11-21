@@ -195,6 +195,46 @@ fn the_header_read_holds_no_tile_data() {
         assert!(peak < PEAK_BYTES + 15 * tiles, "{peak} bytes");
         assert!(matches!(error, Error::Limit(_)), "{error:?}");
     }
+    // Each tile's own `QCD` restated by two later tile-parts with headers
+    // that differ, so the walk keeps every tile's coding: the smallest
+    // tiles that keep one, 64 bytes each. The kept coding stays within
+    // about 6 times the bytes of the tile-parts (380 bytes a tile).
+    for strict in [true, false] {
+        let options = last.clone().with_strict(strict);
+        let bytes = most_tiles_kept();
+        let (peak, error) = peak_of_refusal(&bytes, &options);
+        eprintln!(
+            "{tiles} tiles kept, the last refused, strict {strict}: {peak} bytes at the peak"
+        );
+        assert!(peak < PEAK_BYTES + 7 * bytes.len(), "{peak} bytes");
+        assert!(matches!(error, Error::Limit(_)), "{error:?}");
+    }
+}
+
+/// [`most_tiles`] with no tile-part `COD`, so every tile is over the cap,
+/// and in three tile-parts a tile: the first's header a `QCD`, the second's
+/// the same `QCD` and the third's that `QCD` and an empty `COM`.
+fn most_tiles_kept() -> Vec<u8> {
+    let mut cod = synth::cod_body(1, 0, 4, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let siz = synth::siz_body([520 * 255, 512 * 257, 0, 0, 520, 512, 0, 0], &[[7, 1, 1]]);
+    let qcd = synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8]));
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        qcd.clone(),
+    ]
+    .concat();
+    let other = [&qcd[..], &[0xFF, 0x64, 0, 2]].concat();
+    for tile in 0..u16::MAX {
+        bytes.extend(synth::tile_part(tile, 0, 3, &qcd, &[]));
+        bytes.extend(synth::tile_part(tile, 1, 3, &qcd, &[]));
+        bytes.extend(synth::tile_part(tile, 2, 3, &other, &[]));
+    }
+    bytes.extend_from_slice(EOC);
+    bytes
 }
 
 const EOC: &[u8] = &[0xFF, 0xD9];

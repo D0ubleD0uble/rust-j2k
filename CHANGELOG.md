@@ -276,7 +276,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   more) in place of the decode's tile records, plus 4 more a tile (8) once
   a later tile-part restates a tile's own coding, and the coding of each
   tile that later tile-parts restate with headers that differ, up to about
-  14 times those tiles' bytes: on a 235 MB file of
+  13 times those tiles' bytes: on a 235 MB file of
   16.7 million tile-parts that refusal takes 240 ms and 640 KiB, where the
   decode's parse takes 1.7 s and 290 MiB (#498, #545).
 - With `strict` off, `read_header_with` gives the decode's error for the

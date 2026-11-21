@@ -212,11 +212,12 @@ struct Walk {
     /// coding value with a header of other bytes than the one
     /// [`restates`](Self::restates) notes: its first tile-part's coding,
     /// read again once, and what [`check_restatement`] has found so far, as
-    /// the tile record holds them. An entry costs about a kilobyte for a
-    /// header of one `COD`, and more for each `COC` or `QCC`: up to about 14
-    /// times the bytes of the tile's tile-parts, for a header of `QCC`s and
-    /// three tile-parts, the fewest such a tile has.
-    restating: HashMap<usize, (Overrides, Option<Restated>)>,
+    /// the tile record holds them. Boxed, so the map holds a pointer a
+    /// tile. An entry costs about 370 bytes for a header of one `QCD` or
+    /// `COD`, about 6 times the bytes of the smallest tile that keeps one,
+    /// and more for each `COC` or `QCC`: up to about 13 times the bytes of
+    /// the tile's tile-parts, for a header of `QCC`s.
+    restating: HashMap<usize, Box<(Overrides, Option<Restated>)>>,
     /// Whether the `TNsot` look-ahead ([`count_is_one_short`]) has been
     /// taken: once, when a tile first has every tile-part it declares.
     count_checked: bool,
@@ -453,7 +454,7 @@ impl Walk {
                                 )?;
                                 restates.set(index, tile_count, header_at);
                             } else if !bytes[from..].starts_with(header) {
-                                let (own, restated) = match restating.entry(index) {
+                                let (own, restated) = &mut **match restating.entry(index) {
                                     Entry::Occupied(entry) => entry.into_mut(),
                                     Entry::Vacant(entry) => {
                                         let mut own = first_again()?;
@@ -461,7 +462,7 @@ impl Walk {
                                         own.coc.shrink_to_fit();
                                         own.qcc.shrink_to_fit();
                                         own.rgn.shrink_to_fit();
-                                        entry.insert((own, None))
+                                        entry.insert(Box::new((own, None)))
                                     }
                                 };
                                 check_restatement(

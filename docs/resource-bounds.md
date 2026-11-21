@@ -507,12 +507,13 @@ that header again, at most twice a tile. The first time, it notes where
 the restating header lies, 4 more bytes for every tile (8 on an input of
 4 GiB or more), and a later header of the same bytes is not checked
 again. The second time, at a restating header of other bytes, the coding
-it reads is kept for the tile's later restatements: about a kilobyte of
-heap for each such tile, and more for each `COC` or `QCC`, up to about
-14 times the bytes of those tiles' tile-parts. So the walk's work stays
-within a small multiple of the input: on a 13 MB file of 2048 tiles
+it reads is kept for the tile's later restatements: about 370 bytes of
+heap for each such tile, about 6 times the bytes of the smallest such
+tile, and more for each `COC` or `QCC`, up to about 13 times the bytes of
+those tiles' tile-parts. So the walk's work stays
+within a small multiple of the input: on a 12.5 MB file of 2048 tiles
 whose first tile-part headers of 143 `QCC`s each 254 later tile-parts
-restate, the refusal takes 150 ms in release, about what the decode's
+restate, the refusal takes about 135 ms in release, about what the decode's
 takes.
 It checks each tile's own header as it reads the tile's first tile-part,
 from the header in hand, as the parse does. It reads the main header in

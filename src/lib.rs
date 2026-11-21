@@ -368,10 +368,10 @@ pub fn decode(bytes: &[u8]) -> Result<Image> {
 /// that read refuses a tile, finds a tile with no tile-part before it, or
 /// stops at its budget (which can happen with no tile over a cap), it walks
 /// every tile-part header as the decode's parse does. That walk keeps no
-/// tile record: up to 10 bytes of heap a tile, plus the coding of long first
-/// tile-part headers that later tile-parts restate. The packet headers of the
-/// last tile of a JP2 file whose tile-part has `Psot = 0` are read too. All
-/// of it is described on [`read_header_with`].
+/// tile record: up to 14 bytes of heap a tile, plus the coding of each tile
+/// that later tile-parts restate with headers that differ. The packet
+/// headers of the last tile of a JP2 file whose tile-part has `Psot = 0`
+/// are read too. All of it is described on [`read_header_with`].
 ///
 /// ```
 /// use rust_j2k::{read_header, Error};
@@ -461,10 +461,10 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// or a stop at the budget costs that walk of the tile-parts on top, with
 /// up to 14 bytes of heap a tile (22 on an input of 4 GiB or more), and,
 /// for each tile whose later tile-parts restate the coding of its first
-/// with headers that differ, that coding, up to about 14 times the bytes
+/// with headers that differ, that coding, up to about 13 times the bytes
 /// of those tiles' tile-parts: 240 ms and 640 KiB in release on that
-/// 235 MB file with the tile read left out, and 150 ms, about what the
-/// decode takes to refuse it, on a 13 MB file of 2048 tiles whose first
+/// 235 MB file with the tile read left out, and about 135 ms, about what the
+/// decode takes to refuse it, on a 12.5 MB file of 2048 tiles whose first
 /// tile-part headers of 143 `QCC`s each 254 later tile-parts restate.
 /// The decode can also refuse the file before it
 /// gets to that tile, for what only decoding finds, and then names another
