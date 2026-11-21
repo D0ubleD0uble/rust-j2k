@@ -1125,6 +1125,43 @@ fn the_palettized_file_decodes_every_component() {
     refused_at_most(decode_with(&file, &at_most(n)), n);
 }
 
+/// The 102-byte header-only file of #583: 23170 x 23170 (536,848,900
+/// samples, the largest square under the 2^29 floor) in one tile of five
+/// levels, with an empty packet for each resolution. The decode spends its
+/// time and memory in the inverse transform and the output, not in tier 1.
+/// Reproduce the figures in `docs/resource-bounds.md` with `/usr/bin/time -v
+/// cargo test --release --test sample_limit -- --ignored
+/// the_header_only_file_spends_its_time_in_the_sample_path`: about 3.7 s and
+/// a peak of about 2.0 GiB.
+#[cfg(target_pointer_width = "64")]
+#[test]
+#[ignore = "takes seconds and peaks near 2 GiB"]
+fn the_header_only_file_spends_its_time_in_the_sample_path() {
+    let file = synth::empty_tiles([23170, 23170, 0, 0, 23170, 23170, 0, 0], 5, 4, &[], &[6], 0);
+    assert_eq!(file.len(), 102);
+    let start = std::time::Instant::now();
+    let image = decode(&file).expect("under the default limit");
+    eprintln!("{} samples in {:?}", 23170u64 * 23170, start.elapsed());
+    assert_eq!((image.width, image.height), (23170, 23170));
+}
+
+/// `AtMost(2^20)` on a tile of 2^18 precincts at its first resolution: the
+/// tile caps are floors, so the bookkeeping dwarfs the 13 MiB the samples
+/// need. Reproduce the peak in `docs/resource-bounds.md` with
+/// `/usr/bin/time -v cargo test --release --test sample_limit -- --ignored
+/// at_most_2_to_the_20_peaks_on_the_tile_caps` (about 240 MiB).
+#[cfg(target_pointer_width = "64")]
+#[test]
+#[ignore = "peaks near 240 MiB"]
+fn at_most_2_to_the_20_peaks_on_the_tile_caps() {
+    let (w, h) = (1024u32, 1022u32);
+    let packets = 1 + (w / 2 * (h / 2)) as usize;
+    let file = synth::empty_tiles([w, h, 0, 0, w, h, 0, 0], 1, 0, &[0xFF, 0x11], &[packets], 0);
+    assert_eq!(file.len(), 261_719);
+    let image = decode_with(&file, &at_most(1 << 20)).expect("within the ceiling and the caps");
+    assert_eq!((image.width, image.height), (w, h));
+}
+
 /// Padding does not raise the ceiling. A 32769x16384 image is over the
 /// default for a small file; padded past 64 MiB with `COM` segments, a JP2
 /// `xml ` box or bytes after `EOC`, its default limit admits it, and

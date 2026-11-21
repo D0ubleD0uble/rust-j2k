@@ -106,11 +106,20 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    `WorkLimit::AtMost(n)`. The decode then holds at most `n` samples, `4·n`
    bytes of output, whatever the input's length or padding. The sample
    buffers peak at no more than about 3.2 times that (a square tile
-   measured 1.35, resident), plus the input and the tile records above.
-   `AtMost(2^26)` is 256 MiB of output and sample buffers of at most about
-   820 MiB. A refusal under it is an `Error::Limit` with no retry, since you
-   set the ceiling. The code-blocks and precincts a tile may hold are set
-   from `n` too.
+   measured 1.35, resident). On top of that come the input, the tile
+   records above and one tile's code-block and precinct records. Those
+   records do not shrink with `n`: a tile may hold at least 2^20
+   code-blocks and 2^18 precincts at any ceiling. Estimated at about 0.6
+   GiB at most (480 bytes a code-block, 260 or more a precinct); measured
+   peaks were 81 MiB to 239 MiB at `AtMost(2^18)` and `AtMost(2^20)`, and
+   674 MiB at `AtMost(2^24)`. So plan on 3.2 x 4n + 0.6 GiB + the input.
+   `AtMost(2^26)` is 256 MiB of output and a peak of about 1.4 GiB by that
+   rule (837 MiB measured). Below about 2^26 the records, not the samples,
+   set the peak, so a small ceiling saves less memory than 4n suggests. The
+   table of peaks is in [Figures for a decode service](docs/resource-bounds.md#figures-for-a-decode-service).
+   A refusal under it is an `Error::Limit` with no retry, since you set the
+   ceiling. The code-blocks and precincts a tile may hold are set from `n`
+   too.
    - The count is the decode's own: every component the codestream codes, in
      every tile a region reads, a palette's expanded channels and sRGB
      output.
@@ -136,13 +145,20 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    bounds make the time finite and let it grow with the input. Measured: a
    228,378-byte codestream built to spend 97% of the code-block work bound
    decodes at the defaults in 26 to 27 s on one core in a release build.
-   Estimated: the bound allows max(2^26, 2^15 x the tile-data bytes)
-   sample-passes at up to 8 ns each, so about 0.5 s at the floor and 0.25 ms
-   a byte past it, about 115 s for 456 KB of the slowest data. A 456 KB file
-   measured 52.7 s at the defaults (reported in #474). Padding adds about
-   175 ns a byte, measured. `Raised(n)` on a work bound multiplies the time
-   by up to `n`. Pick the timeout from your largest legitimate file, not
-   from these figures. The method is in
+   That is the tier-1 time. Estimated: the bound allows max(2^26, 2^15 x
+   the tile-data bytes) sample-passes at up to 8 ns each, so about 0.5 s at
+   the floor and 0.25 ms a byte past it, about 120 s for 456 KB of the
+   slowest data. A 456 KB file measured 52.7 s at the defaults (reported in
+   #474). The sample path adds to it, and no work bound limits it: about 7
+   ns for each sample the sample limit allows, so about 4 s at the default
+   floor of 2^29 samples, even for a file of 102 bytes (measured 3.7 s, 2.0
+   GiB peak). `AtMost(n)` bounds that term to about 7 ns x n. Padding after
+   the tile data adds about 175 ns a byte, measured. Zero bytes inside a
+   code-block's data count as tile data, and cost much more: a file that
+   gzips to under 1 KB (196,526 bytes, 120,000 of them zeros in one
+   code-block) measured 13 s at the defaults, about 108 us a byte.
+   `Raised(n)` on a work bound multiplies the time by up to `n`. Pick the
+   timeout from your largest legitimate file, not from these figures. The method is in
    [Figures for a decode service](docs/resource-bounds.md#figures-for-a-decode-service).
 4. **Size memory as concurrency times peak.** The bounds hold for each
    decode: nothing is shared between decodes, threads or decoders. So

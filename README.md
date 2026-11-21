@@ -325,9 +325,11 @@ use rust_j2k::{DecodeOptions, Error, Image, LimitKind, WorkLimit, decode_with};
 /// For files you trust. Each retry decodes again and can ask for more, and a
 /// 100-byte file can name a factor of 8 or more. This loop raises a limit to
 /// at most `MAX_FACTOR` times the default. For a small file, 4 x 2^29 samples
-/// is 8 GiB of output and up to about 26 GiB of sample buffers, and each of
-/// the three bounds can reach 4 times its default, and the decode time grows
-/// with them. Pick the factor you can afford.
+/// is 8 GiB of output and up to about 26 GiB of sample buffers, plus a tile's
+/// code-block and precinct records, and each of the three bounds can reach 4
+/// times its default, and the decode time grows with them. The loop makes at
+/// most five decodes, so up to about 15 times one default decode's work in
+/// all. Pick the factor you can afford.
 fn decode_raising_limits(bytes: &[u8]) -> Result<Image, Error> {
     const MAX_FACTOR: u32 = 4;
     let mut options = DecodeOptions::default();
