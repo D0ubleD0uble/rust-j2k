@@ -731,7 +731,7 @@ fn the_missing_tiles_hint_doubles_the_factor() {
         Err(Error::Limit(limit)) => {
             assert_eq!(
                 limit.retry_with(),
-                Some(rust_j2k::WorkLimit::Raised(8)),
+                Some(rust_j2k::Raise::Raised(8)),
                 "{limit}"
             );
             assert!(!limit.message().contains("at least"), "{limit}");

@@ -13,7 +13,7 @@
 
 use core::fmt;
 
-use crate::WorkLimit;
+use crate::Raise;
 
 /// Crate result alias.
 pub type Result<T> = core::result::Result<T, Error>;
@@ -24,7 +24,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// holds a diagnostic for a log; its wording can change between releases, so
 /// do not parse it or compare it. [`Error::Limit`] holds a [`LimitDetail`]
 /// instead, which also says which limit refused the input and, when an
-/// option raises that limit, the [`WorkLimit`] to retry with. `Error` does
+/// option raises that limit, the [`Raise`] to retry with. `Error` does
 /// not implement `PartialEq`: test the variant with `matches!`, and a limit
 /// by its [`LimitKind`]. Input that is not JPEG 2000 at all, plain text
 /// included, is [`Error::Codestream`]; empty input is [`Error::Incomplete`].
@@ -38,15 +38,15 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// | `FileFormat` | The file is damaged: its JP2 boxes are malformed or disagree with the image. |
 /// | `Incomplete` | The file is cut short before its header ends. If it is still arriving, try again with more of it, or feed it to an [`IncrementalDecoder`](crate::IncrementalDecoder). |
 /// | `Unsupported` | The file uses a JPEG 2000 feature this decoder does not read, or a valid request it does not do: sRGB output from sub-sampled sYCC chroma on an area smaller than the image (`DecodeOptions::region`). |
-/// | `Limit` | The file is larger or costlier than the decoder allows by default. If [`LimitDetail::retry_with`] gives a [`WorkLimit`], it can be retried with that limit raised. |
-/// | `InvalidOptions` | The decode options are invalid, for any file (`WorkLimit::Raised(0)`, `WorkLimit::AtMost(0)`, `AtMost` on a work bound, `max_quality_layers` of `Some(0)`, sRGB output with `raw_channels` or `components`, an empty window, no component or one named twice) or for this one (a reduction past the file's levels, a window outside the image, a tile or component the image does not have, an area that holds no sample of a returned component at the reduction). |
+/// | `Limit` | The file is larger or costlier than the decoder allows by default. If [`LimitDetail::retry_with`] gives a [`Raise`], it can be retried with that limit raised. |
+/// | `InvalidOptions` | The decode options are invalid, for any file (a limit of `Raised(0)`, `SampleLimit::AtMost(0)`, `max_quality_layers` of `Some(0)`, sRGB output with `raw_channels` or `components`, an empty window, no component or one named twice) or for this one (a reduction past the file's levels, a window outside the image, a tile or component the image does not have, an area that holds no sample of a returned component at the reduction). |
 /// | `Inconsistent` | An internal error; please file a bug. |
 ///
 /// Damage does not always show as the first row. A flipped bit in a header
 /// field can read as an absurd image size (`Limit`), an unknown marker or a
 /// feature the decoder does not read (`Unsupported`), so a corrupt file can
 /// come back as any of those. Do not retry a `Limit` with
-/// [`WorkLimit::Unlimited`] unless the source
+/// an `Unlimited` limit unless the source
 /// is trusted.
 ///
 /// When an input has more than one fault, which one is reported can change in
@@ -222,8 +222,8 @@ pub enum Error {
     /// It is not a missing feature (that is [`Error::Unsupported`]), and the
     /// file may be valid.
     ///
-    /// Three of these can be changed, each with a [`WorkLimit`]:
-    /// the sample limit
+    /// Three of these can be changed: the sample limit, with a
+    /// [`SampleLimit`](crate::SampleLimit)
     /// ([`DecodeOptions::sample_limit`](crate::DecodeOptions::sample_limit)),
     /// which holds the image area and the samples that palette expansion, sYCC
     /// chroma replication and a monochrome ICC conversion produce, and with
@@ -232,26 +232,27 @@ pub enum Error {
     /// 2^20 and 2^18); reading the packet headers
     /// ([`DecodeOptions::packet_work_limit`](crate::DecodeOptions::packet_work_limit));
     /// and decoding the code-blocks
-    /// ([`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit)).
-    /// For one of them, [`LimitDetail::kind`] names the limit, and
-    /// [`LimitDetail::retry_with`] gives the `WorkLimit` to retry with, which
+    /// ([`DecodeOptions::code_block_work_limit`](crate::DecodeOptions::code_block_work_limit)),
+    /// the last two with a [`WorkLimit`](crate::WorkLimit). For one of them,
+    /// [`LimitDetail::kind`] names the limit, and
+    /// [`LimitDetail::retry_with`] gives the [`Raise`] to retry with, which
     /// the message names too. It is a hint (see
-    /// [`WorkLimit`]), not a measure of the file. A
+    /// [`WorkLimit`](crate::WorkLimit)), not a measure of the file. A
     /// refusal under a sample limit of
-    /// [`WorkLimit::AtMost`] gives none: the
+    /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost) gives none: the
     /// caller set that ceiling.
     ///
     /// The other guards have no option, so a file past one of them is refused
     /// whatever the options. A tile may hold at most 32 progression order
     /// change (POC) volumes; a code-block may have at most 30 bit-planes;
-    /// and under a `sample_limit` of `WorkLimit::Unlimited`, an image too
+    /// and under a `sample_limit` of `SampleLimit::Unlimited`, an image too
     /// large for the target to address is still refused. For these,
     /// `retry_with` is `None`. [`LimitDetail`] has an example that retries.
     Limit(LimitDetail),
     /// The caller passed [`DecodeOptions`](crate::DecodeOptions) that are
     /// invalid for this codestream, or that are invalid whatever the input
-    /// (sRGB output with `raw_channels`, a limit of `WorkLimit::Raised(0)` or
-    /// `WorkLimit::AtMost(0)`, or `AtMost` on a work bound).
+    /// (sRGB output with `raw_channels`, a limit of `Raised(0)`, or
+    /// `SampleLimit::AtMost(0)`).
     /// The input itself may be fine.
     InvalidOptions(ErrorDetail),
     /// A decoder invariant was violated (declared geometry and decoded state
@@ -339,7 +340,7 @@ impl Error {
     /// the limit that may admit the input.
     pub(crate) fn limit_retry(
         kind: LimitKind,
-        retry_with: WorkLimit,
+        retry_with: Raise,
         message: impl Into<String>,
     ) -> Error {
         debug_assert!(kind.is_adjustable(), "{kind:?} has no option");
@@ -353,7 +354,7 @@ impl Error {
         Error::limit(kind, None, message.into())
     }
 
-    fn limit(kind: LimitKind, retry_with: Option<WorkLimit>, message: String) -> Error {
+    fn limit(kind: LimitKind, retry_with: Option<Raise>, message: String) -> Error {
         debug_assert!(
             names_its_data(kind, retry_with.as_ref(), &message),
             "{kind:?}, {retry_with:?}: {message}"
@@ -400,7 +401,7 @@ impl Error {
 /// Whether a limit's `message` says what its data does: the `retry_with`
 /// limit, if there is one, and then the option `kind` names. A limit with
 /// no option names none.
-fn names_its_data(kind: LimitKind, retry_with: Option<&WorkLimit>, message: &str) -> bool {
+fn names_its_data(kind: LimitKind, retry_with: Option<&Raise>, message: &str) -> bool {
     let option = match kind {
         LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
             Some("`DecodeOptions::sample_limit`")
@@ -409,11 +410,11 @@ fn names_its_data(kind: LimitKind, retry_with: Option<&WorkLimit>, message: &str
         LimitKind::CodeBlockWork => Some("`DecodeOptions::code_block_work_limit`"),
         _ => None,
     };
+    let limit = kind.limit_type();
     let retry = match retry_with {
-        Some(WorkLimit::Raised(n)) => message.contains(&format!("`WorkLimit::Raised({n})`")),
-        Some(WorkLimit::Unlimited) => message.contains("only `WorkLimit::Unlimited`"),
-        Some(_) => false,
-        None => !message.contains("`WorkLimit::Raised("),
+        Some(Raise::Raised(n)) => message.contains(&format!("`{limit}::Raised({n})`")),
+        Some(Raise::Unlimited) => message.contains(&format!("only `{limit}::Unlimited`")),
+        None => !message.contains("Limit::Raised("),
     };
     retry
         && match option {
@@ -465,7 +466,7 @@ impl fmt::Display for ErrorDetail {
 }
 
 /// What an [`Error::Limit`] carries: which limit refused the input, the
-/// [`WorkLimit`] to retry with when an option raises that limit, and a
+/// [`Raise`] to retry with when an option raises that limit, and a
 /// diagnostic for a log.
 ///
 /// ```
@@ -501,7 +502,7 @@ impl fmt::Display for ErrorDetail {
 #[non_exhaustive]
 pub struct LimitDetail {
     kind: LimitKind,
-    retry_with: Option<WorkLimit>,
+    retry_with: Option<Raise>,
     refused_at: Option<RefusedAt>,
     message: String,
 }
@@ -516,18 +517,21 @@ impl LimitDetail {
     /// retry that may admit the input; `None` when no option raises this
     /// limit.
     ///
-    /// It is the [`WorkLimit`] the message names: a
-    /// [`Raised`](WorkLimit::Raised) factor, or
-    /// [`Unlimited`](WorkLimit::Unlimited) for an image past every factor.
+    /// It is the limit the message names: a [`Raised`](Raise::Raised)
+    /// factor, or [`Unlimited`](Raise::Unlimited) for an image past every
+    /// factor. It converts with [`From`] into the option's type, a
+    /// [`SampleLimit`](crate::SampleLimit) or a
+    /// [`WorkLimit`](crate::WorkLimit).
     /// It is worked out from what the refusal shows, so a retry with it can
     /// still be refused, by this limit later in the file or by another
-    /// limit (see [`WorkLimit`]), or fail with another error once past it,
+    /// limit (see [`WorkLimit`](crate::WorkLimit)), or fail with another
+    /// error once past it,
     /// such as damage the limit stopped the decode before. A work bound
     /// refusal names at least twice the factor it ran under, so retries in a
     /// loop take about log2 of the factor the file needs. It is also `None`
     /// for a packet work refusal that shows no factor, such as one while
     /// reading the header, and for a sample limit refusal under
-    /// [`AtMost`](WorkLimit::AtMost), a ceiling the caller set.
+    /// [`AtMost`](crate::SampleLimit::AtMost), a ceiling the caller set.
     ///
     /// [`DecodeOptions::with_retry`](crate::DecodeOptions::with_retry)
     /// applies it to the option `kind` names. For
@@ -535,7 +539,7 @@ impl LimitDetail {
     /// [`TilePrecincts`](LimitKind::TilePrecincts) that option is the sample
     /// limit, so a retry raises the limit on the whole image's samples, not
     /// only the tile's count.
-    pub fn retry_with(&self) -> Option<WorkLimit> {
+    pub fn retry_with(&self) -> Option<Raise> {
         self.retry_with.clone()
     }
 
@@ -642,7 +646,8 @@ impl RefusedAt {
 ///
 /// [`is_adjustable`](Self::is_adjustable) says which a
 /// [`DecodeOptions`](crate::DecodeOptions) limit raises, with a
-/// [`WorkLimit`]. No option raises the others, so they refuse the input
+/// [`SampleLimit`](crate::SampleLimit) or a [`WorkLimit`](crate::WorkLimit).
+/// No option raises the others, so they refuse the input
 /// whatever the options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -698,6 +703,18 @@ impl LimitKind {
                 | LimitKind::TilePrecincts
         )
     }
+
+    /// The type of the option that raises this limit, as the refusal's
+    /// message names it: `SampleLimit` for the sample limit and the tile
+    /// caps it sets, otherwise `WorkLimit`.
+    pub(crate) fn limit_type(self) -> &'static str {
+        match self {
+            LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
+                "SampleLimit"
+            }
+            _ => "WorkLimit",
+        }
+    }
 }
 
 /// `result` with its error as its `Debug` text, so that two results compare
@@ -723,7 +740,7 @@ pub(crate) fn is_fixed_limit(error: &Error, kind: LimitKind) -> bool {
 /// A [`LimitDetail`] of any `kind` and `retry_with`, past the checks the
 /// constructors make, for a test of what a caller does with one.
 #[cfg(test)]
-pub(crate) fn any_limit(kind: LimitKind, retry_with: Option<WorkLimit>) -> LimitDetail {
+pub(crate) fn any_limit(kind: LimitKind, retry_with: Option<Raise>) -> LimitDetail {
     LimitDetail {
         kind,
         retry_with,

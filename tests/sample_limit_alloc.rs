@@ -1,6 +1,6 @@
 //! A small file that declares a huge image is refused without allocating
 //! anything sized by the image: over the default sample limit, and, under
-//! `WorkLimit::Unlimited`, past what the target can address.
+//! `SampleLimit::Unlimited`, past what the target can address.
 //!
 //! The peak is measured with a counting global allocator, so this file holds a
 //! single test: a second one running in parallel would count into the same
@@ -16,7 +16,7 @@ mod alloc;
 use alloc::{CURRENT, PEAK};
 use std::sync::atomic::Ordering;
 
-use rust_j2k::{DecodeOptions, Error, WorkLimit, decode_with};
+use rust_j2k::{DecodeOptions, Error, SampleLimit, decode_with};
 
 #[global_allocator]
 static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
@@ -51,14 +51,14 @@ fn a_huge_declared_image_is_refused_without_allocating_it() {
         (
             "over the default",
             header(24_000),
-            WorkLimit::Default,
+            SampleLimit::Default,
             "sample limit",
         ),
         // (2^32 - 1)^2 samples: more than any target can address.
         (
             "past the address space",
             header(u32::MAX),
-            WorkLimit::Unlimited,
+            SampleLimit::Unlimited,
             "address",
         ),
     ];

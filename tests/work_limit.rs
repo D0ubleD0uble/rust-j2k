@@ -17,8 +17,8 @@ mod support;
 use std::time::{Duration, Instant};
 
 use rust_j2k::{
-    DecodeOptions, Error, LimitDetail, LimitKind, WorkLimit, decode, decode_with, read_header,
-    read_header_with,
+    DecodeOptions, Error, LimitDetail, LimitKind, Raise, SampleLimit, WorkLimit, decode,
+    decode_with, read_header, read_header_with,
 };
 use support::jp2::sha256_hex;
 use support::synth::{self, Bits, seg};
@@ -400,10 +400,78 @@ fn a_limit_raised_by_zero_is_invalid_options() {
     assert_limit("Raised(1)", decode_with(&bytes, &one));
 }
 
+/// The builders store `Raised(1)`, which sets the same bound as `Default`,
+/// as `Default`, so the options match the defaults; every other value is
+/// kept as given. The bare values still compare unequal.
+#[test]
+fn the_builders_store_raised_one_as_the_default() {
+    let options = DecodeOptions::default()
+        .with_packet_work_limit(WorkLimit::Raised(1))
+        .with_code_block_work_limit(WorkLimit::Raised(1))
+        .with_sample_limit(SampleLimit::Raised(1));
+    assert_eq!(options.packet_work_limit, WorkLimit::Default);
+    assert_eq!(options.code_block_work_limit, WorkLimit::Default);
+    assert_eq!(options.sample_limit, SampleLimit::Default);
+    assert_eq!(
+        format!("{options:?}"),
+        format!("{:?}", DecodeOptions::default())
+    );
+    assert_ne!(WorkLimit::Raised(1), WorkLimit::Default);
+    assert_ne!(SampleLimit::Raised(1), SampleLimit::Default);
+    for limit in [
+        WorkLimit::Default,
+        WorkLimit::Raised(0),
+        WorkLimit::Raised(2),
+        WorkLimit::Unlimited,
+    ] {
+        let options = DecodeOptions::default()
+            .with_packet_work_limit(limit.clone())
+            .with_code_block_work_limit(limit.clone());
+        assert_eq!(options.packet_work_limit, limit);
+        assert_eq!(options.code_block_work_limit, limit);
+    }
+    for limit in [
+        SampleLimit::Default,
+        SampleLimit::Raised(0),
+        SampleLimit::Raised(2),
+        SampleLimit::Unlimited,
+        SampleLimit::AtMost(0),
+        SampleLimit::AtMost(1),
+    ] {
+        let options = DecodeOptions::default().with_sample_limit(limit.clone());
+        assert_eq!(options.sample_limit, limit);
+    }
+}
+
+/// A retry converts into either limit type, variant for variant.
+#[test]
+fn a_retry_converts_into_both_limit_types() {
+    for (raise, work, samples) in [
+        (
+            Raise::Raised(2),
+            WorkLimit::Raised(2),
+            SampleLimit::Raised(2),
+        ),
+        (
+            Raise::Raised(u32::MAX),
+            WorkLimit::Raised(u32::MAX),
+            SampleLimit::Raised(u32::MAX),
+        ),
+        (
+            Raise::Unlimited,
+            WorkLimit::Unlimited,
+            SampleLimit::Unlimited,
+        ),
+    ] {
+        assert_eq!(WorkLimit::from(raise.clone()), work);
+        assert_eq!(SampleLimit::from(raise), samples);
+    }
+}
+
 /// The factor a `Limit` refusal gives as `WorkLimit::Raised(n)`, read from
 /// its data. The message names the same one.
 fn named_factor(limit: &LimitDetail) -> u32 {
-    let Some(WorkLimit::Raised(n)) = limit.retry_with() else {
+    let Some(Raise::Raised(n)) = limit.retry_with() else {
         panic!("no factor given: {limit:?}");
     };
     assert!(
@@ -613,7 +681,8 @@ fn follow_ladder(
         let next = options
             .with_retry(&limit)
             .unwrap_or_else(|| panic!("{name}: no retry for {limit:?}"));
-        let hint = limit.retry_with().expect("with_retry gave options");
+        // Both kinds here are work bounds, set with a `WorkLimit`.
+        let hint = WorkLimit::from(limit.retry_with().expect("with_retry gave options"));
         let (old, expected) = match limit.kind() {
             LimitKind::PacketWork => (
                 &options.packet_work_limit,
@@ -671,7 +740,7 @@ fn follow_ladder(
 #[test]
 fn a_with_retry_ladder_ends_in_a_few_steps_at_the_unlimited_image() {
     let unlimited = DecodeOptions::default()
-        .with_sample_limit(WorkLimit::Unlimited)
+        .with_sample_limit(SampleLimit::Unlimited)
         .with_packet_work_limit(WorkLimit::Unlimited)
         .with_code_block_work_limit(WorkLimit::Unlimited);
     // (file, steps from the defaults). A packet walk costs seconds in a debug
@@ -729,7 +798,7 @@ fn a_tile_cap_refusal_retries_by_the_sample_limit_and_ends() {
     };
     let unlimited = start
         .clone()
-        .with_sample_limit(WorkLimit::Unlimited)
+        .with_sample_limit(SampleLimit::Unlimited)
         .with_packet_work_limit(WorkLimit::Unlimited)
         .with_code_block_work_limit(WorkLimit::Unlimited);
     if !cfg!(target_pointer_width = "64") {
@@ -746,7 +815,7 @@ fn a_tile_cap_refusal_retries_by_the_sample_limit_and_ends() {
         return;
     }
     assert_eq!(limit.kind(), LimitKind::TilePrecincts, "{limit}");
-    assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
+    assert_eq!(limit.retry_with(), Some(Raise::Raised(2)), "{limit}");
     let next = start
         .clone()
         .with_retry(&limit)
@@ -755,7 +824,7 @@ fn a_tile_cap_refusal_retries_by_the_sample_limit_and_ends() {
         format!("{next:?}"),
         format!(
             "{:?}",
-            start.clone().with_sample_limit(WorkLimit::Raised(2))
+            start.clone().with_sample_limit(SampleLimit::Raised(2))
         ),
         "the retry raises the sample limit and nothing else"
     );
@@ -799,14 +868,14 @@ fn a_tile_code_block_cap_refusal_retries_by_the_sample_limit() {
         return;
     }
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
-    assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
+    assert_eq!(limit.retry_with(), Some(Raise::Raised(2)), "{limit}");
     let next = start
         .clone()
         .with_retry(&limit)
         .expect("a tile cap refusal retries");
     assert_eq!(
         format!("{next:?}"),
-        format!("{:?}", start.with_sample_limit(WorkLimit::Raised(2))),
+        format!("{:?}", start.with_sample_limit(SampleLimit::Raised(2))),
         "the retry raises the sample limit and nothing else"
     );
     let image = decode_with(&bytes, &next).expect("one rung reaches the image");

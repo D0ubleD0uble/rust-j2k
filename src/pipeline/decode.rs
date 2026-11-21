@@ -14,8 +14,8 @@ use super::report::{Scope, report_part, report_tile};
 use crate::incremental::Refusal;
 use crate::{
     ColorOutput, ComponentInfo, DecodeOptions, DecodeReport, Error, Header, Image, Jp2Metadata,
-    ReportEntry, Result, TileGrid, WorkLimit, codestream, dwt, header, image, incremental, jp2,
-    limit_hint, mct, samples, tier1, tier2, window,
+    ReportEntry, Result, SampleLimit, TileGrid, WorkLimit, codestream, dwt, header, image,
+    incremental, jp2, limit_hint, mct, samples, tier1, tier2, window,
 };
 
 /// The [`Header`] that [`read_header_with`](crate::read_header_with) returns
@@ -973,32 +973,33 @@ pub(crate) fn check_options(options: &DecodeOptions) -> Result<()> {
              `ColorOutput::Srgb`",
         ));
     }
-    for (name, limit) in [
-        ("packet_work_limit", &options.packet_work_limit),
-        ("code_block_work_limit", &options.code_block_work_limit),
-        ("sample_limit", &options.sample_limit),
+    for (raised_zero, name, limit) in [
+        (
+            options.packet_work_limit == WorkLimit::Raised(0),
+            "packet_work_limit",
+            "WorkLimit",
+        ),
+        (
+            options.code_block_work_limit == WorkLimit::Raised(0),
+            "code_block_work_limit",
+            "WorkLimit",
+        ),
+        (
+            options.sample_limit == SampleLimit::Raised(0),
+            "sample_limit",
+            "SampleLimit",
+        ),
     ] {
-        if *limit == WorkLimit::Raised(0) {
+        if raised_zero {
             return Err(Error::invalid_options(format!(
-                "`DecodeOptions::{name}` is `WorkLimit::Raised(0)`, but the factor must be \
-                 at least 1"
+                "`DecodeOptions::{name}` is `{limit}::Raised(0)`, but the factor must be at \
+                 least 1"
             )));
         }
     }
-    for (name, limit) in [
-        ("packet_work_limit", &options.packet_work_limit),
-        ("code_block_work_limit", &options.code_block_work_limit),
-    ] {
-        if let WorkLimit::AtMost(n) = limit {
-            return Err(Error::invalid_options(format!(
-                "`DecodeOptions::{name}` is `WorkLimit::AtMost({n})`, but `AtMost` sets only \
-                 `DecodeOptions::sample_limit`"
-            )));
-        }
-    }
-    if options.sample_limit == WorkLimit::AtMost(0) {
+    if options.sample_limit == SampleLimit::AtMost(0) {
         return Err(Error::invalid_options(
-            "`DecodeOptions::sample_limit` is `WorkLimit::AtMost(0)`, but an image holds at \
+            "`DecodeOptions::sample_limit` is `SampleLimit::AtMost(0)`, but an image holds at \
              least one sample",
         ));
     }
@@ -1995,7 +1996,7 @@ pub(crate) mod tests {
         // 32-bit target `Raised(4)` cannot lift the precinct cap past the
         // address space (see `ADDRESSABLE_SAMPLES`), so the 520-wide tiles
         // are still over it and the rescue walk runs as under the default.
-        let raised = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(4));
+        let raised = DecodeOptions::default().with_sample_limit(SampleLimit::Raised(4));
         #[cfg(target_pointer_width = "64")]
         let expected = 0;
         #[cfg(not(target_pointer_width = "64"))]
@@ -2254,7 +2255,7 @@ pub(crate) mod tests {
         // On a 32-bit target the caps stop at their floor, so a raised
         // limit does not raise them.
         if cfg!(target_pointer_width = "64") {
-            let raised = lenient.clone().with_sample_limit(WorkLimit::Raised(4));
+            let raised = lenient.clone().with_sample_limit(SampleLimit::Raised(4));
             assert!(read_header(&narrow_first, &raised).is_ok());
             check(&narrow_first, &[raised, lenient.clone()]);
         }

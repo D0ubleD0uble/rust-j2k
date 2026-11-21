@@ -1,8 +1,8 @@
 //! The per-tile caps on code-blocks and precincts grow with the sample
 //! limit: a tile may hold one code-block for each 512 samples the limit
 //! allows and one precinct for each 2048, and at least 2^20 and 2^18. A
-//! refusal names a `WorkLimit::Raised` factor of `DecodeOptions::sample_limit`
-//! to retry with, or none under `WorkLimit::AtMost`, and `read_header_with`
+//! refusal names a `SampleLimit::Raised` factor of `DecodeOptions::sample_limit`
+//! to retry with, or none under `SampleLimit::AtMost`, and `read_header_with`
 //! refuses the tile as the decode does.
 //!
 //! The files are built here: one 8-bit component in one tile, no wavelet
@@ -17,8 +17,8 @@
 mod synth;
 
 use rust_j2k::{
-    DecodeOptions, Error, IncrementalDecoder, LimitDetail, LimitKind, Refined, Region, Waiting,
-    WorkLimit, decode_with, read_header_with,
+    DecodeOptions, Error, IncrementalDecoder, LimitDetail, LimitKind, Raise, Refined, Region,
+    SampleLimit, Waiting, WorkLimit, decode_with, read_header_with,
 };
 
 const FLOOR_BLOCKS: u64 = 1 << 20;
@@ -99,7 +99,7 @@ const OVER_PRECINCTS: LimitKind = if cfg!(target_pointer_width = "64") {
 /// target. On a 32-bit one it is `AddressSpace` with neither: nothing to
 /// retry with and no `refused_at`. That pins today's behavior, not a
 /// promise: a later release may set `refused_at` for that kind.
-fn assert_over_cap(limit: &LimitDetail, kind: LimitKind, retry: Option<WorkLimit>, at: (u32, u64)) {
+fn assert_over_cap(limit: &LimitDetail, kind: LimitKind, retry: Option<Raise>, at: (u32, u64)) {
     if cfg!(target_pointer_width = "64") {
         assert_eq!(limit.kind(), kind, "{limit}");
         assert_eq!(limit.retry_with(), retry, "{limit}");
@@ -136,7 +136,7 @@ fn a_tile_past_the_floor_decodes_once_the_input_raises_the_limit() {
     assert_over_cap(
         &limit,
         LimitKind::TileCodeBlocks,
-        Some(WorkLimit::Raised(2)),
+        Some(Raise::Raised(2)),
         (0, blocks),
     );
     assert!(
@@ -155,7 +155,7 @@ fn a_tile_past_the_floor_decodes_once_the_input_raises_the_limit() {
         let retry = DecodeOptions::default()
             .with_retry(&limit)
             .expect("the hint names the sample limit");
-        assert_eq!(retry.sample_limit, WorkLimit::Raised(2));
+        assert_eq!(retry.sample_limit, SampleLimit::Raised(2));
         decodes(&small, &retry, width, height);
         decodes(&padded, &DecodeOptions::default(), width, height);
     } else {
@@ -181,7 +181,7 @@ fn a_tile_that_needs_twice_the_scaled_cap_gets_raised_2() {
     assert_over_cap(
         &limit,
         LimitKind::TileCodeBlocks,
-        Some(WorkLimit::Raised(2)),
+        Some(Raise::Raised(2)),
         (0, 1_572_864),
     );
     if cfg!(target_pointer_width = "64") {
@@ -208,10 +208,10 @@ fn under_at_most_the_code_block_cap_scales_from_n_with_no_retry() {
     let blocks = blocks_of(width, height);
     let bytes = blocks_tile(width, height, 0);
 
-    let exact = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(blocks * 512));
+    let exact = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(blocks * 512));
     decodes(&bytes, &exact, width, height);
 
-    let under = WorkLimit::AtMost(blocks * 512 - 1);
+    let under = SampleLimit::AtMost(blocks * 512 - 1);
     let options = DecodeOptions::default().with_sample_limit(under.clone());
     let limit = refusal(&bytes, &options);
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
@@ -222,7 +222,7 @@ fn under_at_most_the_code_block_cap_scales_from_n_with_no_retry() {
         limit.message(),
         format!(
             "tile 0 holds {blocks} code-blocks, more than the {} a tile may hold under \
-             `WorkLimit::AtMost({})` (see `DecodeOptions::sample_limit`)",
+             `SampleLimit::AtMost({})` (see `DecodeOptions::sample_limit`)",
             blocks - 1,
             blocks * 512 - 1
         )
@@ -242,14 +242,14 @@ fn under_at_most_an_image_within_the_floor_decodes() {
     let (width, height) = (4096, 4096);
     let samples = u64::from(width) * u64::from(height);
     let floor = blocks_tile(width, height, 0);
-    let options = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(samples));
+    let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(samples));
     decodes(&floor, &options, width, height);
 
     // One more row of code-blocks is over the floor, whatever the ceiling
     // up to 2^29 - 1.
     let (width, height) = (4096, 4100);
     let over = blocks_tile(width, height, 0);
-    let options = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost((1 << 29) - 1));
+    let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost((1 << 29) - 1));
     let limit = refusal(&over, &options);
     assert_over_cap(
         &limit,
@@ -272,7 +272,7 @@ fn the_precinct_cap_scales_with_the_sample_limit() {
     assert_over_cap(
         &limit,
         LimitKind::TilePrecincts,
-        Some(WorkLimit::Raised(2)),
+        Some(Raise::Raised(2)),
         (0, precincts),
     );
     // The ceilings and the retry that scale the cap are past the address
@@ -290,10 +290,11 @@ fn the_precinct_cap_scales_with_the_sample_limit() {
         let retry = DecodeOptions::default().with_retry(&limit).unwrap();
         decodes(&bytes, &retry, width, height);
 
-        let exact = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(precincts * 2048));
+        let exact =
+            DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(precincts * 2048));
         decodes(&bytes, &exact, width, height);
         let under =
-            DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(precincts * 2048 - 1));
+            DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(precincts * 2048 - 1));
         let limit = refusal(&bytes, &under);
         assert_over_cap(&limit, LimitKind::TilePrecincts, None, (0, precincts));
     } else {
@@ -315,7 +316,7 @@ fn the_precinct_cap_scales_with_the_sample_limit() {
     assert_over_cap(
         &limit,
         LimitKind::TilePrecincts,
-        Some(WorkLimit::Raised(8)),
+        Some(Raise::Raised(8)),
         (0, 2048 * 1024),
     );
     // The factor named admits both counts. The header read stands in for
@@ -362,7 +363,7 @@ fn a_tile_over_both_caps_names_a_factor_that_admits_both() {
     assert_over_cap(
         &limit,
         LimitKind::TilePrecincts,
-        Some(WorkLimit::Raised(3)),
+        Some(Raise::Raised(3)),
         (0, precincts),
     );
     assert!(
@@ -408,7 +409,7 @@ fn huge_tile_header(width: u32, height: u32) -> Vec<u8> {
 /// The ladder of refusals `read_header_with` gives `bytes`, from the
 /// default, each retry taking the option the last refusal named, up to the
 /// header it admits or a refusal with nothing to retry with.
-fn header_ladder(bytes: &[u8]) -> (Vec<(LimitKind, Option<WorkLimit>)>, bool) {
+fn header_ladder(bytes: &[u8]) -> (Vec<(LimitKind, Option<Raise>)>, bool) {
     let mut options = DecodeOptions::default();
     let mut ladder = Vec::new();
     loop {
@@ -441,7 +442,7 @@ fn a_tile_whose_code_blocks_no_limit_admits_is_refused_at_once() {
     assert_eq!(
         ladder,
         [
-            (LimitKind::Samples, Some(WorkLimit::Raised(1 << 28))),
+            (LimitKind::Samples, Some(Raise::Raised(1 << 28))),
             (LimitKind::AddressSpace, None),
         ]
     );
@@ -461,8 +462,8 @@ fn a_tile_past_every_raised_factor_names_unlimited() {
     assert_eq!(
         ladder,
         [
-            (LimitKind::Samples, Some(WorkLimit::Raised(1 << 27))),
-            (LimitKind::TilePrecincts, Some(WorkLimit::Unlimited)),
+            (LimitKind::Samples, Some(Raise::Raised(1 << 27))),
+            (LimitKind::TilePrecincts, Some(Raise::Unlimited)),
         ]
     );
 }
@@ -493,7 +494,7 @@ fn the_tile_over_the_cap_is_named_alike() {
     assert_over_cap(
         &limit,
         LimitKind::TileCodeBlocks,
-        Some(WorkLimit::Raised(2)),
+        Some(Raise::Raised(2)),
         (1, blocks_of(side, height)),
     );
 
@@ -502,7 +503,7 @@ fn the_tile_over_the_cap_is_named_alike() {
 
     // Under `AtMost` it is tile 1 too, with the same amount.
     let blocks = blocks_of(side, height);
-    let at_most = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(blocks * 512 - 1));
+    let at_most = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(blocks * 512 - 1));
     let limit = refusal(&bytes, &at_most);
     assert_over_cap(&limit, LimitKind::TileCodeBlocks, None, (1, blocks));
 }
@@ -567,7 +568,7 @@ fn a_tile_part_cod_is_counted_as_the_decode_counts_it() {
     assert_over_cap(
         &limit,
         LimitKind::TileCodeBlocks,
-        Some(WorkLimit::Raised(2)),
+        Some(Raise::Raised(2)),
         (0, blocks_of(width, height)),
     );
     if cfg!(target_pointer_width = "64") {
@@ -593,7 +594,7 @@ fn a_tile_part_cod_over_both_caps_names_a_factor_for_both() {
     assert_over_cap(
         &limit,
         LimitKind::TileCodeBlocks,
-        Some(WorkLimit::Raised(3)),
+        Some(Raise::Raised(3)),
         (0, blocks),
     );
 
@@ -614,7 +615,7 @@ fn a_tile_part_cod_over_both_caps_names_a_factor_for_both() {
     assert_over_cap(
         &limit,
         LimitKind::TilePrecincts,
-        Some(WorkLimit::Raised(3)),
+        Some(Raise::Raised(3)),
         (0, packets as u64),
     );
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
@@ -655,7 +656,7 @@ fn a_tile_of_many_resolutions_is_counted() {
     assert_over_cap(
         &limit,
         LimitKind::TilePrecincts,
-        Some(WorkLimit::Raised(3)),
+        Some(Raise::Raised(3)),
         (0, 540_672),
     );
 }
@@ -1061,7 +1062,7 @@ fn a_tile_part_cod_over_a_cap_in_a_lower_tile_is_refused_first() {
         assert!(limit.message().starts_with("tile 0 "), "{limit}");
         assert_eq!(limit.kind(), OVER_PRECINCTS, "{limit}");
         let retry = if cfg!(target_pointer_width = "64") {
-            Some(WorkLimit::Raised(10))
+            Some(Raise::Raised(10))
         } else {
             None
         };
@@ -1286,7 +1287,7 @@ fn a_jp2_file_is_refused_alike() {
     let limit = refusal(&bytes, &DecodeOptions::default());
     assert_eq!(limit.kind(), OVER_BLOCKS, "{limit}");
     if cfg!(target_pointer_width = "64") {
-        assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
+        assert_eq!(limit.retry_with(), Some(Raise::Raised(2)), "{limit}");
         let retry = DecodeOptions::default().with_retry(&limit).unwrap();
         decodes(&bytes, &retry, width, height);
     } else {
@@ -1308,7 +1309,7 @@ fn a_refine_waits_on_a_tile_past_the_caps() {
         match decoder.refine() {
             Ok(Refined::Waiting(Waiting::SampleLimit { limit, .. })) => {
                 assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
-                assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)), "{limit}");
+                assert_eq!(limit.retry_with(), Some(Raise::Raised(2)), "{limit}");
             }
             other => panic!("{other:?}"),
         }
@@ -1329,7 +1330,7 @@ fn a_refine_waits_on_a_tile_past_the_caps() {
         assert_eq!(format!("{:?}", decoder.refine()), format!("{first:?}"));
     }
 
-    let ceiling = WorkLimit::AtMost(blocks_of(width, height) * 512 - 1);
+    let ceiling = SampleLimit::AtMost(blocks_of(width, height) * 512 - 1);
     let mut decoder =
         IncrementalDecoder::new(DecodeOptions::default().with_sample_limit(ceiling)).unwrap();
     decoder.feed(head);
@@ -1401,7 +1402,7 @@ fn past_the_address_space() -> [(&'static str, Vec<u8>); 2] {
 
 #[test]
 fn a_tile_past_the_address_space_is_not_adjustable() {
-    let unlimited = DecodeOptions::default().with_sample_limit(WorkLimit::Unlimited);
+    let unlimited = DecodeOptions::default().with_sample_limit(SampleLimit::Unlimited);
     for (noun, bytes) in past_the_address_space() {
         assert!(bytes.len() < 100, "{noun}: {}", bytes.len());
         let limit = refusal(&bytes, &unlimited);
@@ -1426,7 +1427,7 @@ fn a_tile_past_the_address_space_is_not_adjustable() {
 #[test]
 fn a_sample_limit_refusal_names_no_tile() {
     let small = blocks_tile(64, 64, 0);
-    let under = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(100));
+    let under = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(100));
     let limit = refusal(&small, &under);
     assert_eq!(limit.kind(), LimitKind::Samples, "{limit}");
     assert_eq!(limit.refused_at(), None, "{limit}");
@@ -1436,7 +1437,7 @@ fn a_sample_limit_refusal_names_no_tile() {
 /// it again, however many bytes come. It does not wait on `SampleLimit`.
 #[test]
 fn a_refine_does_not_wait_on_a_tile_past_the_address_space() {
-    let unlimited = DecodeOptions::default().with_sample_limit(WorkLimit::Unlimited);
+    let unlimited = DecodeOptions::default().with_sample_limit(SampleLimit::Unlimited);
     for (noun, bytes) in past_the_address_space() {
         let mut decoder = IncrementalDecoder::new(unlimited.clone()).unwrap();
         decoder.feed(&bytes);
@@ -1457,7 +1458,7 @@ fn a_refine_does_not_wait_on_a_tile_past_the_address_space() {
 /// a refine returns it as an error.
 #[test]
 fn a_ceiling_past_the_address_space_does_not_change_the_kind() {
-    let ceiling = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(u64::MAX));
+    let ceiling = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(u64::MAX));
     for (noun, bytes) in past_the_address_space() {
         let limit = refusal(&bytes, &ceiling);
         assert_eq!(limit.kind(), LimitKind::AddressSpace, "{noun}: {limit}");
@@ -1479,7 +1480,7 @@ fn a_ceiling_past_the_address_space_does_not_change_the_kind() {
 fn a_refusal_only_unlimited_lifts_is_a_wait() {
     let (width, height) = (4 * ((1u32 << 26) - 1), 4 * ((1u32 << 26) + 1));
     let bytes = blocks_tile(width, height, 0);
-    let raised = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(u32::MAX));
+    let raised = DecodeOptions::default().with_sample_limit(SampleLimit::Raised(u32::MAX));
     let limit = refusal(&bytes, &raised);
     if !cfg!(target_pointer_width = "64") {
         // The image area is past the address space of a 32-bit target, so
@@ -1494,12 +1495,12 @@ fn a_refusal_only_unlimited_lifts_is_a_wait() {
         return;
     }
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
-    assert_eq!(limit.retry_with(), Some(WorkLimit::Unlimited), "{limit}");
+    assert_eq!(limit.retry_with(), Some(Raise::Unlimited), "{limit}");
     let mut decoder = IncrementalDecoder::new(raised).unwrap();
     decoder.feed(&bytes);
     match decoder.refine() {
         Ok(Refined::Waiting(Waiting::SampleLimit { limit, .. })) => {
-            assert_eq!(limit.retry_with(), Some(WorkLimit::Unlimited), "{limit}");
+            assert_eq!(limit.retry_with(), Some(Raise::Unlimited), "{limit}");
         }
         other => panic!("{other:?}"),
     }

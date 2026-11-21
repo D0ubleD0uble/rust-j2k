@@ -1090,7 +1090,7 @@ fn read_header_with_agrees_with_decode_with_under_the_same_options() {
     // 255 * 2^22 is 1.99 times 2^29, so `Raised(2)` admits the expansion
     // (`Raised(1)`, the default, does not); the header is all this test reads
     // at full size.
-    let raised = |n| DecodeOptions::default().with_sample_limit(crate::WorkLimit::Raised(n));
+    let raised = |n| DecodeOptions::default().with_sample_limit(crate::SampleLimit::Raised(n));
     assert!(matches!(
         read_header_with(&big, &raised(1)),
         Err(Error::Limit(_))

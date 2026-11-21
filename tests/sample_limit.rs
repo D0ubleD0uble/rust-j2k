@@ -1,7 +1,7 @@
 //! The sample limit, [`DecodeOptions::sample_limit`]: how many samples a
 //! decoded image may hold. The default is 2^29 samples, counted at the
-//! decode's resolution reduction; `WorkLimit::Raised` and
-//! `WorkLimit::Unlimited` raise or lift it.
+//! decode's resolution reduction; `SampleLimit::Raised` and
+//! `SampleLimit::Unlimited` raise or lift it.
 //!
 //! The fixtures in `tests/fixtures/sample_limit/` are written by
 //! `scripts/gen-sample-limit-fixtures.py` (see the README there).
@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use synth::{bx, seg, tile_part};
 
 use rust_j2k::{
-    DecodeOptions, Error, LimitDetail, LimitKind, Region, Window, WorkLimit, decode, decode_with,
-    read_header, read_header_with,
+    DecodeOptions, Error, LimitDetail, LimitKind, Raise, Region, SampleLimit, Window, WorkLimit,
+    decode, decode_with, read_header, read_header_with,
 };
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -49,7 +49,7 @@ fn in_jp2(codestream: &[u8]) -> Vec<u8> {
     )
 }
 
-fn with_limit(limit: WorkLimit) -> DecodeOptions {
+fn with_limit(limit: SampleLimit) -> DecodeOptions {
     DecodeOptions::default().with_sample_limit(limit)
 }
 
@@ -102,15 +102,15 @@ fn over_the_default_limit_is_refused_and_the_message_names_the_option() {
                         "{what}: {m}"
                     );
                     assert!(
-                        m.message().contains("`WorkLimit::Raised(2)`"),
+                        m.message().contains("`SampleLimit::Raised(2)`"),
                         "{what}: {m}"
                     );
                     assert!(
-                        m.message().contains("`WorkLimit::Unlimited`"),
+                        m.message().contains("`SampleLimit::Unlimited`"),
                         "{what}: {m}"
                     );
                     assert_eq!(m.kind(), LimitKind::Samples, "{what}");
-                    assert_eq!(m.retry_with(), Some(WorkLimit::Raised(2)), "{what}");
+                    assert_eq!(m.retry_with(), Some(Raise::Raised(2)), "{what}");
                 }
                 other => panic!("{what}: {other:?}"),
             }
@@ -133,7 +133,7 @@ fn a_retry_with_the_typed_hint_admits_the_flat_file() {
     let options = DecodeOptions::default()
         .with_retry(&detail)
         .expect("a retry for the sample limit");
-    assert_eq!(options.sample_limit, WorkLimit::Raised(2));
+    assert_eq!(options.sample_limit, SampleLimit::Raised(2));
     let header = read_header_with(&bytes, &options).expect("the header reads under the retry");
     assert_eq!((header.width, header.height), (32769, 16385));
     assert!(matches!(
@@ -186,10 +186,10 @@ fn raised_and_unlimited_admit_an_image_over_the_default() {
     let codestream = flat_header_only();
     let file = in_jp2(&codestream);
     for (bytes, limit) in [
-        (&codestream, WorkLimit::Raised(2)),
-        (&codestream, WorkLimit::Unlimited),
-        (&file, WorkLimit::Raised(2)),
-        (&file, WorkLimit::Unlimited),
+        (&codestream, SampleLimit::Raised(2)),
+        (&codestream, SampleLimit::Unlimited),
+        (&file, SampleLimit::Raised(2)),
+        (&file, SampleLimit::Unlimited),
     ] {
         let options = with_limit(limit.clone());
         let header = read_header_with(bytes, &options).unwrap_or_else(|e| panic!("{limit:?}: {e}"));
@@ -201,7 +201,7 @@ fn raised_and_unlimited_admit_an_image_over_the_default() {
     }
     // `Raised(1)` is the default limit.
     assert!(matches!(
-        read_header_with(&file, &with_limit(WorkLimit::Raised(1))),
+        read_header_with(&file, &with_limit(SampleLimit::Raised(1))),
         Err(Error::Limit(_))
     ));
 }
@@ -251,7 +251,7 @@ fn a_reduced_image_still_over_the_limit_names_the_reduction() {
         Err(Error::Limit(m)) => assert!(
             m.message().starts_with(
                 "image area 25000x25000 at resolution reduction 1 needs 625000000 samples"
-            ) && m.message().contains("`WorkLimit::Raised(2)`"),
+            ) && m.message().contains("`SampleLimit::Raised(2)`"),
             "{m}"
         ),
         other => panic!("{other:?}"),
@@ -262,7 +262,7 @@ fn a_reduced_image_still_over_the_limit_names_the_reduction() {
 /// whatever the input.
 #[test]
 fn a_sample_limit_raised_by_zero_is_invalid_options() {
-    let options = with_limit(WorkLimit::Raised(0));
+    let options = with_limit(SampleLimit::Raised(0));
     for bytes in [flat(), b"not a codestream".to_vec()] {
         for result in [
             decode_with(&bytes, &options).map(|_| ()),
@@ -272,7 +272,7 @@ fn a_sample_limit_raised_by_zero_is_invalid_options() {
                 Err(Error::InvalidOptions(m)) => {
                     assert_eq!(
                         m.message(),
-                        "`DecodeOptions::sample_limit` is `WorkLimit::Raised(0)`, but the \
+                        "`DecodeOptions::sample_limit` is `SampleLimit::Raised(0)`, but the \
                          factor must be at least 1"
                     );
                 }
@@ -282,13 +282,13 @@ fn a_sample_limit_raised_by_zero_is_invalid_options() {
     }
 }
 
-/// The default is `WorkLimit::Default`, and the setter sets the field.
+/// The default is `SampleLimit::Default`, and the setter sets the field.
 #[test]
 fn the_sample_limit_defaults_to_the_default_bound() {
-    assert_eq!(DecodeOptions::default().sample_limit, WorkLimit::Default);
+    assert_eq!(DecodeOptions::default().sample_limit, SampleLimit::Default);
     assert_eq!(
-        with_limit(WorkLimit::Unlimited).sample_limit,
-        WorkLimit::Unlimited
+        with_limit(SampleLimit::Unlimited).sample_limit,
+        SampleLimit::Unlimited
     );
 }
 
@@ -371,7 +371,7 @@ fn many_tiles_of_geometry_are_held_to_the_packet_work_bound() {
 /// The message names the same one.
 fn named_factor(limit: &LimitDetail) -> u32 {
     assert_eq!(limit.kind(), LimitKind::PacketWork, "{limit}");
-    let Some(WorkLimit::Raised(n)) = limit.retry_with() else {
+    let Some(Raise::Raised(n)) = limit.retry_with() else {
         panic!("no factor given: {limit:?}");
     };
     assert!(
@@ -536,7 +536,7 @@ fn a_window_is_held_to_the_samples_of_the_tiles_it_reads() {
             ),
             "{m}"
         );
-        assert!(m.contains("`WorkLimit::Raised(2)`"), "{m}");
+        assert!(m.contains("`SampleLimit::Raised(2)`"), "{m}");
     }
     // Past the limit on its own: 36 tiles, one column of them a sample wide.
     let m = limit(read_header_with(&bytes, &window(0, 0, 32769, 16384)));
@@ -555,7 +555,7 @@ fn a_window_is_held_to_the_samples_of_the_tiles_it_reads() {
     let header = read_header_with(&bytes, &reduced).expect("fits at reduction 1");
     assert_eq!((header.width, header.height), (16384, 8192));
     // `Raised(2)` admits the window as it admits the image.
-    let raised = all.with_sample_limit(WorkLimit::Raised(2));
+    let raised = all.with_sample_limit(SampleLimit::Raised(2));
     assert!(read_header_with(&bytes, &raised).is_ok());
 }
 
@@ -736,7 +736,7 @@ fn past_64_mib_the_default_limit_grows_with_the_input() {
             )),
             "{m}"
         );
-        assert!(m.contains("`WorkLimit::Raised(2)`"), "{m}");
+        assert!(m.contains("`SampleLimit::Raised(2)`"), "{m}");
     }
 }
 
@@ -757,14 +757,14 @@ fn a_factor_multiplies_the_default_for_the_input() {
         )),
         "{detail}"
     );
-    assert_eq!(detail.retry_with(), Some(WorkLimit::Raised(2)));
+    assert_eq!(detail.retry_with(), Some(Raise::Raised(2)));
     let retry = DecodeOptions::default().with_retry(&detail).unwrap();
     let header = read_header_with(&bytes, &retry).expect("the factor named admits the file");
     assert_eq!((header.width, header.height), (46342, 23171));
     // At the floor, 2^29 samples, the same image needs `Raised(3)`.
     let small = synth::two_large_tiles(1000);
     let detail = limit(read_header(&small));
-    assert!(detail.contains("`WorkLimit::Raised(3)`"), "{detail}");
+    assert!(detail.contains("`SampleLimit::Raised(3)`"), "{detail}");
 }
 
 /// In a JP2 file the limit counts the bytes of the whole file, as the
@@ -866,11 +866,11 @@ fn a_100_byte_file_is_held_to_2_to_the_29_samples() {
     }
 }
 
-// `WorkLimit::AtMost(n)`: a ceiling of `n` samples, whatever the input's
+// `SampleLimit::AtMost(n)`: a ceiling of `n` samples, whatever the input's
 // length, checked where the default limit is.
 
 fn at_most(n: u64) -> DecodeOptions {
-    with_limit(WorkLimit::AtMost(n))
+    with_limit(SampleLimit::AtMost(n))
 }
 
 /// The refusal `result` must be under `AtMost(n)`: of kind `Samples`, with no
@@ -887,7 +887,7 @@ fn refused_at_most<T: std::fmt::Debug>(result: Result<T, Error>, n: u64) -> Stri
     let m = detail.message().to_owned();
     assert!(
         m.contains(&format!(
-            ", over the ceiling of `WorkLimit::AtMost({n})` (see `DecodeOptions::sample_limit`)"
+            ", over the ceiling of `SampleLimit::AtMost({n})` (see `DecodeOptions::sample_limit`)"
         )),
         "{m}"
     );
@@ -895,28 +895,17 @@ fn refused_at_most<T: std::fmt::Debug>(result: Result<T, Error>, n: u64) -> Stri
     m
 }
 
-/// `AtMost(0)` admits no image, and `AtMost` sets no work bound: both are
-/// contradictions in the options, refused whatever the input, by the decode,
-/// the header read and the incremental decoder alike.
+/// `AtMost(0)` admits no image: a contradiction in the options, refused
+/// whatever the input, by the decode, the header read and the incremental
+/// decoder alike. `AtMost` on a work bound does not compile (see the
+/// `WorkLimit` docs).
 #[test]
-fn at_most_zero_and_at_most_on_a_work_bound_are_invalid_options() {
-    let cases = [
-        (
-            at_most(0),
-            "`DecodeOptions::sample_limit` is `WorkLimit::AtMost(0)`, but an image holds at \
-             least one sample",
-        ),
-        (
-            DecodeOptions::default().with_packet_work_limit(WorkLimit::AtMost(1 << 20)),
-            "`DecodeOptions::packet_work_limit` is `WorkLimit::AtMost(1048576)`, but `AtMost` \
-             sets only `DecodeOptions::sample_limit`",
-        ),
-        (
-            DecodeOptions::default().with_code_block_work_limit(WorkLimit::AtMost(7)),
-            "`DecodeOptions::code_block_work_limit` is `WorkLimit::AtMost(7)`, but `AtMost` \
-             sets only `DecodeOptions::sample_limit`",
-        ),
-    ];
+fn at_most_zero_is_invalid_options() {
+    let cases = [(
+        at_most(0),
+        "`DecodeOptions::sample_limit` is `SampleLimit::AtMost(0)`, but an image holds at \
+         least one sample",
+    )];
     for (options, want) in cases {
         for bytes in [flat(), b"not a codestream".to_vec()] {
             for result in [
@@ -975,11 +964,14 @@ fn at_most_holds_a_large_file_and_a_window_over_two_tiles() {
     let n = 1 << 29;
     for m in [
         refused_at_most(
-            read_header_with(&bytes, &in_tile_0().with_sample_limit(WorkLimit::AtMost(n))),
+            read_header_with(
+                &bytes,
+                &in_tile_0().with_sample_limit(SampleLimit::AtMost(n)),
+            ),
             n,
         ),
         refused_at_most(
-            decode_with(&bytes, &lenient.with_sample_limit(WorkLimit::AtMost(n))),
+            decode_with(&bytes, &lenient.with_sample_limit(SampleLimit::AtMost(n))),
             n,
         ),
     ] {
@@ -991,10 +983,10 @@ fn at_most_holds_a_large_file_and_a_window_over_two_tiles() {
 
     let both = window(23000, 0, 23400, 16);
     let total = 2 * 536_895_241;
-    let fits = both.clone().with_sample_limit(WorkLimit::AtMost(total));
+    let fits = both.clone().with_sample_limit(SampleLimit::AtMost(total));
     let header = read_header_with(&bytes, &fits).expect("both tiles fit");
     assert_eq!((header.width, header.height), (400, 16));
-    let over = both.with_sample_limit(WorkLimit::AtMost(total - 1));
+    let over = both.with_sample_limit(SampleLimit::AtMost(total - 1));
     for m in [
         refused_at_most(read_header_with(&bytes, &over), total - 1),
         refused_at_most(decode_with(&bytes, &over), total - 1),
@@ -1014,11 +1006,11 @@ fn at_most_counts_every_component_of_the_tiles_read() {
     let tiled = with_mct(many_tiles_of_empty_packets(16, 1024, 3));
     let subset = window(100, 200, 356, 456).with_components(Some(vec![0]));
     let total = 3 << 20;
-    let fits = subset.clone().with_sample_limit(WorkLimit::AtMost(total));
+    let fits = subset.clone().with_sample_limit(SampleLimit::AtMost(total));
     let image = decode_with(&tiled, &fits).expect("one tile of three components fits");
     assert_eq!(image.components.len(), 1);
     assert!(read_header_with(&tiled, &fits).is_ok());
-    let over = subset.with_sample_limit(WorkLimit::AtMost(total - 1));
+    let over = subset.with_sample_limit(SampleLimit::AtMost(total - 1));
     for m in [
         refused_at_most(read_header_with(&tiled, &over), total - 1),
         refused_at_most(decode_with(&tiled, &over), total - 1),

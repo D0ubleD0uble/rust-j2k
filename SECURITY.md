@@ -23,7 +23,7 @@ reason the README doesn't list, or an `Error::Inconsistent`. Three things are
 expected behavior, not bugs: a wrong image from damaged data (JPEG 2000 has no
 checksum, so some damage can't be detected), an abort when the machine runs
 out of memory within the default limits, and an abort after you lift a limit
-with `WorkLimit::Unlimited` and memory runs out.
+with `Unlimited` and memory runs out.
 
 ## Supported versions
 
@@ -80,10 +80,10 @@ per tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see "Work
 and memory" in [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
 
 For input from a source you trust, `DecodeOptions` can raise these limits
-(`WorkLimit::Raised`) or remove them (`WorkLimit::Unlimited`). A decode under
-a raised or removed limit may take as long, and allocate as much, as the file
-asks. If an allocation fails under `WorkLimit::Unlimited`, the process aborts,
-as Rust's allocation failures do.
+(`Raised`, on a `SampleLimit` or `WorkLimit`) or remove them (`Unlimited`). A
+decode under a raised or removed limit may take as long, and allocate as much,
+as the file asks. If an allocation fails under `SampleLimit::Unlimited`, the
+process aborts, as Rust's allocation failures do.
 
 Three things back the promise. The library has no `unsafe` code, so a
 malformed input cannot cause undefined behavior: a bug can give a wrong value,
@@ -106,7 +106,7 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    times the input plus 128 KiB (see "The sample limit" in
    [`docs/resource-bounds.md`](docs/resource-bounds.md)).
 2. **Set a fixed sample ceiling.** Set `DecodeOptions::sample_limit` to
-   `WorkLimit::AtMost(n)`. The decode then holds at most `n` samples, `4·n`
+   `SampleLimit::AtMost(n)`. The decode then holds at most `n` samples, `4·n`
    bytes of output, whatever the input's length or padding. The sample
    buffers peak at no more than about 3.2 times that (a square tile
    measured 1.35, resident). Plan on 3.2 x 4n for the samples, plus one

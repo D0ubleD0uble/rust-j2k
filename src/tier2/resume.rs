@@ -489,10 +489,12 @@ enum Advanced {
 /// What [`TileWalk::bytes`] counts for the walk's own struct. It is a
 /// constant, not `size_of::<TileWalk>()`, so that where an
 /// `IncrementalDecoder` keeps or lets go of a walk, and so what a refine
-/// spends, does not move with the compiler's choice of layout. It is the
-/// size of the struct on 64-bit targets; a unit test pins that. A change to
-/// this number is a change to that behavior: measure the spend again
-/// against main's before making one.
+/// spends, does not move with the compiler's choice of layout. It was the
+/// size of the struct on 64-bit targets, and is 8 bytes more since a
+/// [`LimitDetail`](crate::LimitDetail)'s retry shrank (the `failure` field's
+/// [`Error`]); a unit test pins that. A change to this number is a change
+/// to that behavior: measure the spend again against main's before making
+/// one.
 const WALK_SELF_BYTES: usize = 1200;
 
 /// One tile's walk.
@@ -1231,12 +1233,14 @@ impl TileWalk {
 mod size_tests {
     use super::*;
 
-    /// The count of a walk's own struct matches the struct, so the walks
-    /// keep and drop where they did when the count was `size_of`. A layout
-    /// randomizing build changes the size, and so fails this on purpose.
+    /// The count of a walk's own struct is the struct's size plus the 8
+    /// bytes an [`Error`] lost when a limit's retry became a `Raise`, so the
+    /// walks keep and drop where they did when the count was `size_of`. A
+    /// layout randomizing build changes the size, and so fails this on
+    /// purpose.
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn the_walk_self_count_is_the_size_of_the_struct() {
-        assert_eq!(std::mem::size_of::<TileWalk>(), WALK_SELF_BYTES);
+        assert_eq!(std::mem::size_of::<TileWalk>() + 8, WALK_SELF_BYTES);
     }
 }

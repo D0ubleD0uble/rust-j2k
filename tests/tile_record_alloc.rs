@@ -11,7 +11,7 @@
 //! so the decode makes no `realloc` of 1 MiB or more. The others have only
 //! the tile-part of tile 0, of 15 bytes (82 bytes in all) or with 100 KB of
 //! padding after its packet: with `strict` off they decode, and strict they
-//! are refused for the missing tiles. Under `WorkLimit::AtMost(4096)` tile 0
+//! are refused for the missing tiles. Under `SampleLimit::AtMost(4096)` tile 0
 //! decodes, and the decode's peak is the records.
 //!
 //! This counts the bytes allocated, a `realloc` as the new block allocated
@@ -36,7 +36,7 @@ use alloc::{CURRENT, LARGE_REALLOCS, PEAK};
 use std::sync::atomic::Ordering;
 use synth::seg;
 
-use rust_j2k::{DecodeOptions, Region, WorkLimit, decode_with};
+use rust_j2k::{DecodeOptions, Region, SampleLimit, decode_with};
 
 #[global_allocator]
 static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
@@ -78,7 +78,7 @@ fn one_sample_tiles(present: u32, padding: usize) -> Vec<u8> {
 /// peak, over what was live before, and what the decode gave.
 fn peak(bytes: &[u8], strict: bool) -> (usize, Result<(), rust_j2k::Error>) {
     let options = DecodeOptions::default()
-        .with_sample_limit(WorkLimit::AtMost(4096))
+        .with_sample_limit(SampleLimit::AtMost(4096))
         .with_region(Region::Tile(0))
         .with_strict(strict);
     let before = CURRENT.load(Ordering::SeqCst);

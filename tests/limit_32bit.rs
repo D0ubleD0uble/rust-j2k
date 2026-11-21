@@ -12,7 +12,9 @@
 #[path = "support/synth.rs"]
 mod synth;
 
-use rust_j2k::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with, read_header_with};
+use rust_j2k::{
+    DecodeOptions, Error, LimitKind, Raise, SampleLimit, WorkLimit, decode_with, read_header_with,
+};
 
 /// One 520 x 512 tile with no wavelet levels and 1x1 precincts: 266,240 of
 /// them, and an empty packet each.
@@ -35,7 +37,7 @@ fn a_tile_over_the_address_space_is_refused_with_nothing_to_retry() {
     for limit in [
         WorkLimit::Default,
         WorkLimit::Raised(4),
-        WorkLimit::AtMost(u64::MAX),
+        SampleLimit::AtMost(u64::MAX),
         WorkLimit::Unlimited,
     ] {
         let options = DecodeOptions::default().with_sample_limit(limit.clone());
@@ -68,9 +70,9 @@ fn the_same_tile_is_a_sample_limit_refusal_on_a_64_bit_target() {
             panic!("the default admitted it: {result:?}");
         };
         assert_eq!(refusal.kind(), LimitKind::TilePrecincts, "{refusal}");
-        assert_eq!(refusal.retry_with(), Some(WorkLimit::Raised(2)));
+        assert_eq!(refusal.retry_with(), Some(Raise::Raised(2)));
     }
-    let raised = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(2));
+    let raised = DecodeOptions::default().with_sample_limit(SampleLimit::Raised(2));
     read_header_with(&bytes, &raised).expect("Raised(2) admits the header");
     decode_with(&bytes, &raised).expect("Raised(2) admits the decode");
 }

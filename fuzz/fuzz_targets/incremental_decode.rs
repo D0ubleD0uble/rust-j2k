@@ -86,7 +86,7 @@ use rust_j2k::fuzz::{
 };
 use rust_j2k::{
     decode_with, DecodeOptions, Error, Image, IncrementalDecoder, LimitKind, Refined, Region,
-    Waiting, Window, WorkLimit,
+    SampleLimit, Waiting, Window, WorkLimit,
 };
 
 /// `result` with its error as its `Debug` text, so that two results compare
@@ -156,7 +156,7 @@ fuzz_target!(|input: &[u8]| {
     if ceiling {
         let declared = u64::try_from(budget::declared(data)).unwrap_or(u64::MAX);
         let shift = u64::from(hash % 4 == 3);
-        options = options.with_sample_limit(WorkLimit::AtMost((declared >> shift).max(1)));
+        options = options.with_sample_limit(SampleLimit::AtMost((declared >> shift).max(1)));
     }
     // The pieces of the file one refine decodes: a window, or a tile, or
     // neither; and a subset of one or two distinct components. A choice

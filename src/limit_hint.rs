@@ -1,5 +1,5 @@
 //! The advice an [`Error::Limit`] for a work bound or
-//! the sample limit carries: a [`WorkLimit::Raised`]
+//! the sample limit carries: a [`Raise::Raised`]
 //! factor worked out from what the refusal already shows.
 //!
 //! A bound scales with the file, so `Raised(n)` allows `n` times the default
@@ -21,7 +21,7 @@
 //! bound's unit a step, as the public docs do; the code calls it a visit.
 
 use crate::tier2::WorkRefusal;
-use crate::{Error, LimitKind, WorkLimit};
+use crate::{Error, LimitKind, Raise};
 
 /// The smallest `Raised` factor for `needed` against a `default` bound.
 fn factor(needed: u64, default: u64) -> u32 {
@@ -49,24 +49,26 @@ fn doubled(needed: u64, allowed: u64, default: u64) -> Option<u32> {
 /// The [`Error::Limit`] of `kind` for `head`, naming the factor [`doubled`]
 /// gives (with `tail` after it), or `Unlimited` when none does.
 fn escalated(kind: LimitKind, raised: Option<u32>, head: &str, tail: &str) -> Error {
+    let limit = kind.limit_type();
     match raised {
         Some(n) => Error::limit_retry(
             kind,
-            WorkLimit::Raised(n),
-            format!("{head}; retry with `WorkLimit::Raised({n})` ({tail}), {TRUSTED}"),
+            Raise::Raised(n),
+            format!(
+                "{head}; retry with `{limit}::Raised({n})` ({tail}), or with \
+                 `{limit}::Unlimited` for trusted input"
+            ),
         ),
         None => Error::limit_retry(
             kind,
-            WorkLimit::Unlimited,
+            Raise::Unlimited,
             format!(
-                "{head}, and no `Raised` factor is higher; only `WorkLimit::Unlimited` admits \
+                "{head}, and no `Raised` factor is higher; only `{limit}::Unlimited` admits \
                  it, for trusted input"
             ),
         ),
     }
 }
-
-const TRUSTED: &str = "or with `WorkLimit::Unlimited` for trusted input";
 
 /// The [`Error::Limit`] for tile `tile`, whose packet walk was refused for `work`
 /// after `spent` of the `allowed` steps (visits) the decode started with were
@@ -149,16 +151,19 @@ pub(crate) fn missing_tiles(cost: u64, allowed: u64, default: u64) -> Error {
 /// The advice for an image of `total` samples against a sample limit whose
 /// default is `default`: the smallest factor that admits it, or, past
 /// `u32::MAX` times the default, where no `Raised` factor does, only
-/// `Unlimited`. The [`WorkLimit`] it names, and the words that name it.
-pub(crate) fn samples(total: u64, default: u64) -> (WorkLimit, String) {
+/// `Unlimited`. The [`Raise`] it names, and the words that name it.
+pub(crate) fn samples(total: u64, default: u64) -> (Raise, String) {
     match u32::try_from(total.div_ceil(default.max(1))) {
         Ok(n) => (
-            WorkLimit::Raised(n),
-            format!("retry with at least `WorkLimit::Raised({n})`, {TRUSTED}"),
+            Raise::Raised(n),
+            format!(
+                "retry with at least `SampleLimit::Raised({n})`, or with \
+                 `SampleLimit::Unlimited` for trusted input"
+            ),
         ),
         Err(_) => (
-            WorkLimit::Unlimited,
-            "only `WorkLimit::Unlimited` admits it, for trusted input".into(),
+            Raise::Unlimited,
+            "only `SampleLimit::Unlimited` admits it, for trusted input".into(),
         ),
     }
 }
@@ -215,15 +220,11 @@ mod tests {
         let Error::Limit(limit) = error else {
             panic!("{error:?}");
         };
-        let Some(WorkLimit::Raised(n)) = limit.retry_with() else {
+        let Some(Raise::Raised(n)) = limit.retry_with() else {
             panic!("{error:?}");
         };
-        assert!(
-            limit
-                .message()
-                .contains(&format!("`WorkLimit::Raised({n})`")),
-            "{error:?}"
-        );
+        let named = format!("`{}::Raised({n})`", limit.kind().limit_type());
+        assert!(limit.message().contains(&named), "{error:?}");
         n
     }
 
@@ -365,10 +366,10 @@ mod tests {
             Error::Limit(limit) => limit.retry_with(),
             other => panic!("{other:?}"),
         };
-        assert_eq!(walk(max / 2 + 1), Some(WorkLimit::Raised(u32::MAX)));
-        assert_eq!(walk(max - 1), Some(WorkLimit::Raised(u32::MAX)));
-        assert_eq!(walk(max), Some(WorkLimit::Unlimited));
-        assert_eq!(walk(u64::MAX), Some(WorkLimit::Unlimited));
+        assert_eq!(walk(max / 2 + 1), Some(Raise::Raised(u32::MAX)));
+        assert_eq!(walk(max - 1), Some(Raise::Raised(u32::MAX)));
+        assert_eq!(walk(max), Some(Raise::Unlimited));
+        assert_eq!(walk(u64::MAX), Some(Raise::Unlimited));
     }
 
     /// `DecodeOptions::with_retry` gives options exactly for the kinds an
@@ -409,8 +410,11 @@ mod tests {
                 };
                 Error::limit_retry(
                     kind,
-                    WorkLimit::Raised(7),
-                    format!("retry with `DecodeOptions::{option}` at `WorkLimit::Raised(7)`"),
+                    Raise::Raised(7),
+                    format!(
+                        "retry with `DecodeOptions::{option}` at `{}::Raised(7)`",
+                        kind.limit_type()
+                    ),
                 )
             } else {
                 Error::limit_fixed(kind, "no option raises it")
@@ -422,15 +426,16 @@ mod tests {
             assert_eq!(retry.is_some(), kind.is_adjustable(), "{kind:?}");
             // A kind no option raises gives `None` even with a limit to
             // retry with, which no refusal carries.
-            let carried = crate::error::any_limit(kind, Some(WorkLimit::Raised(7)));
+            let carried = crate::error::any_limit(kind, Some(Raise::Raised(7)));
             assert_eq!(
                 base.with_retry(&carried).is_some(),
                 kind.is_adjustable(),
                 "{kind:?} with a retry"
             );
             let Some(retry) = retry else { continue };
-            let raised = Some(WorkLimit::Raised(7));
-            let set = |limit: &WorkLimit| (*limit != WorkLimit::Default).then(|| limit.clone());
+            // The two limit types compared by their `Debug` text.
+            let raised = Some("Raised(7)".to_owned());
+            let set = |limit: String| (limit != "Default").then_some(limit);
             let expected = match kind {
                 LimitKind::PacketWork => (None, raised, None),
                 LimitKind::CodeBlockWork => (None, None, raised),
@@ -438,9 +443,9 @@ mod tests {
             };
             assert_eq!(
                 (
-                    set(&retry.sample_limit),
-                    set(&retry.packet_work_limit),
-                    set(&retry.code_block_work_limit),
+                    set(format!("{:?}", retry.sample_limit)),
+                    set(format!("{:?}", retry.packet_work_limit)),
+                    set(format!("{:?}", retry.code_block_work_limit)),
                 ),
                 expected,
                 "{kind:?}"

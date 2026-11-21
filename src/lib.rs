@@ -111,7 +111,7 @@
 //! flipped bit in a header field can read as an absurd image size
 //! ([`Error::Limit`]) or an unknown marker or a feature the decoder does not
 //! read ([`Error::Unsupported`]). Do not retry a file with
-//! [`WorkLimit::Unlimited`] on that evidence alone.
+//! an `Unlimited` limit on that evidence alone.
 //!
 //! JPEG 2000 carries no checksum, so damage inside the entropy-coded data is
 //! not always detected: a flipped byte in a code-block can decode without an
@@ -167,13 +167,13 @@
 //!
 //! A valid file can still be refused with [`Error::Limit`]. The decoder caps
 //! what a file may declare and how much work it may ask for. Three limits
-//! can be changed, each set with a [`WorkLimit`]:
-//! [`DecodeOptions::sample_limit`] for the image's size,
+//! can be changed: [`DecodeOptions::sample_limit`] for the image's size,
+//! set with a [`SampleLimit`], and, each set with a [`WorkLimit`],
 //! [`DecodeOptions::packet_work_limit`] for reading the packet headers and
 //! [`DecodeOptions::code_block_work_limit`] for decoding the code-blocks.
 //! The other guards have no option; the list is on [`Error::Limit`]. The
 //! error's [`LimitDetail`] says which guard the file hit, as a
-//! [`LimitKind`]. For one of the three it also gives the [`WorkLimit`] to
+//! [`LimitKind`]. For one of the three it also gives the [`Raise`] to
 //! retry with (see [`WorkLimit`] for how far to trust it).
 //!
 //! For a file from a source you trust, lift all three. [`WorkLimit`] and
@@ -334,7 +334,7 @@ mod readme_examples {}
 /// [`DecodeOptions::packet_work_limit`] and
 /// [`DecodeOptions::code_block_work_limit`]. An [`Error::Limit`] from one
 /// of them names the option, as [`LimitDetail::kind`], and the
-/// [`WorkLimit`] to retry with, as [`LimitDetail::retry_with`]; its message
+/// [`Raise`] to retry with, as [`LimitDetail::retry_with`]; its message
 /// names both too. [`WorkLimit`] shows a retry and how far to trust the
 /// factor. The guards with no option are listed on [`Error::Limit`].
 ///
@@ -486,7 +486,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// of the bytes passed, so a prefix holding only the header is held to the
 /// 2^29-sample floor: the header of a valid file over 64 MiB and over 2^29
 /// samples, read from a prefix, gives [`Error::Limit`] even when the whole
-/// file decodes at the defaults. The [`Raised`](WorkLimit::Raised) factor
+/// file decodes at the defaults. The [`Raised`](SampleLimit::Raised) factor
 /// that refusal names also admits the whole file, whose default is larger.
 /// A fault in the tile
 /// data (a broken tile-part, a tile header that changes a component's
@@ -925,7 +925,7 @@ pub struct DecodeOptions {
     /// How many samples the decoded image may hold, against the limit
     /// described on [`decode`], summed over the output channels at
     /// [`resolution_reduction`](Self::resolution_reduction). Default
-    /// [`WorkLimit::Default`].
+    /// [`SampleLimit::Default`].
     ///
     /// The default limit is 2^29 samples (2 GiB as `i32`), or 8 samples per
     /// byte of input when that is more: past 64 MiB of input, it grows with
@@ -979,7 +979,7 @@ pub struct DecodeOptions {
     /// Padding counts as input, so a file can raise its own limit with
     /// `COM` segments, a JP2 `xml ` box or bytes after `EOC`. For a ceiling
     /// that does not grow with the input, use
-    /// [`AtMost(n)`](WorkLimit::AtMost): the decode may hold at most `n`
+    /// [`AtMost(n)`](SampleLimit::AtMost): the decode may hold at most `n`
     /// samples, whatever the input's length, and `4 * n` bytes of output.
     /// The palette expansion and sRGB output are checked against `n` too,
     /// and so is every tile a region reads, in every component the
@@ -989,7 +989,7 @@ pub struct DecodeOptions {
     /// decode service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service).
     ///
     /// ```
-    /// use rust_j2k::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with};
+    /// use rust_j2k::{DecodeOptions, Error, LimitKind, SampleLimit, decode_with};
     ///
     /// # let bytes = include_bytes!(concat!(
     /// #     env!("CARGO_MANIFEST_DIR"),
@@ -999,13 +999,13 @@ pub struct DecodeOptions {
     /// let bytes = std::fs::read("image.j2k")?;
     /// # */
     /// // At most 2^26 samples (256 MiB of output), however large the file.
-    /// let options = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(1 << 26));
+    /// let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(1 << 26));
     /// let image = decode_with(&bytes, &options)?;
     /// assert_eq!((image.width, image.height), (16, 31));
     ///
     /// // A ceiling below the image's 496 samples refuses it, with nothing to
     /// // retry with.
-    /// let options = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(400));
+    /// let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(400));
     /// let Err(Error::Limit(limit)) = decode_with(&bytes, &options) else {
     ///     panic!("expected the sample limit to refuse the image");
     /// };
@@ -1014,7 +1014,7 @@ pub struct DecodeOptions {
     /// assert!(options.with_retry(&limit).is_none());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub sample_limit: WorkLimit,
+    pub sample_limit: SampleLimit,
     /// Refuse missing data with an [`Error`] (`true`, the default), or decode
     /// what is there and say what is missing on [`Image::report`] (`false`).
     /// It is the same switch as OpenJPEG's strict mode
@@ -1149,17 +1149,17 @@ impl Default for DecodeOptions {
             color: ColorOutput::default(),
             packet_work_limit: WorkLimit::default(),
             code_block_work_limit: WorkLimit::default(),
-            sample_limit: WorkLimit::default(),
+            sample_limit: SampleLimit::default(),
             strict: true,
             code_block_work_cap: None,
         }
     }
 }
 
-/// How far a decode may go against one of its bounds: the
+/// How far a decode may go against one of its work bounds:
 /// [`DecodeOptions::packet_work_limit`] and
-/// [`DecodeOptions::code_block_work_limit`] work bounds, and the
-/// [`DecodeOptions::sample_limit`] on the image's size.
+/// [`DecodeOptions::code_block_work_limit`]. The limit on the image's size,
+/// [`DecodeOptions::sample_limit`], is a [`SampleLimit`].
 ///
 /// Each bound scales with the size of the file, so a small file cannot ask for
 /// minutes of work, and a file of up to 64 MiB is held to the sample limit's
@@ -1169,8 +1169,8 @@ impl Default for DecodeOptions {
 /// A valid file can still go past a bound, when it codes many samples in very
 /// few bytes or is very large. The decode then fails with [`Error::Limit`]. Its
 /// [`LimitDetail::kind`] names the option, and [`LimitDetail::retry_with`]
-/// gives a [`Raised`](WorkLimit::Raised) factor, which the message names too.
-/// Treat the factor as a hint, not a measure of the file:
+/// gives a [`Raise`], a [`Raised`](Raise::Raised) factor, which the message
+/// names too. Treat the factor as a hint, not a measure of the file:
 ///
 /// - For the sample limit it is exact for the check it names: the image's
 ///   samples are known from its header. Palette expansion or sRGB output is
@@ -1191,8 +1191,8 @@ impl Default for DecodeOptions {
 /// - For a file from a source you trust, use [`Unlimited`](WorkLimit::Unlimited).
 ///   The decode then takes as long as the file asks.
 /// - To cap the samples a decode may hold, set the sample limit to
-///   [`AtMost(n)`](WorkLimit::AtMost): at most `n` samples, `4 * n` bytes of
-///   output, whatever the file's size or padding (see
+///   [`SampleLimit::AtMost(n)`](SampleLimit::AtMost): at most `n` samples,
+///   `4 * n` bytes of output, whatever the file's size or padding (see
 ///   [`DecodeOptions::sample_limit`]). A refusal under it gives no factor.
 ///   [Running a decode service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service) says what to
 ///   bound besides.
@@ -1204,13 +1204,26 @@ impl Default for DecodeOptions {
 ///   refused under `Raised(2)`. Do not parse the message; it is a
 ///   diagnostic, not a stable format.
 ///
-/// Only these three limits can be changed, and only the sample limit takes
-/// `AtMost`. The other guards also end in [`Error::Limit`], and no option
-/// here raises them (see [`Error::Limit`]). A damaged file can hit a guard
-/// too, so do not lift a bound on that evidence alone.
+/// Only these three limits can be changed. The other guards also end in
+/// [`Error::Limit`], and no option here raises them (see [`Error::Limit`]).
+/// A damaged file can hit a guard too, so do not lift a bound on that
+/// evidence alone.
+///
+/// The `with_*_limit` builders on [`DecodeOptions`] store `Raised(1)` as
+/// `Default`, as the two set the same bound. Compared as bare values,
+/// `WorkLimit::Raised(1)` and `WorkLimit::Default` still differ.
+///
+/// `AtMost` is for the sample limit only, so a work bound cannot be given
+/// one:
+///
+/// ```compile_fail,E0599
+/// use rust_j2k::{DecodeOptions, WorkLimit};
+///
+/// let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::AtMost(1 << 20));
+/// ```
 ///
 /// ```
-/// use rust_j2k::{DecodeOptions, Error, WorkLimit, decode, decode_with};
+/// use rust_j2k::{DecodeOptions, Error, SampleLimit, WorkLimit, decode, decode_with};
 ///
 /// // A file that asks for far more work than its size allows.
 /// # let bytes = include_bytes!(concat!(
@@ -1228,10 +1241,10 @@ impl Default for DecodeOptions {
 ///     Err(Error::Limit(limit)) => {
 ///         println!("refused: {limit}");
 ///         // The file is trusted here, so lift all three limits. To keep a
-///         // bound, use `WorkLimit::Raised(n)`, a factor of the default, for
-///         // the one named instead.
+///         // bound, use `Raised(n)`, a factor of the default, for the one
+///         // named instead.
 ///         let options = DecodeOptions::default()
-///             .with_sample_limit(WorkLimit::Unlimited)
+///             .with_sample_limit(SampleLimit::Unlimited)
 ///             .with_code_block_work_limit(WorkLimit::Unlimited)
 ///             .with_packet_work_limit(WorkLimit::Unlimited);
 ///         decode_with(&bytes, &options).expect("a valid file decodes once the limits are lifted")
@@ -1248,28 +1261,104 @@ pub enum WorkLimit {
     #[default]
     Default,
     /// The default bound times this factor: both its floor and what it
-    /// allows per byte. `Raised(1)` sets the same bound as
-    /// `Default`, though the two do not compare equal. `Raised(0)` is
+    /// allows per byte. `Raised(1)` sets the same bound as `Default`, and
+    /// the builders store it as `Default`, though the two do not compare
+    /// equal as bare values. `Raised(0)` is [`Error::InvalidOptions`].
+    Raised(u32),
+    /// No bound: the decode does all the work the file asks for, however
+    /// long that takes. The other limits keep their own settings, and the
+    /// guards with no option (listed on [`Error::Limit`]) stay in force.
+    Unlimited,
+}
+
+/// How many samples a decode may hold: the
+/// [`DecodeOptions::sample_limit`], which also sets how many code-blocks
+/// and precincts a tile may hold.
+///
+/// It takes the settings of a [`WorkLimit`], and [`AtMost`](Self::AtMost), a
+/// fixed ceiling. [`WorkLimit`] says how far to trust the factor a refusal
+/// names and which setting to pick.
+///
+/// [`DecodeOptions::with_sample_limit`] stores `Raised(1)` as `Default`, as
+/// the two set the same limit. Compared as bare values,
+/// `SampleLimit::Raised(1)` and `SampleLimit::Default` still differ.
+///
+/// ```
+/// use rust_j2k::{DecodeOptions, SampleLimit};
+///
+/// // At most 2^26 samples (256 MiB of output), however large the file.
+/// let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(1 << 26));
+/// assert_eq!(options.sample_limit, SampleLimit::AtMost(1 << 26));
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SampleLimit {
+    /// The limit as [`decode`] describes it.
+    #[default]
+    Default,
+    /// The default limit times this factor: both its floor and what it
+    /// allows per byte. `Raised(1)` sets the same limit as `Default`, and
+    /// [`DecodeOptions::with_sample_limit`] stores it as `Default`, though
+    /// the two do not compare equal as bare values. `Raised(0)` is
     /// [`Error::InvalidOptions`].
     Raised(u32),
-    /// No bound. For a work bound, the decode does all the work the file
-    /// asks for, however long that takes; for the sample limit, it allocates
-    /// all the memory the file asks for (see [`DecodeOptions::sample_limit`]).
-    /// The other two limits keep their own settings, and the guards with no
-    /// option (listed on [`Error::Limit`]) stay in force.
+    /// No limit: the decode allocates all the memory the file asks for (see
+    /// [`DecodeOptions::sample_limit`]). The other limits keep their own
+    /// settings, and the guards with no option (listed on [`Error::Limit`])
+    /// stay in force.
     Unlimited,
-    /// A fixed ceiling of this many samples, for the
-    /// [`sample_limit`](DecodeOptions::sample_limit) only. It does not grow
-    /// with the input, so padding cannot raise it, and it is not a factor of
-    /// the default: `AtMost(n)` allows `n` samples for a file of any size,
-    /// more than the default for a small file and less for a large one.
-    /// An `n` past the samples the target can address is held to that count.
-    /// A refusal under it gives no [`LimitDetail::retry_with`], so
+    /// A fixed ceiling of this many samples. It does not grow with the
+    /// input, so padding cannot raise it, and it is not a factor of the
+    /// default: `AtMost(n)` allows `n` samples for a file of any size, more
+    /// than the default for a small file and less for a large one. An `n`
+    /// past the samples the target can address is held to that count. A
+    /// refusal under it gives no [`LimitDetail::retry_with`], so
     /// [`DecodeOptions::with_retry`] gives `None`. `AtMost(0)` is
-    /// [`Error::InvalidOptions`], and so is `AtMost` on
-    /// [`packet_work_limit`](DecodeOptions::packet_work_limit) or
-    /// [`code_block_work_limit`](DecodeOptions::code_block_work_limit).
+    /// [`Error::InvalidOptions`].
     AtMost(u64),
+}
+
+/// The limit a refusal names to retry with, from
+/// [`LimitDetail::retry_with`]: a factor of the default, or no limit.
+///
+/// It converts into the type of the option [`LimitDetail::kind`] names: a
+/// [`SampleLimit`] for the sample limit and the tile caps it sets, a
+/// [`WorkLimit`] for a work bound. [`DecodeOptions::with_retry`] does that
+/// for you. [`WorkLimit`] says how far to trust the factor.
+///
+/// ```
+/// use rust_j2k::{Raise, SampleLimit, WorkLimit};
+///
+/// assert_eq!(WorkLimit::from(Raise::Raised(2)), WorkLimit::Raised(2));
+/// assert_eq!(SampleLimit::from(Raise::Unlimited), SampleLimit::Unlimited);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Raise {
+    /// The default times this factor, as [`WorkLimit::Raised`] and
+    /// [`SampleLimit::Raised`].
+    Raised(u32),
+    /// No limit, as [`WorkLimit::Unlimited`] and [`SampleLimit::Unlimited`]:
+    /// named only for a file past every factor.
+    Unlimited,
+}
+
+impl From<Raise> for WorkLimit {
+    fn from(raise: Raise) -> Self {
+        match raise {
+            Raise::Raised(factor) => WorkLimit::Raised(factor),
+            Raise::Unlimited => WorkLimit::Unlimited,
+        }
+    }
+}
+
+impl From<Raise> for SampleLimit {
+    fn from(raise: Raise) -> Self {
+        match raise {
+            Raise::Raised(factor) => SampleLimit::Raised(factor),
+            Raise::Unlimited => SampleLimit::Unlimited,
+        }
+    }
 }
 
 impl WorkLimit {
@@ -1279,8 +1368,34 @@ impl WorkLimit {
             WorkLimit::Default => bound,
             WorkLimit::Raised(factor) => bound.saturating_mul(u64::from(*factor)),
             WorkLimit::Unlimited => u64::MAX,
-            // Only the sample limit takes it (`check_options`), and as it is.
-            WorkLimit::AtMost(samples) => *samples,
+        }
+    }
+
+    /// This limit as the builders store it: `Raised(1)` as `Default`.
+    fn normalized(self) -> Self {
+        match self {
+            WorkLimit::Raised(1) => WorkLimit::Default,
+            other => other,
+        }
+    }
+}
+
+impl SampleLimit {
+    /// The limit this sets, from the default limit `bound`.
+    pub(crate) fn apply(&self, bound: u64) -> u64 {
+        match self {
+            SampleLimit::Default => bound,
+            SampleLimit::Raised(factor) => bound.saturating_mul(u64::from(*factor)),
+            SampleLimit::Unlimited => u64::MAX,
+            SampleLimit::AtMost(samples) => *samples,
+        }
+    }
+
+    /// This limit as the builder stores it: `Raised(1)` as `Default`.
+    fn normalized(self) -> Self {
+        match self {
+            SampleLimit::Raised(1) => SampleLimit::Default,
+            other => other,
         }
     }
 }
@@ -1387,9 +1502,11 @@ impl DecodeOptions {
     /// let options = DecodeOptions::default().with_packet_work_limit(WorkLimit::Raised(4));
     /// assert_eq!(options.packet_work_limit, WorkLimit::Raised(4));
     /// ```
+    ///
+    /// `Raised(1)` is stored as `Default`, which sets the same bound.
     #[must_use]
     pub fn with_packet_work_limit(mut self, limit: WorkLimit) -> Self {
-        self.packet_work_limit = limit;
+        self.packet_work_limit = limit.normalized();
         self
     }
 
@@ -1402,9 +1519,11 @@ impl DecodeOptions {
     /// let options = DecodeOptions::default().with_code_block_work_limit(WorkLimit::Unlimited);
     /// assert_eq!(options.code_block_work_limit, WorkLimit::Unlimited);
     /// ```
+    ///
+    /// `Raised(1)` is stored as `Default`, which sets the same bound.
     #[must_use]
     pub fn with_code_block_work_limit(mut self, limit: WorkLimit) -> Self {
-        self.code_block_work_limit = limit;
+        self.code_block_work_limit = limit.normalized();
         self
     }
 
@@ -1412,16 +1531,18 @@ impl DecodeOptions {
     /// `limit`.
     ///
     /// ```
-    /// use rust_j2k::{DecodeOptions, WorkLimit};
+    /// use rust_j2k::{DecodeOptions, SampleLimit};
     ///
     /// // 3 times the default: 3 x 2^29 samples for a small file, enough for a
     /// // 20000 x 20000 RGB image, and more past 64 MiB of input.
-    /// let options = DecodeOptions::default().with_sample_limit(WorkLimit::Raised(3));
-    /// assert_eq!(options.sample_limit, WorkLimit::Raised(3));
+    /// let options = DecodeOptions::default().with_sample_limit(SampleLimit::Raised(3));
+    /// assert_eq!(options.sample_limit, SampleLimit::Raised(3));
     /// ```
+    ///
+    /// `Raised(1)` is stored as `Default`, which sets the same limit.
     #[must_use]
-    pub fn with_sample_limit(mut self, limit: WorkLimit) -> Self {
-        self.sample_limit = limit;
+    pub fn with_sample_limit(mut self, limit: SampleLimit) -> Self {
+        self.sample_limit = limit.normalized();
         self
     }
 
@@ -1435,7 +1556,7 @@ impl DecodeOptions {
     /// `n` takes about log2(`n`) retries, not `n`. A retry still costs a
     /// decode. The factor can be up to twice what the file needs, so a
     /// caller that keeps a cap `c` on the factor should, when the factor
-    /// passes it, try once more with `WorkLimit::Raised(c)` rather than stop:
+    /// passes it, try once more with `Raised(c)` rather than stop:
     /// a file that needs between about `c / 2` and `c` is admitted by that.
     ///
     /// ```
@@ -1466,10 +1587,10 @@ impl DecodeOptions {
         // holds this to `is_adjustable`.
         match limit.kind() {
             LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts => {
-                Some(options.with_sample_limit(retry))
+                Some(options.with_sample_limit(retry.into()))
             }
-            LimitKind::PacketWork => Some(options.with_packet_work_limit(retry)),
-            LimitKind::CodeBlockWork => Some(options.with_code_block_work_limit(retry)),
+            LimitKind::PacketWork => Some(options.with_packet_work_limit(retry.into())),
+            LimitKind::CodeBlockWork => Some(options.with_code_block_work_limit(retry.into())),
             LimitKind::AddressSpace | LimitKind::PocVolumes | LimitKind::BitPlanes => None,
         }
     }
@@ -1529,7 +1650,7 @@ impl DecodeOptions {
 ///
 /// Failures are the same [`Error`] variants as [`decode`], plus
 /// [`Error::InvalidOptions`] for options that are invalid on their own
-/// ([`WorkLimit::Raised`]`(0)`, a [`max_quality_layers`](DecodeOptions::max_quality_layers)
+/// (a limit of `Raised(0)`, a [`max_quality_layers`](DecodeOptions::max_quality_layers)
 /// of `Some(0)`), contradict each other, or do not fit the file.
 pub fn decode_with(bytes: &[u8], options: &DecodeOptions) -> Result<Image> {
     pipeline::decode::decode_metered(bytes, options, None)

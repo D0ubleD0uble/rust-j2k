@@ -444,7 +444,7 @@ fn oversize_image_area_is_a_limit() {
     // itself leaves the area to the limit, which knows the caller's options.
     let n = 16384;
     let siz = siz_of_geom(2 * n + 1, n);
-    let cap = crate::samples::cap(&crate::WorkLimit::Default, 0);
+    let cap = crate::samples::cap(&crate::SampleLimit::Default, 0);
     let e = crate::samples::check_codestream(&siz, 0, cap).unwrap_err();
     assert!(
         matches!(&e, Error::Limit(m) if m.message().starts_with("image area 32769x16384 needs")),
@@ -2246,7 +2246,7 @@ fn many_components_exceed_the_sample_budget() {
         seg(marker::QCD, &qcd_none(2, &[8; 16])),
     ]);
     let header = parse_main_header(&bytes).unwrap().0;
-    let cap = crate::samples::cap(&crate::WorkLimit::Default, 0);
+    let cap = crate::samples::cap(&crate::SampleLimit::Default, 0);
     let e = crate::samples::check_codestream(&header.siz, 0, cap).unwrap_err();
     assert!(
         matches!(&e, Error::Limit(m) if m.message().starts_with("a decode of 100 components needs 1677721600 samples")),

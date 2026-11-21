@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn the_code_block_cap_sets_the_bound_and_keeps_its_factors() {
         use super::{CODE_BLOCK_CAP_FACTOR as K, with_code_block_work_cap as cap};
-        use crate::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with};
+        use crate::{DecodeOptions, Error, LimitKind, Raise, WorkLimit, decode_with};
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/layers/lrcp.j2k");
         let bytes = std::fs::read(path).unwrap();
@@ -445,7 +445,7 @@ mod tests {
             panic!("a cap under the work refuses");
         };
         assert_eq!(limit.kind(), LimitKind::CodeBlockWork);
-        assert_eq!(limit.retry_with(), Some(WorkLimit::Raised(2)));
+        assert_eq!(limit.retry_with(), Some(Raise::Raised(2)));
         let retry = below.with_retry(&limit).unwrap();
         assert_eq!(block_work(&bytes, &retry).1, Some(2 * (work - 1)));
         assert_eq!(decode_with(&bytes, &retry).unwrap(), image);

@@ -1,4 +1,4 @@
-//! Under `WorkLimit::AtMost(n)` a decode holds about what its `n` samples
+//! Under `SampleLimit::AtMost(n)` a decode holds about what its `n` samples
 //! need: an image of exactly `n` samples decodes within the documented
 //! multiple of its `4 * n` bytes of output, and one of a row more is refused
 //! before anything sized by the image is allocated.
@@ -28,7 +28,7 @@ use alloc::{CURRENT, PEAK};
 use std::sync::atomic::Ordering;
 use synth::seg;
 
-use rust_j2k::{DecodeOptions, Error, LimitKind, WorkLimit, decode_with};
+use rust_j2k::{DecodeOptions, Error, LimitKind, SampleLimit, decode_with};
 
 #[global_allocator]
 static ALLOCATOR: alloc::PeakAlloc = alloc::PeakAlloc;
@@ -69,7 +69,7 @@ fn single_tile(height: u32) -> Vec<u8> {
 /// The heap a decode of `bytes` under `AtMost(CEILING)` holds at its peak,
 /// over what was live before, and its result.
 fn peak(bytes: &[u8]) -> (usize, rust_j2k::Result<rust_j2k::Image>) {
-    let options = DecodeOptions::default().with_sample_limit(WorkLimit::AtMost(CEILING));
+    let options = DecodeOptions::default().with_sample_limit(SampleLimit::AtMost(CEILING));
     let before = CURRENT.load(Ordering::SeqCst);
     PEAK.store(before, Ordering::SeqCst);
     let result = decode_with(bytes, &options);
