@@ -218,15 +218,14 @@ struct Walk {
     /// and more for each `COC` or `QCC`: up to about 13 times the bytes of
     /// the tile's tile-parts, for a header of `QCC`s.
     restating: HashMap<usize, Box<(Overrides, Option<Restated>)>>,
-    /// Whether the `TNsot` look-ahead ([`count_is_one_short`]) has been
-    /// taken: once, when a tile first has every tile-part it declares.
+    /// With `strict` on, whether the `TNsot` look-ahead
+    /// ([`count_is_one_short`]) has been taken: once, when a tile first has
+    /// every tile-part it declares. With `strict` off it is not taken: its
+    /// answer changes no step and no error of the walk, as the error for a
+    /// tile that declares two counts gives the stated ones.
     count_checked: bool,
     /// With `strict` on, 1 where the look-ahead raised every tile's count.
     count_correction: u16,
-    /// With `strict` off, where the look-ahead starts and for which tile,
-    /// once it is taken. Its answer only raises both counts in the error for
-    /// a tile that declares two, so it is looked for only there.
-    look_ahead: Option<(usize, u16)>,
     /// The `PPM` chunks the tile-parts read so far take.
     ppm_seq: usize,
     /// Where the next tile-part starts.
@@ -242,21 +241,17 @@ struct Walk {
 /// the step taken again finds the same, without reading the first header
 /// again. It does not
 /// move where the next tile-part starts, which moves only once the step is
-/// done. Where it takes the `TNsot` look-ahead it also notes where that
-/// starts, which the step taken again notes afresh, as `count_checked` is
-/// taken back. The checks of a tile's header and its `POC` volumes keep
-/// nothing past the step but the tile's count of volumes.
+/// done. The checks of a tile's header and its `POC` volumes keep nothing
+/// past the step but the tile's count of volumes.
 struct Undo {
     index: usize,
     tile: Seen,
-    count_checked: bool,
     ppm_seq: usize,
 }
 
 impl Undo {
     fn restore(self, walk: &mut Walk) {
         walk.seen[self.index] = self.tile;
-        walk.count_checked = self.count_checked;
         walk.ppm_seq = self.ppm_seq;
     }
 }
@@ -271,7 +266,6 @@ impl Walk {
             restating: HashMap::new(),
             count_checked: false,
             count_correction: 0,
-            look_ahead: None,
             ppm_seq: 0,
             part_offset: parsed.sot_offset,
         }
@@ -297,7 +291,6 @@ impl Walk {
             restating,
             count_checked,
             count_correction,
-            look_ahead,
             ppm_seq,
             part_offset,
         } = self;
@@ -339,7 +332,6 @@ impl Walk {
             *undo = Some(Undo {
                 index,
                 tile: *tile,
-                count_checked: *count_checked,
                 ppm_seq: *ppm_seq,
             });
 
@@ -360,17 +352,10 @@ impl Walk {
                 match tile.declared {
                     0 => tile.declared = stated,
                     declared if declared != stated => {
-                        // With `strict` off the look-ahead is taken here,
-                        // on the same bytes, and raises both counts or
-                        // neither.
-                        let raised = u16::from(
-                            look_ahead
-                                .is_some_and(|(from, tile)| count_is_one_short(bytes, from, tile)),
-                        );
+                        // With `strict` off the counts are the ones the
+                        // two `SOT`s state, as `walk_tiles` gives them.
                         return Err(Error::codestream(format!(
-                            "tile {index} declares {} tile-parts in one `SOT` and {} in another",
-                            stated + raised,
-                            declared + raised,
+                            "tile {index} declares {stated} tile-parts in one `SOT` and {declared} in another",
                         )));
                     }
                     _ => {}
@@ -539,17 +524,13 @@ impl Walk {
             let tile = &mut seen[index];
             tile.parts += 1;
 
-            if !*count_checked && tile.declared == u16::from(sot.tile_part_index) + 1 {
+            if strict && !*count_checked && tile.declared == u16::from(sot.tile_part_index) + 1 {
                 *count_checked = true;
-                if sot.psot != 0 {
-                    if !strict {
-                        *look_ahead = Some((data_end, sot.tile_index));
-                    } else if count_is_one_short(bytes, data_end, sot.tile_index) {
-                        *count_correction = 1;
-                        for tile in seen.iter_mut() {
-                            if tile.declared != 0 {
-                                tile.declared += 1;
-                            }
+                if sot.psot != 0 && count_is_one_short(bytes, data_end, sot.tile_index) {
+                    *count_correction = 1;
+                    for tile in seen.iter_mut() {
+                        if tile.declared != 0 {
+                            tile.declared += 1;
                         }
                     }
                 }

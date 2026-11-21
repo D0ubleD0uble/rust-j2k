@@ -621,10 +621,10 @@ is kept there, so a call reads only the tile-part at fault. On a file of
 count runs out of its budget and whose header reads, they took 6.9 s and
 take 410 ms, most of it the budget each call spends. These are in `tests/incremental_header_cost.rs`, which bounds each by 8 times
 one read of the whole file. With `strict` off, as
-`IncrementalDecoder::header` reads, the `TNsot` look-ahead is taken only
-when the error it changes is built (it raises both counts in "tile N
-declares A tile-parts in one `SOT` and B in another"), as it reads past
-the tile-parts walked.
+`IncrementalDecoder::header` reads, the `TNsot` look-ahead is not taken:
+it would read past the tile-parts walked, and it changes no step and no
+error of that walk, as "tile N declares A tile-parts in one `SOT` and B
+in another" gives the counts the two `SOT`s state.
 In an `IncrementalDecoder` a refusal under the default or a `Raised` limit
 is a wait (`Waiting::SampleLimit`), as the caps grow with the bytes fed.
 
