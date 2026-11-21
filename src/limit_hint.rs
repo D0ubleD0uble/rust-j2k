@@ -8,9 +8,9 @@
 //! refuse. The sample limit's factor is exact for the check it names, as the
 //! samples it counts are known from the header; palette expansion or sRGB
 //! output is checked after the image area and may need a higher one. Of the
-//! work bounds, only the code-block bound, a POC sequence's reach and the
-//! code-blocks of the resolutions a reduction drops give the factor the tile
-//! needs; the missing-tiles charge gives one the whole file needs at least.
+//! work bounds, only the code-block bound, a POC sequence's reach, the
+//! code-blocks of the resolutions a reduction drops and the components a
+//! tile holds no sample of give the factor the tile needs; the missing-tiles charge gives one the whole file needs at least.
 //! A packet walk that runs out of steps shows only that it needs more than it
 //! was allowed. Later tiles are never counted.
 //! So the work bounds name the larger of what the tiles seen need and twice
@@ -110,6 +110,16 @@ pub(crate) fn packet(
                 "the resolutions the reduction drops hold {blocks} code-blocks in one \
                  component of tile {tile}, a step each, more than the {left} steps left of the \
                  packet work bound of {allowed} {OPTION}"
+            ),
+            "later tiles may need more",
+        ),
+        WorkRefusal::EmptyComponents { components, steps } => escalated(
+            LimitKind::PacketWork,
+            doubled(spent.saturating_add(steps), allowed, default),
+            &format!(
+                "tile {tile} holds no sample of {components} components, whose setup costs \
+                 {steps} steps, more than the {left} steps left of the packet work bound of \
+                 {allowed} {OPTION}"
             ),
             "later tiles may need more",
         ),
@@ -264,6 +274,16 @@ mod tests {
     fn dropped_blocks_add_the_visits_already_spent() {
         let dropped = WorkRefusal::DroppedBlocks { blocks: 100 };
         assert_eq!(named(&packet(dropped, 0, 100, 150, 50)), 6);
+    }
+
+    /// So does the setup of the components a tile holds no sample of.
+    #[test]
+    fn empty_components_add_the_visits_already_spent() {
+        let empty = WorkRefusal::EmptyComponents {
+            components: 2,
+            steps: 100,
+        };
+        assert_eq!(named(&packet(empty, 0, 100, 150, 50)), 6);
     }
 
     /// A ladder over many tiles that each reach one bound takes about log2

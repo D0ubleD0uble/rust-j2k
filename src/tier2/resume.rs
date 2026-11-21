@@ -25,8 +25,8 @@ use super::progression::{
 use super::{
     BandState, Budget, CodedData, ComponentCoded, Delimiters, END_VISITS, Journal, Meter, Packet,
     PacketStreams, PacketWalk, Reach, Refused, Resolution, ResolutionGeom, Scratch, Undo,
-    WorkRefusal, band_states, build_subbands, dropped_blocks, mark_gap, parse_packet, refused,
-    tile_geometry, undo,
+    WorkRefusal, band_states, build_subbands, dropped_blocks, empty_components, mark_gap,
+    parse_packet, refused, tile_geometry, undo,
 };
 
 /// The bytes the walks kept may hold whatever the bytes fed, when that is
@@ -498,6 +498,9 @@ struct TileWalk {
     /// The fault that ended the geometry, after the components `dropped`
     /// holds.
     failure: Option<Error>,
+    /// The charge for the components the tile holds no sample of, which a
+    /// decode makes once the geometry is built.
+    empty: Option<WorkRefusal>,
     geoms: Vec<Vec<ResolutionGeom>>,
     /// The tile's rectangle on the reference grid.
     rect: Rect,
@@ -618,6 +621,10 @@ impl TileWalk {
                 .ok_or_else(|| Error::inconsistent(format!("no tile {} in `SIZ`", tile.index)))?;
             Ok((geoms, rect))
         });
+        let empty = built
+            .as_ref()
+            .ok()
+            .and_then(|(geoms, _)| empty_components(header, tile.index, geoms));
         let (geoms, rect, failure) = match built {
             Ok((geoms, rect)) => (geoms, rect, None),
             Err(error) => (
@@ -664,6 +671,7 @@ impl TileWalk {
             packed: !tile.packed_headers.is_empty(),
             dropped,
             failure,
+            empty,
             states,
             delimiters: Delimiters {
                 sop: header.cod.use_sop,
@@ -854,6 +862,11 @@ impl TileWalk {
         }
         if let Some(error) = &self.failure {
             return Err(Refused::Other(error.clone()));
+        }
+        if let Some(why @ WorkRefusal::EmptyComponents { steps, .. }) = self.empty {
+            if !meter.try_spend(steps) {
+                return Err(Refused::Work(why));
+            }
         }
         // `dedup` is whether the order has more than one volume; the order
         // itself is let go once the walk is done.

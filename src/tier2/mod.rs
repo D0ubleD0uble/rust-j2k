@@ -456,7 +456,8 @@ pub(crate) const DECODE_VISITS_MIN: u64 = 1 << 24;
 /// in about 2.5 times the slowest conformance decode per byte.
 ///
 /// Setting up a tile's geometry is counted only for the code-blocks of the
-/// resolutions a reduction drops (see [`Budget::reduction`]). A resolution with no precinct
+/// resolutions a reduction drops (see [`Budget::reduction`]) and for the
+/// components a tile holds no sample of (see [`empty_components`]). A resolution with no precinct
 /// gets no band or code-block geometry and lists no subband, so its setup
 /// allocates nothing. The costliest shape measured, 64 tiles of 16384
 /// components with one byte of packet data each, decodes at about 6 µs a
@@ -672,6 +673,11 @@ fn walk_packets<'a>(
             },
         )
     })?;
+    if let Some(why @ WorkRefusal::EmptyComponents { steps, .. }) =
+        empty_components(header, tile.index, &geoms)
+    {
+        meter.spend(usize::try_from(steps).unwrap_or(usize::MAX), why)?;
+    }
     let mut states = band_states(header, &geoms);
 
     let walk = PacketWalk {
@@ -860,6 +866,39 @@ pub(super) fn dropped_blocks(resolutions: &[ResolutionGeom], reduction: u8) -> u
         .flat_map(|resolution| &resolution.bands)
         .map(BandGeom::block_count)
         .sum()
+}
+
+/// The charge for the components of tile `tile` that hold no sample of it,
+/// whose geometry is `geoms`, or `None` when every component holds one.
+///
+/// Such a tile-component has no packet, so no byte pays for its setup and
+/// its decode, about 0.3 µs plus 0.1 µs for each resolution. A file of
+/// 65025 one-sample tiles and 16384 components, each but the first holding
+/// a sample in one tile only, is 1 MB and would take minutes. So each
+/// resolution of each such component costs [`END_VISITS`], as the end of a
+/// tile's data does: the default bound's 2^24 visits hold about a quarter
+/// of a second of it. A tile-component that holds a sample has a packet,
+/// which pays for it, so a file without an empty one is charged nothing.
+fn empty_components(
+    header: &MainHeader,
+    tile: u32,
+    geoms: &[Vec<ResolutionGeom>],
+) -> Option<WorkRefusal> {
+    let (mut components, mut resolutions) = (0u64, 0u64);
+    for (comp, resolution_geoms) in geoms.iter().enumerate() {
+        if header
+            .siz
+            .tile_component_rect(tile, comp)
+            .is_some_and(|rect| rect.is_empty())
+        {
+            components += 1;
+            resolutions += resolution_geoms.len() as u64;
+        }
+    }
+    (components > 0).then_some(WorkRefusal::EmptyComponents {
+        components,
+        steps: resolutions * END_VISITS as u64,
+    })
 }
 
 /// One state per (component, resolution, band) of `geoms`, carried across
@@ -1217,6 +1256,9 @@ pub(crate) enum WorkRefusal {
     /// the reduction drops, more than the visits left (see
     /// [`Budget::reduction`]).
     DroppedBlocks { blocks: u64 },
+    /// A tile holds no sample of `components` components, whose setup costs
+    /// `steps`, more than the visits left (see [`empty_components`]).
+    EmptyComponents { components: u64, steps: u64 },
 }
 
 impl WorkRefusal {
@@ -1237,6 +1279,11 @@ impl WorkRefusal {
                 "the resolutions the reduction drops hold {blocks} code-blocks in \
                  one component, a step each, more than the steps left of the \
                  packet work bound (see `DecodeOptions::packet_work_limit`)"
+            ),
+            WorkRefusal::EmptyComponents { components, steps } => format!(
+                "the tile holds no sample of {components} components, whose setup costs \
+                 {steps} steps, more than the steps left of the packet work bound (see \
+                 `DecodeOptions::packet_work_limit`)"
             ),
         }
     }

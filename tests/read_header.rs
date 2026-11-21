@@ -46,7 +46,7 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// `Limit`. `tier1_work_bound/t1bomb_1024_64_88` asks for more code-block
 /// work than the decode's tier-1 bound, which only the decode counts. The
 /// `tile_header/tilecomp_*` files hold components with no sample
-/// in tile 0, which only the decode's tile geometry finds. The
+/// in the image, which only the decode's tile geometry finds. The
 /// `poc_coverage/*_missing` files, `poc_precedence/poc_tile_leaves_out_packets`
 /// and `layers/pterm_poc_gap` carry POC volumes that leave out packets of the tile, which only the
 /// decode's packet walk checks. `opj_encoder_bugs/tp_mixed_subsampling.j2k` has no packet of one component, which only the
@@ -65,12 +65,17 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// `header/own_reduction_after_lower_data_fault.j2k` holds too little data
 /// for tile 0's packets, which only the decode reads.
 /// `header/rescued_lower_tile_then_data_fault.j2k` has a byte after tile 2's
-/// last packet, which only the decode reads.
+/// last packet, which only the decode reads, and so has
+/// `empty_tile_component/probe_2pkt.j2k` after tile 1's.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
 const TILE_FAULTS: &[(&str, &str)] = &[
+    (
+        "empty_tile_component/probe_2pkt.j2k",
+        "a byte left after the last packet",
+    ),
     (
         "header/own_reduction_after_lower_data_fault.j2k",
         "tile 0's data ends before its last packet",
@@ -181,14 +186,17 @@ const TILE_FAULTS: &[(&str, &str)] = &[
         "tier1_work_bound/t1bomb_1024_64_88.j2k",
         "past the tier-1 work bound",
     ),
-    ("tile_header/tilecomp_16_256.j2k", "empty tile-component"),
+    (
+        "tile_header/tilecomp_16_256.j2k",
+        "component with no sample",
+    ),
     (
         "tile_header/tilecomp_heavy_16_256.j2k",
-        "empty tile-component",
+        "component with no sample",
     ),
     (
         "tile_header/tilecomp_override_16_256.j2k",
-        "empty tile-component",
+        "component with no sample",
     ),
     ("work_bound/cprl_tall.j2k", "past the work bound"),
     ("work_bound/cprl_tall_poc31.j2k", "past the work bound"),
@@ -810,127 +818,6 @@ fn the_incremental_header_finds_the_fault_once_the_tile_part_is_whole() {
                     "{what}: {fed} bytes: {got}"
                 );
             }
-        }
-    }
-}
-
-/// Two tiles read at a reduction of 1: tile 0, one sample wide, has an
-/// empty area on component 1 and a tile-part `COD`; tile 1 is over the caps
-/// under the main header and within them under its own `COD`. With
-/// `fault`, tile 1's second tile-part carries an `MCC`, which the read
-/// does not read.
-fn empty_lower_tile_then(fault: bool) -> Vec<u8> {
-    use synth::{cod_body, qcd_none_body, seg, siz_body, tile_part};
-    // Precincts of 1 x 1 and 2 x 2, so tile 1 is over the caps under it.
-    let mut main_cod = cod_body(1, 1, 4, 0);
-    main_cod[0] = 1;
-    main_cod.extend([0x00, 0x11]);
-    let own_cod = seg(0xff52, &cod_body(1, 1, 4, 0));
-    let mut bytes = vec![0xff, 0x4f];
-    bytes.extend(seg(
-        0xff51,
-        &siz_body(
-            [2048, 1024, 1023, 0, 1024, 1024, 0, 0],
-            &[[7, 1, 1], [7, 255, 1]],
-        ),
-    ));
-    bytes.extend(seg(0xff52, &main_cod));
-    bytes.extend(seg(0xff5c, &qcd_none_body(2, &[8; 4])));
-    bytes.extend(tile_part(0, 0, 1, &own_cod, &[]));
-    bytes.extend(tile_part(1, 0, 2, &own_cod, &[]));
-    let mcc = if fault {
-        seg(0xff75, &[0, 0])
-    } else {
-        Vec::new()
-    };
-    bytes.extend(tile_part(1, 1, 2, &mcc, &[]));
-    bytes.extend([0xff, 0xd9]);
-    bytes
-}
-
-/// A tile whose counts under its own header are at fault, which only the
-/// decode's count of the tile finds, is left to the decode, unless the
-/// decode's parse of the tile-parts finds a fault first: then the read
-/// gives that fault, even in a tile-part it does not read.
-#[test]
-fn a_tile_whose_own_counts_are_at_fault_gives_the_decode_s_fault_for_the_tile_parts() {
-    for strict in [true, false] {
-        let options = DecodeOptions::default()
-            .with_resolution_reduction(1)
-            .with_strict(strict);
-        let clean = empty_lower_tile_then(false);
-        let read = read_header_with(&clean, &options).map(|_| ());
-        assert!(read.is_ok(), "strict {strict}: {read:?}");
-        let decoded = decode_with(&clean, &options);
-        assert!(
-            matches!(&decoded, Err(Error::Codestream(d)) if d.message() == "tile 0 has an empty area on component 1"),
-            "strict {strict}: {:?}",
-            decoded.map(|_| ())
-        );
-        let bytes = empty_lower_tile_then(true);
-        let header = keyed(read_header_with(&bytes, &options).map(|_| ()));
-        assert!(
-            header
-                .as_ref()
-                .is_err_and(|e| e.starts_with("Unsupported(\"`MCC`")),
-            "strict {strict}: {header:?}"
-        );
-        assert_eq!(
-            header,
-            keyed(decode_with(&bytes, &options).map(|_| ())),
-            "strict {strict}"
-        );
-    }
-}
-
-/// The tile of [`empty_lower_tile_then`] whose counts under its own header
-/// are at fault, with its only tile-part last, after tile 1's two, the
-/// second of which carries an `MCC` the read does not read. With `strict`
-/// off that tile-part is not whole in the input where its `Psot` is 0 or
-/// the input is cut inside its data. The decode's parse finds the `MCC`
-/// first, so the read gives that fault, as with `strict` on.
-#[test]
-fn own_counts_at_fault_in_a_tile_part_not_whole_give_the_decode_s_fault() {
-    use synth::{cod_body, qcd_none_body, seg, siz_body, tile_part};
-    let mut main_cod = cod_body(1, 1, 4, 0);
-    main_cod[0] = 1;
-    main_cod.extend([0x00, 0x11]);
-    let own_cod = seg(0xff52, &cod_body(1, 1, 4, 0));
-    let mut bytes = vec![0xff, 0x4f];
-    bytes.extend(seg(
-        0xff51,
-        &siz_body(
-            [2048, 1024, 1023, 0, 1024, 1024, 0, 0],
-            &[[7, 1, 1], [7, 255, 1]],
-        ),
-    ));
-    bytes.extend(seg(0xff52, &main_cod));
-    bytes.extend(seg(0xff5c, &qcd_none_body(2, &[8; 4])));
-    bytes.extend(tile_part(1, 0, 2, &own_cod, &[]));
-    bytes.extend(tile_part(1, 1, 2, &seg(0xff75, &[0, 0]), &[]));
-    let last = bytes.len();
-    bytes.extend(tile_part(0, 0, 1, &own_cod, &[0; 8]));
-    bytes.extend([0xff, 0xd9]);
-    let mut psot_0 = bytes.clone();
-    psot_0[last + 6..last + 10].copy_from_slice(&[0; 4]);
-    let cut = bytes[..bytes.len() - 4].to_vec();
-    for (what, bytes) in [("whole", &bytes), ("Psot 0", &psot_0), ("cut", &cut)] {
-        for strict in [true, false] {
-            let options = DecodeOptions::default()
-                .with_resolution_reduction(1)
-                .with_strict(strict);
-            let header = keyed(read_header_with(bytes, &options).map(|_| ()));
-            assert!(
-                header
-                    .as_ref()
-                    .is_err_and(|e| e.starts_with("Unsupported(\"`MCC`")),
-                "{what}, strict {strict}: {header:?}"
-            );
-            assert_eq!(
-                header,
-                keyed(decode_with(bytes, &options).map(|_| ())),
-                "{what}, strict {strict}"
-            );
         }
     }
 }

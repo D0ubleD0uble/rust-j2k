@@ -2200,69 +2200,6 @@ pub(crate) mod tests {
         assert!(kept <= parts + 2 * calls, "{kept} reads in {calls} calls");
     }
 
-    /// The calls of `IncrementalDecoder::header` after each feed walk the
-    /// tile-parts about once in all for a tile whose counts under its own
-    /// header are at fault, where the parse finds no fault, as each call
-    /// goes on from the fault walk the last one kept. Two tiles of 255
-    /// tile-parts each, read at a reduction of 1: tile 0, one sample wide,
-    /// has an empty area on component 1 and a tile-part `COD`, and tile 1 is
-    /// over the caps under the main header and within them under its own.
-    /// Fed 5 bytes at a time, a call reads the `SOT`s fed since the last one
-    /// and the one where the walk was kept. A walk from the start on each
-    /// call read 364,368 `SOT`s here.
-    #[test]
-    fn header_after_each_feed_walks_for_counts_at_fault_about_once() {
-        use crate::synth::{cod_body, qcd_none_body, seg, siz_body, tile_part};
-        let mut main_cod = cod_body(1, 1, 4, 0);
-        main_cod[0] = 1;
-        main_cod.extend([0x00, 0x11]);
-        let own_cod = seg(0xff52, &cod_body(1, 1, 4, 0));
-        let siz = siz_body(
-            [2048, 1024, 1023, 0, 1024, 1024, 0, 0],
-            &[[7, 1, 1], [7, 255, 1]],
-        );
-        let mut bytes = vec![0xff, 0x4f];
-        bytes.extend(seg(0xff51, &siz));
-        bytes.extend(seg(0xff52, &main_cod));
-        bytes.extend(seg(0xff5c, &qcd_none_body(2, &[8; 4])));
-        bytes.extend(tile_part(0, 0, 0, &own_cod, &[]));
-        bytes.extend(tile_part(1, 0, 0, &own_cod, &[]));
-        for part in 1..255u8 {
-            bytes.extend(tile_part(0, part, 0, &[], &[]));
-            bytes.extend(tile_part(1, part, 0, &[], &[]));
-        }
-        bytes.extend([0xff, 0xd9]);
-        let options = DecodeOptions::default().with_resolution_reduction(1);
-        let lenient = options.clone().with_strict(false);
-        // The header reads, and the decode refuses tile 0.
-        assert!(read_header(&bytes, &lenient).is_ok());
-        let decoded = decode_with(&bytes, &lenient);
-        assert!(
-            matches!(&decoded, Err(Error::Codestream(d)) if d.message() == "tile 0 has an empty area on component 1"),
-            "{:?}",
-            decoded.map(|_| ())
-        );
-        let mut decoder = crate::IncrementalDecoder::new(options).expect("valid options");
-        let (mut kept, mut calls) = (0u64, 0u64);
-        for chunk in bytes.chunks(5) {
-            decoder.feed(chunk);
-            codestream::tests::SOT_READS.with(|reads| reads.set(0));
-            let header = decoder.header();
-            kept += codestream::tests::SOT_READS.with(std::cell::Cell::get);
-            calls += 1;
-            let alone = match read_header(decoder.bytes(), &lenient) {
-                Ok(header) => Ok(Some(header)),
-                Err(Error::Incomplete(_)) => Ok(None),
-                Err(error) => Err(error),
-            };
-            assert_eq!(format!("{header:?}"), format!("{alone:?}"));
-        }
-        let parts = 2 * 255;
-        eprintln!("{kept} reads in {calls} calls of {parts} tile-parts");
-        assert!(kept > 0);
-        assert!(kept <= parts + calls, "{kept} reads in {calls} calls");
-    }
-
     /// A gray codestream of `tiles` tiles in a row, whose main header and
     /// tiles' first tile-parts are `main` and `own(tile)`, as marker
     /// segments, with an empty packet in each tile.

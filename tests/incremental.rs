@@ -1314,39 +1314,6 @@ fn a_refine_refused_for_what_was_spent_waits_where_a_later_tile_fails() {
     check_later_tiles_wait(&bytes, &options, error);
 }
 
-/// `tiles_even_origin_lossless.j2k`, 40 x 40 in tiles of 16 x 16, with
-/// component 2 subsampled by 20 across, so that it has no samples in tile
-/// 2 (columns 32 to 40, which hold no multiple of 20). Tiles 0 and 1
-/// decode.
-fn third_tile_empty_on_a_component() -> Vec<u8> {
-    let mut bytes = std::fs::read(fixtures().join("tiles_even_origin_lossless.j2k")).unwrap();
-    let siz = bytes.windows(2).position(|w| w == [0xFF, 0x51]).unwrap();
-    // Marker, Lsiz, Rsiz, eight sizes of 4 bytes and Csiz, then 3 bytes a
-    // component: Ssiz, XRsiz, YRsiz.
-    let xrsiz = siz + 40 + 3 * 2 + 1;
-    assert_eq!(bytes[xrsiz], 1);
-    bytes[xrsiz] = 20;
-    bytes
-}
-
-/// The same where the error comes from the packet walk of a later tile:
-/// tile 2 has an empty area on component 2, which the walk refuses before
-/// it reads the tile's packets.
-#[test]
-fn a_refine_refused_for_what_was_spent_waits_where_a_later_tiles_walk_fails() {
-    let bytes = third_tile_empty_on_a_component();
-    let options = DecodeOptions::default();
-    let error = decode_with(&bytes, &options.clone().with_strict(false)).unwrap_err();
-    assert!(
-        matches!(
-            &error,
-            Error::Codestream(m) if m.message() == "tile 2 has an empty area on component 2"
-        ),
-        "{error:?}"
-    );
-    check_later_tiles_wait(&bytes, &options, error);
-}
-
 /// The `incremental/spent_bound_tier1_then_eph*.j2k` files, HT files the
 /// `incremental_decode` fuzz target found (#485): `decode_with` fails in
 /// the block decoding of one tile (an HT suffix length `Scup` out of

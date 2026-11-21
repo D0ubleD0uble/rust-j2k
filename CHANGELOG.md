@@ -206,6 +206,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A tile narrower than a component's `XRsiz` or shorter than its `YRsiz`,
+  which holds no sample of that component, decodes as OpenJPEG 2.5.0
+  decodes it. Such a tile-component has no precinct and no packet, and
+  adds no sample. It was refused as `Error::Codestream` ("tile N has an
+  empty area on component C"); that error is now kept for a component
+  with no sample in the whole image, which OpenJPEG fails to decode too.
+  `read_header`, a window, `Region::Tile` and `IncrementalDecoder` follow.
+  No byte pays for the setup of such a tile-component, so each of its
+  resolutions costs 32 steps of the packet work bound: a 1 MB file of
+  65025 tiles and 16384 components is refused as `Error::Limit` in under
+  half a second, where it would take minutes (#595).
 - A `PPT` or `PPM` marker that holds only its `Zppt` or `Zppm` (`Lppt` or
   `Lppm` 3) is refused as `Error::Marker`, since the segment is too short
   for its fields, as OpenJPEG 2.5.0 refuses it. Such a `PPT` decoded before
