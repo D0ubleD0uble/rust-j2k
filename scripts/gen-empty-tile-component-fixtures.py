@@ -21,7 +21,12 @@ Two kinds of file:
   `probe_y_1pkt` the same down, and `probe_xy_l2` 3 x 3 with component 1
   sub-sampled 2 both ways, under two wavelet levels.
 
-For each file the oracle `<name>.opj.raw` is the `opj_decompress` output,
+One more encode, `opjfail_l1_lrcp`, is a file OpenJPEG 2.5.0 fails to
+decode whole (see `OPJ_FAILS`). Its oracle `<name>.tiles.opj.raw` is
+`opj_decompress -t <N> -c <the components tile N holds a sample of>` for
+each tile in turn, one after another.
+
+For each other file the oracle `<name>.opj.raw` is the `opj_decompress` output,
 the components' samples one after another. For each encode, the oracle
 `<name>.tile<N>.opj.raw` is `opj_decompress -t <N> -c 0` of the tile at the
 right edge or bottom, which holds no sample of component 1, and for each
@@ -146,6 +151,42 @@ def probe(width: int, height: int, subs: list[tuple[int, int]], levels: int,
     return out + b"\xff\xd9"
 
 
+# An encode OpenJPEG 2.5.0 fails to decode whole: with a wavelet level, a
+# tile that holds no sample of a component, after a tile that does, makes
+# `opj_j2k_update_image_data` read resolution 0 of the empty tile-component,
+# which starts before the output's origin, and it returns false ("failed to
+# decode image"). Each tile still decodes with `-t <N> -c <the components it
+# holds a sample of>`. name -> (width, height, sub-sampling, flags).
+OPJ_FAILS = {
+    "opjfail_l1_lrcp": (35, 12, [(1, 1), (1, 3), (5, 5)],
+                        ["-t", "5,2", "-n", "2", "-p", "LRCP", "-d", "1,7", "-T", "1,6"]),
+}
+
+
+def held(flags: list[str], width: int, height: int,
+         subs: list[tuple[int, int]]) -> list[list[int]]:
+    """For each tile, in index order, the components it holds a sample of
+    (ISO B-12), from the `-t`, `-d` and `-T` of `flags`."""
+    def pair(flag: str) -> tuple[int, int]:
+        if flag not in flags:
+            return 0, 0
+        x, y = flags[flags.index(flag) + 1].split(",")
+        return int(x), int(y)
+    tw, th = pair("-t")
+    ox, oy = pair("-d")
+    tox, toy = pair("-T")
+    x1, y1 = ox + width, oy + height
+    out = []
+    for ty in range(ceil_div(y1 - toy, th)):
+        for tx in range(ceil_div(x1 - tox, tw)):
+            tx0, tx1 = max(tox + tx * tw, ox), min(tox + (tx + 1) * tw, x1)
+            ty0, ty1 = max(toy + ty * th, oy), min(toy + (ty + 1) * th, y1)
+            out.append([c for c, (dx, dy) in enumerate(subs)
+                        if ceil_div(tx0, dx) < ceil_div(tx1, dx)
+                        and ceil_div(ty0, dy) < ceil_div(ty1, dy)])
+    return out
+
+
 # Tile 1 of each 2-tile probe holds no sample of component 1.
 PROBES = {
     "probe_1pkt": probe(2, 1, [(1, 1), (2, 1)], 0),
@@ -193,6 +234,27 @@ def main() -> None:
                 (DIR / f"{name}.r1.opj.raw").write_bytes(reduced)
                 line += f", -r 1: {len(reduced)}"
             print(line)
+        for name, (w, h, subs, flags) in OPJ_FAILS.items():
+            src = tmp / f"{name}.raw"
+            src.write_bytes(source(w, h, subs))
+            spec = f"{w},{h},{len(subs)},8,u@" + ":".join(f"{x}x{y}" for x, y in subs)
+            j2k = DIR / f"{name}.j2k"
+            run("opj_compress", "-i", str(src), "-o", str(j2k), "-F", spec, *flags)
+            whole = subprocess.run(["opj_decompress", "-i", str(j2k), "-o",
+                                    str(tmp / "whole.pgx")], capture_output=True)
+            if whole.returncode == 0:
+                sys.exit(f"{name}: opj_decompress decodes it; it should fail")
+            tiles = b""
+            for tile, comps in enumerate(held(flags, w, h, subs)):
+                base = tmp / f"{name}.t{tile}"
+                run("opj_decompress", "-i", str(j2k), "-o", f"{base}.pgx",
+                    "-t", str(tile), "-c", ",".join(map(str, comps)))
+                # The outputs are numbered from 0 over the components kept.
+                for k in range(len(comps)):
+                    data = Path(f"{base}_{k}.pgx").read_bytes()
+                    tiles += data[data.index(b"\n") + 1 :]
+            (DIR / f"{name}.tiles.opj.raw").write_bytes(tiles)
+            print(f"{name}: whole decode fails, tiles: {len(tiles)} samples")
         for name, data in PROBES.items():
             j2k = DIR / f"{name}.j2k"
             j2k.write_bytes(data)

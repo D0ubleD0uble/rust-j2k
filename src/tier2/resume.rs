@@ -486,6 +486,13 @@ enum Advanced {
     Failed(Error, u64),
 }
 
+// [`TileWalk::bytes`] counts the walk's own size against the room the
+// walks may keep, so a change to it moves where an `IncrementalDecoder`
+// keeps or lets go of a walk, and so what a refine spends. A field added
+// here is a change to that behavior, not only to the struct.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<TileWalk>() == 1200);
+
 /// One tile's walk.
 struct TileWalk {
     /// How many `POC` volumes the tile's header had when the walk started.
@@ -498,9 +505,6 @@ struct TileWalk {
     /// The fault that ended the geometry, after the components `dropped`
     /// holds.
     failure: Option<Error>,
-    /// The charge for the components the tile holds no sample of, which a
-    /// decode makes once the geometry is built.
-    empty: Option<WorkRefusal>,
     geoms: Vec<Vec<ResolutionGeom>>,
     /// The tile's rectangle on the reference grid.
     rect: Rect,
@@ -621,10 +625,6 @@ impl TileWalk {
                 .ok_or_else(|| Error::inconsistent(format!("no tile {} in `SIZ`", tile.index)))?;
             Ok((geoms, rect))
         });
-        let empty = built
-            .as_ref()
-            .ok()
-            .and_then(|(geoms, _)| empty_components(header, tile.index, geoms));
         let (geoms, rect, failure) = match built {
             Ok((geoms, rect)) => (geoms, rect, None),
             Err(error) => (
@@ -671,7 +671,6 @@ impl TileWalk {
             packed: !tile.packed_headers.is_empty(),
             dropped,
             failure,
-            empty,
             states,
             delimiters: Delimiters {
                 sop: header.cod.use_sop,
@@ -863,7 +862,11 @@ impl TileWalk {
         if let Some(error) = &self.failure {
             return Err(Refused::Other(error.clone()));
         }
-        if let Some(why @ WorkRefusal::EmptyComponents { steps, .. }) = self.empty {
+        // The components the tile holds no sample of, charged once the
+        // geometry is built, as a decode charges them.
+        if let Some(why @ WorkRefusal::EmptyComponents { steps, .. }) =
+            empty_components(header, tile.index)
+        {
             if !meter.try_spend(steps) {
                 return Err(Refused::Work(why));
             }

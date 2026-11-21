@@ -54,6 +54,7 @@ refusal under `ColorOutput::Srgb`).
 | [The `NLT` marker](#the-nlt-marker) | refuses as `Unsupported`; OpenJPEG skips it and decodes | 3 |
 | [An unknown marker in the main header](#an-unknown-marker-in-the-main-header) | refuses as `Unsupported`; OpenJPEG warns, skips it and decodes | 3 |
 | [A tile size that overflows OpenJPEG's tile count](#a-tile-size-that-overflows-openjpegs-tile-count) | decodes one tile; OpenJPEG refuses | 1 |
+| [A tile with no sample of a component](#a-tile-with-no-sample-of-a-component) | decodes; OpenJPEG fails some such files, and a reduction that leaves a component no sample | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
@@ -1494,6 +1495,41 @@ int, so the quotient is negative, wraps to a huge unsigned count, and the file
 fails the 65535-tile check. This decoder does the sum in wider integers and finds
 one tile. The output is byte-identical to OpenJPEG's decode of the same file
 with `YTsiz` patched to the image height.
+
+## A tile with no sample of a component
+
+| | |
+| - | - |
+| This decoder | decodes the file: the tile-component has no precinct, no packet and no sample |
+| OpenJPEG 2.5.0 | decodes most such files to the same image; fails some ("failed to decode image") |
+| Standard | Eq. B-12 gives `tcx0 == tcx1` or `tcy0 == tcy1`; B-15 and B.6 give such a tile-component no precinct, so no packet |
+| Rule | 1 |
+| Tests and fixtures | `tests/empty_tile_component.rs`; `tests/fixtures/empty_tile_component/opjfail_l1_lrcp.j2k` |
+| Decided | #595, 2026-11-21 |
+
+A tile narrower than a component's `XRsiz` or shorter than its `YRsiz` can
+hold no sample of it, and SIZ allows that. Where OpenJPEG decodes such a
+file, its image is this decoder's, bit for bit. It fails two kinds:
+
+- With a wavelet level or more, a tile with no sample of a component after
+  a tile that has some. The earlier tile allocated the component's output,
+  and `opj_j2k_update_image_data` (`j2k.c`) then copies the empty
+  tile-component at `resno_decoded` 0. That resolution starts before the
+  output's origin, so the width it works out is negative, and the copy
+  returns false. `opjfail_l1_lrcp` is an `opj_compress` encode of this
+  kind. Each of its tiles, with the components it holds a sample of,
+  decodes under `opj_decompress -t <N> -c <those>` to this decoder's tile,
+  and the whole image is those tiles put in place.
+- With no wavelet level, a single-component image with tiles that hold no
+  sample.
+
+A component with no sample in the whole image is refused with `SIZ`
+(`Error::Marker`), as OpenJPEG fails to decode it.
+
+A resolution reduction that leaves a component with no sample in the
+image is an older, separate case: this decoder returns the component 0
+wide or 0 high, where OpenJPEG fails ("Failed to decode all used
+components").
 
 ## The JP2 box layer
 

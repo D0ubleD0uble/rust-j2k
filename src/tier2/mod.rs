@@ -674,7 +674,7 @@ fn walk_packets<'a>(
         )
     })?;
     if let Some(why @ WorkRefusal::EmptyComponents { steps, .. }) =
-        empty_components(header, tile.index, &geoms)
+        empty_components(header, tile.index)
     {
         meter.spend(usize::try_from(steps).unwrap_or(usize::MAX), why)?;
     }
@@ -869,7 +869,8 @@ pub(super) fn dropped_blocks(resolutions: &[ResolutionGeom], reduction: u8) -> u
 }
 
 /// The charge for the components of tile `tile` that hold no sample of it,
-/// whose geometry is `geoms`, or `None` when every component holds one.
+/// under `header`, the tile's header, or `None` when every component holds
+/// one.
 ///
 /// Such a tile-component has no packet, so no byte pays for its setup and
 /// its decode, about 0.3 µs plus 0.1 µs for each resolution. A file of
@@ -879,20 +880,16 @@ pub(super) fn dropped_blocks(resolutions: &[ResolutionGeom], reduction: u8) -> u
 /// tile's data does: the default bound's 2^24 visits hold about a quarter
 /// of a second of it. A tile-component that holds a sample has a packet,
 /// which pays for it, so a file without an empty one is charged nothing.
-fn empty_components(
-    header: &MainHeader,
-    tile: u32,
-    geoms: &[Vec<ResolutionGeom>],
-) -> Option<WorkRefusal> {
+pub(super) fn empty_components(header: &MainHeader, tile: u32) -> Option<WorkRefusal> {
     let (mut components, mut resolutions) = (0u64, 0u64);
-    for (comp, resolution_geoms) in geoms.iter().enumerate() {
+    for (comp, params) in header.components.iter().enumerate() {
         if header
             .siz
             .tile_component_rect(tile, comp)
             .is_some_and(|rect| rect.is_empty())
         {
             components += 1;
-            resolutions += resolution_geoms.len() as u64;
+            resolutions += u64::from(params.coding.decomposition_levels) + 1;
         }
     }
     (components > 0).then_some(WorkRefusal::EmptyComponents {

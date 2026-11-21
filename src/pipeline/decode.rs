@@ -639,11 +639,10 @@ enum OwnHeader {
     /// At fault ([`Rescue::own_fault`]).
     Fault,
     /// Read, and within the reduction (the one [`Kept`] is for): the
-    /// resolutions it gives the tile, and its [`tier2::tile_counts`], or
-    /// `None` where those are at fault ([`Rescue::own_fault`] too).
+    /// resolutions it gives the tile, and its [`tier2::tile_counts`].
     Read {
         resolutions: u64,
-        counts: Option<(u64, u64)>,
+        counts: (u64, u64),
     },
 }
 
@@ -735,9 +734,10 @@ impl<'a> Rescue<'a> {
     /// checked first, as the decode checks it, and one with none with the
     /// decode's error for the tile-parts with `strict` on
     /// ([`walk_fault`](Self::walk_fault)) and not at all with it off (the
-    /// decode leaves it out). A tile whose tile-part header is at fault, or
-    /// whose counts under it are, gets the decode's error for the
-    /// tile-parts ([`own_fault`](Self::own_fault)). So a tile-part `COD`
+    /// decode leaves it out). A tile whose tile-part header is at fault
+    /// gets the decode's error for the tile-parts
+    /// ([`own_fault`](Self::own_fault)). A header that reads gives counts
+    /// that hold: what `tile_counts` refuses, the parse refuses first. So a tile-part `COD`
     /// that brings a tile within the caps is admitted, and one that takes
     /// it over them is refused. A tile within them (`None`) whose first
     /// tile-part has no `COD` or `COC` is admitted unread and uncharged.
@@ -806,11 +806,7 @@ impl<'a> Rescue<'a> {
             return Ok(false);
         }
         check_reduction(&own, self.reduction, Some(index as usize))?;
-        let counts = match tier2::tile_counts(&own, index) {
-            Ok(counts) => Some(counts),
-            Err(error @ Error::Limit(_)) => return Err(error),
-            Err(_) => None,
-        };
+        let counts = tier2::tile_counts(&own, index)?;
         self.learn(
             index,
             whole,
@@ -843,30 +839,23 @@ impl<'a> Rescue<'a> {
     }
 
     /// Hold tile `index` to the caps under its own header, which gave its
-    /// tile `counts`, as [`tier2::check_tile`] holds it. Counts at fault
-    /// (`None`) are [`own_fault`](Self::own_fault)'s.
-    fn check_own(&mut self, index: u32, counts: Option<(u64, u64)>) -> Result<bool> {
-        let Some(counts) = counts else {
-            return self.own_fault();
-        };
+    /// tile `counts`, as [`tier2::check_tile`] holds it.
+    fn check_own(&self, index: u32, counts: (u64, u64)) -> Result<bool> {
         match tier2::check_counts(index, counts, self.cap) {
             Err(error @ Error::Limit(_)) => Err(error),
             _ => Ok(true),
         }
     }
 
-    /// The error for a tile whose own tile-part header, or whose counts
-    /// under it, are at fault: the decode's error for the tile-parts, with
+    /// The error for a tile whose own tile-part header is at fault: the
+    /// decode's error for the tile-parts, with
     /// `strict` as the read has it ([`codestream::tile_parts_fault`]), as
     /// the decode parses every tile-part before it counts any tile. A
     /// tile-part header at fault is one that parse finds, if it finds no
     /// fault before it, except, with `strict` off, a fault the input may
     /// yet complete, which [`count`](Self::count) leaves to the decode
-    /// unwalked. Where the parse finds none (counts at fault that only the
-    /// decode's count of the tile finds), the tile is left to the decode.
-    /// So are counts at fault in a tile-part not whole in the input (cut,
-    /// or with a `Psot` of 0), where the parse with `strict` off finds no
-    /// fault. The tile-parts are walked once at most a call, and a call of
+    /// unwalked. Where the parse finds none, the tile is left to the
+    /// decode. The tile-parts are walked once at most a call, and a call of
     /// [`IncrementalDecoder::header`](crate::IncrementalDecoder::header)
     /// goes on from the walk the last one kept ([`Faults`]).
     fn own_fault(&mut self) -> Result<bool> {

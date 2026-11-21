@@ -45,8 +45,6 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// bound, which `read_header` does not walk, so `decode` refuses them with
 /// `Limit`. `tier1_work_bound/t1bomb_1024_64_88` asks for more code-block
 /// work than the decode's tier-1 bound, which only the decode counts. The
-/// `tile_header/tilecomp_*` files hold components with no sample
-/// in the image, which only the decode's tile geometry finds. The
 /// `poc_coverage/*_missing` files, `poc_precedence/poc_tile_leaves_out_packets`
 /// and `layers/pterm_poc_gap` carry POC volumes that leave out packets of the tile, which only the
 /// decode's packet walk checks. `opj_encoder_bugs/tp_mixed_subsampling.j2k` has no packet of one component, which only the
@@ -185,18 +183,6 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     (
         "tier1_work_bound/t1bomb_1024_64_88.j2k",
         "past the tier-1 work bound",
-    ),
-    (
-        "tile_header/tilecomp_16_256.j2k",
-        "component with no sample",
-    ),
-    (
-        "tile_header/tilecomp_heavy_16_256.j2k",
-        "component with no sample",
-    ),
-    (
-        "tile_header/tilecomp_override_16_256.j2k",
-        "component with no sample",
     ),
     ("work_bound/cprl_tall.j2k", "past the work bound"),
     ("work_bound/cprl_tall_poc31.j2k", "past the work bound"),

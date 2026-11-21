@@ -2,7 +2,9 @@
 //! (Eq. B-12) allows: a tile narrower than `XRsiz` or shorter than `YRsiz`
 //! has `tcx0 == tcx1` or `tcy0 == tcy1` on that component. Such a
 //! tile-component has no precinct, so no packet, and adds no sample, and
-//! every decode here matches `opj_decompress` 2.5.0 bit for bit. The files
+//! every decode here matches `opj_decompress` 2.5.0 bit for bit: of the
+//! whole image, or, for the one file OpenJPEG fails to decode whole, of
+//! each tile. The files
 //! and their oracles are in `tests/fixtures/empty_tile_component/` (see its
 //! README).
 
@@ -309,4 +311,112 @@ fn the_setup_of_an_empty_tile_component_spends_the_work_bound() {
             .contains("holds no sample of 699 components, whose setup costs 67104 steps")),
         "{refused:?}"
     );
+}
+
+/// A component with no sample in the whole image is refused with `SIZ`, as
+/// a header fault: by `read_header`, by the decode with `strict` on and
+/// off, and by an `IncrementalDecoder`. Here the image is the one column
+/// `[1, 2)`, and component 1, sub-sampled 2 across, has `x0 == x1 == 1`
+/// (ISO B.2). OpenJPEG 2.5.0 fails to decode it.
+#[test]
+fn a_component_with_no_sample_in_the_image_is_refused_with_siz() {
+    let siz = synth::siz_body([2, 1, 1, 0, 1, 1, 1, 0], &[[7, 1, 1], [7, 2, 1]]);
+    let mut bytes = vec![0xFF, 0x4F];
+    bytes.extend(synth::seg(0xFF51, &siz));
+    bytes.extend(synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0)));
+    bytes.extend(synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])));
+    bytes.extend(synth::tile_part(0, 0, 1, &[], &[0]));
+    bytes.extend([0xFF, 0xD9]);
+    let refused = |result: Result<(), Error>| {
+        assert!(
+            matches!(&result, Err(Error::Marker(d))
+                if d.message() == "component 1 holds no sample in the image"),
+            "{result:?}"
+        );
+    };
+    refused(read_header(&bytes).map(|_| ()));
+    for strict in [true, false] {
+        let options = DecodeOptions::default().with_strict(strict);
+        refused(decode_with(&bytes, &options).map(|_| ()));
+        refused(read_header_with(&bytes, &options).map(|_| ()));
+    }
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes);
+    refused(decoder.header().map(|_| ()));
+    refused(decoder.refine().map(|_| ()));
+    refused(decoder.finish().map(|_| ()));
+}
+
+/// `opjfail_l1_lrcp` holds tiles with no sample of components 1 and 2,
+/// after tiles that hold some, under one wavelet level. OpenJPEG 2.5.0
+/// fails to decode it whole (`opj_j2k_update_image_data` reads resolution
+/// 0 of an empty tile-component, which starts before the output's origin).
+/// Each tile, with the components it holds a sample of, decodes as
+/// `opj_decompress -t <N> -c <those>` gives it, and the whole decode is
+/// those tiles put in place.
+#[test]
+fn a_file_openjpeg_fails_whole_decodes_tile_by_tile_as_it_does() {
+    let bytes = read("opjfail_l1_lrcp.j2k");
+    let whole = decode_with(&bytes, &DecodeOptions::default()).unwrap();
+    let header = read_header(&bytes).unwrap();
+    let (grid, area) = (header.tiles, header.image_area);
+    let mut tiles = Vec::new();
+    // The whole image's samples, put back from the tiles' as they decode.
+    let mut placed: Vec<Vec<Option<i32>>> = whole
+        .components
+        .iter()
+        .map(|c| vec![None; c.samples.len()])
+        .collect();
+    for tile in 0..grid.columns * grid.rows {
+        let (column, row) = (tile % grid.columns, tile / grid.columns);
+        let x0 = (grid.x_offset + column * grid.tile_width).max(area.x0);
+        let x1 = (grid.x_offset + (column + 1) * grid.tile_width).min(area.x1);
+        let y0 = (grid.y_offset + row * grid.tile_height).max(area.y0);
+        let y1 = (grid.y_offset + (row + 1) * grid.tile_height).min(area.y1);
+        // The tile-component of each component (ISO B-12), where it is not
+        // empty.
+        let held: Vec<(u16, [u32; 4])> = whole
+            .components
+            .iter()
+            .enumerate()
+            .filter_map(|(c, comp)| {
+                let (dx, dy) = (u32::from(comp.x_sampling), u32::from(comp.y_sampling));
+                let rect = [
+                    x0.div_ceil(dx),
+                    x1.div_ceil(dx),
+                    y0.div_ceil(dy),
+                    y1.div_ceil(dy),
+                ];
+                (rect[0] < rect[1] && rect[2] < rect[3]).then_some((c as u16, rect))
+            })
+            .collect();
+        let options = DecodeOptions::default()
+            .with_region(Region::Tile(tile))
+            .with_components(Some(held.iter().map(|&(c, _)| c).collect()));
+        let image = decode_with(&bytes, &options).unwrap_or_else(|e| panic!("tile {tile}: {e}"));
+        tiles.extend(flat(&image));
+        for (part, &(c, [cx0, cx1, cy0, cy1])) in image.components.iter().zip(&held) {
+            let comp = &whole.components[usize::from(c)];
+            let (dx, dy) = (u32::from(comp.x_sampling), u32::from(comp.y_sampling));
+            let (ox, oy) = (area.x0.div_ceil(dx), area.y0.div_ceil(dy));
+            assert_eq!(
+                (part.width, part.height),
+                (cx1 - cx0, cy1 - cy0),
+                "tile {tile}"
+            );
+            for y in cy0..cy1 {
+                for x in cx0..cx1 {
+                    let at = ((y - oy) * comp.width + (x - ox)) as usize;
+                    let from = ((y - cy0) * part.width + (x - cx0)) as usize;
+                    assert_eq!(placed[usize::from(c)][at], None, "tile {tile}");
+                    placed[usize::from(c)][at] = Some(part.samples[from]);
+                }
+            }
+        }
+    }
+    assert_eq!(tiles, read("opjfail_l1_lrcp.tiles.opj.raw"));
+    for (comp, placed) in whole.components.iter().zip(placed) {
+        let placed: Vec<i32> = placed.into_iter().map(Option::unwrap).collect();
+        assert_eq!(comp.samples, placed);
+    }
 }

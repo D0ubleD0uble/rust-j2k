@@ -12,11 +12,11 @@ The shapes come from the review that filed issue #256:
 - `tilecomp`: the image `[1, side + 1)^2` in 1x1 tiles, so `side^2` tiles.
   Component 0 is full size; the other `components - 1` are subsampled 255
   times both ways, so they are empty on tile 0. With `side` under 255 they
-  hold no sample of the image and the decode fails at tile 0 (`Codestream`,
-  "tile 0 has an empty area on component 1"), after the tile headers are
-  read. At 255 each holds one sample, in the last tile, and the decode is
-  refused for the work of the tile-components with no sample (`Limit`). With `levels`, the main header is heavy: that many
-  wavelet levels, explicit precincts and 3 * levels + 1 expounded QCD steps.
+  hold no sample of the image, and the header is refused with `SIZ`
+  (`Marker`, "component 1 holds no sample in the image"). At 255 each holds
+  one sample, in the last tile, and the decode is refused for the work of
+  the tile-components with no sample (`Limit`). With `levels`, the main
+  header is heavy: that many wavelet levels, explicit precincts and 3 * levels + 1 expounded QCD steps.
   With `tile_cod`, every tile also carries its own COD (and QCD, with
   `tile_qcd`) restating the main header's, so each tile overrides every
   component.
