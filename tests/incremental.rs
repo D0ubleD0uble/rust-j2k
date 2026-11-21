@@ -406,6 +406,12 @@ fn share(share: usize) -> Vec<PathBuf> {
     let (header, rest): (Vec<_>, Vec<_>) = files(&fixtures())
         .into_iter()
         .partition(|path| path.strip_prefix(fixtures()).unwrap().starts_with("header"));
+    assert!(
+        header.len() <= SHARES,
+        "{} header/ fixtures but only {SHARES} shares, so two would share a test; \
+         raise SHARES and add a line to share_tests! for each new share",
+        header.len()
+    );
     let deal = |files: Vec<PathBuf>| {
         files
             .into_iter()
@@ -470,6 +476,17 @@ fn check_share(index: usize) {
 /// One test per share of the fixtures.
 macro_rules! share_tests {
     ($($name:ident => $index:literal,)*) => {
+        // The listed indices must be exactly 0..SHARES in order, so a share
+        // cannot be dropped, repeated, or left out of a raised SHARES.
+        const _: () = {
+            let indices = [$($index),*];
+            assert!(indices.len() == SHARES, "share_tests! lists a different number of shares than SHARES");
+            let mut i = 0;
+            while i < indices.len() {
+                assert!(indices[i] == i, "share_tests! indices must run 0, 1, 2, ... in order");
+                i += 1;
+            }
+        };
         $(
             #[test]
             fn $name() {
