@@ -4799,3 +4799,332 @@ fn sot_at_reads_what_decode_sot_admits() {
     assert!(sot_at(&whole, usize::MAX - 3).is_none());
     assert!(sot_at(&whole, 13).is_none());
 }
+
+/// Every committed codestream, raw or in a JP2 file, and every header seed
+/// (`tests/fixtures/` and the fuzz corpora under `fuzz/`), whole and cut
+/// short at a few points: the fault-only walk gives the error of the
+/// decode's parse of the tile-parts, with `strict` on and off. Under 64 KiB,
+/// each `SOT` of the first tile-parts is also changed a byte at a time.
+#[test]
+fn the_fault_walk_gives_the_tile_parts_parse_error_on_every_fixture() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut dirs = vec![root.join("tests/fixtures"), root.join("fuzz/corpus")];
+    let mut files = Vec::new();
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e, "j2k" | "j2c" | "jp2" | "jph"))
+            {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    assert!(files.len() > 300, "{} files", files.len());
+    let (mut runs, mut faults) = (0usize, 0usize);
+    let mut check = |bytes: &[u8]| {
+        crate::fuzz::tile_parts_walks_agree(bytes);
+        runs += 1;
+        if let Ok(parsed) = parse_header(bytes) {
+            faults += usize::from(fault::tile_parts_fault(bytes, &parsed, true).is_some());
+        }
+    };
+    for path in &files {
+        let bytes = std::fs::read(path).unwrap();
+        check(&bytes);
+        let Ok(parsed) = parse_header(&bytes) else {
+            continue;
+        };
+        let start = parsed.sot_offset;
+        let rest = bytes.len().saturating_sub(start);
+        for cut in [
+            1,
+            11,
+            12,
+            13,
+            rest / 3,
+            rest / 2,
+            rest - rest.min(2),
+            rest - rest.min(1),
+        ] {
+            check(&bytes[..(start + cut).min(bytes.len())]);
+        }
+        if bytes.len() > 1 << 16 {
+            continue;
+        }
+        let mut offsets = Vec::new();
+        let mut at = Some(start);
+        while let Some(offset) = at.filter(|_| offsets.len() < 4) {
+            let Some((sot, _)) = sot_at(&bytes, offset) else {
+                break;
+            };
+            offsets.push(offset);
+            at = offset
+                .checked_add(sot.psot as usize)
+                .filter(|_| sot.psot != 0);
+        }
+        for offset in offsets {
+            for at in offset..(offset + 16).min(bytes.len()) {
+                for value in [0x00, 0x01, 0xFF] {
+                    let mut changed = bytes.clone();
+                    changed[at] = value;
+                    check(&changed);
+                }
+            }
+        }
+    }
+    eprintln!(
+        "{} files, {runs} runs, {faults} with a strict fault",
+        files.len()
+    );
+    assert!(faults > 1000, "{faults} of {runs} runs hold a fault");
+}
+
+/// A gray 2 x 2 grid of 8 x 8 tiles, no levels, then `parts`.
+fn grid_of_four(main_extra: &[u8], parts: &[Vec<u8>], end: &[u8]) -> Vec<u8> {
+    let siz = synth::siz_body([16, 16, 0, 0, 8, 8, 0, 0], &[[7, 1, 1]]);
+    [
+        vec![0xFF, 0x4F],
+        seg(0xFF51, &siz),
+        seg(0xFF52, &synth::cod_body(1, 0, 0, 0)),
+        seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+        main_extra.to_vec(),
+        parts.concat(),
+        end.to_vec(),
+    ]
+    .concat()
+}
+
+/// A `POC` of `volumes` volumes, each of resolution 0, component 0 and
+/// one layer.
+fn poc(volumes: usize) -> Vec<u8> {
+    seg(0xFF5F, &[0, 0, 0, 1, 1, 1, 0].repeat(volumes))
+}
+
+/// Shapes the fixtures reach seldom, each run through the differential
+/// above and its error checked, so a shape that stops reaching its branch
+/// is seen: restated and differing values in a later tile-part, `POC`
+/// volumes joined over the tile-parts past the budget, a tile header at
+/// fault behind tiles left out with `strict` off (the full check numbers a
+/// tile by its place among those found), the two packed-header faults, the
+/// `TPsot == TNsot` count correction, and the chain's own faults.
+#[test]
+fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
+    use synth::tile_part as part;
+    let eoc = [0xFF, 0xD9];
+    let cod = seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
+    let other_cod = seg(0xFF52, &synth::cod_body(2, 0, 0, 0));
+    let wavelet_97 = {
+        let mut body = synth::cod_body(1, 0, 0, 0);
+        *body.last_mut().unwrap() = 0;
+        seg(0xFF52, &body)
+    };
+    let qcd = seg(0xFF5C, &synth::qcd_none_body(2, &[8]));
+    let other_qcd = seg(0xFF5C, &synth::qcd_none_body(1, &[8]));
+    let coc = seg(0xFF53, &[0, 0, 0, 1, 1, 0, 1]);
+    let all = |tile: u16| part(tile, 0, 1, &[], &[]);
+    // (name, strict, bytes, the start of the error, or "" for none)
+    let cases: Vec<(&str, bool, Vec<u8>, &str)> = vec![
+        (
+            "restated COD and QCD",
+            true,
+            grid_of_four(
+                &[],
+                &[
+                    part(0, 0, 2, &cod, &[]),
+                    part(0, 1, 2, &[cod.clone(), qcd.clone()].concat(), &[]),
+                    all(1),
+                    all(2),
+                    all(3),
+                ],
+                &eoc,
+            ),
+            "",
+        ),
+        (
+            "a later COD that differs from the tile's",
+            true,
+            grid_of_four(
+                &[],
+                &[part(0, 0, 2, &cod, &[]), part(0, 1, 2, &other_cod, &[])],
+                &eoc,
+            ),
+            "Codestream(\"a later tile-part of tile 0 carries a `COD`",
+        ),
+        (
+            "a later QCD that differs from the main header's",
+            false,
+            grid_of_four(
+                &[],
+                &[
+                    all(0),
+                    part(1, 0, 2, &[], &[]),
+                    part(1, 1, 2, &other_qcd, &[]),
+                ],
+                &eoc,
+            ),
+            "Codestream(\"a later tile-part of tile 1 carries a `QCD`",
+        ),
+        (
+            "a later COC that differs",
+            true,
+            grid_of_four(
+                &[],
+                &[part(2, 0, 2, &other_cod, &[]), part(2, 1, 2, &coc, &[])],
+                &eoc,
+            ),
+            "Codestream(\"a later tile-part of tile 2 carries a `COC`",
+        ),
+        (
+            "POC volumes past the budget over a tile's parts",
+            true,
+            grid_of_four(
+                &[],
+                &[part(0, 0, 2, &poc(20), &[]), part(0, 1, 2, &poc(13), &[])],
+                &eoc,
+            ),
+            "Limit(",
+        ),
+        (
+            "later-part POC volumes past the budget with the main header's",
+            false,
+            grid_of_four(
+                &poc(20),
+                &[
+                    all(1),
+                    part(3, 0, 2, &[], &[]),
+                    part(3, 1, 2, &poc(13), &[]),
+                ],
+                &eoc,
+            ),
+            "Limit(",
+        ),
+        (
+            "a tile header at fault behind tiles left out",
+            false,
+            grid_of_four(
+                &[],
+                &[
+                    all(1),
+                    part(
+                        3,
+                        0,
+                        1,
+                        &[wavelet_97.clone(), seg(0xFF5C, &[0x42, 0x48, 0x00])].concat(),
+                        &[],
+                    ),
+                ],
+                &eoc,
+            ),
+            "Unsupported(\"tile 1 codes component 0 with the Irreversible97 wavelet",
+        ),
+        (
+            "PPT under a PPM",
+            true,
+            grid_of_four(
+                &seg(0xFF60, &[0, 0, 0, 0, 1, 0]),
+                &[part(0, 0, 1, &seg(0xFF61, &[0, 0]), &[])],
+                &eoc,
+            ),
+            "Unsupported(\"a codestream carrying both `PPM` and `PPT`",
+        ),
+        (
+            "more tile-parts than PPM chunks",
+            true,
+            grid_of_four(
+                &seg(0xFF60, &[0, 0, 0, 0, 1, 0]),
+                &[all(0), all(1), all(2), all(3)],
+                &eoc,
+            ),
+            "Codestream(\"`PPM` carries fewer packet-header chunks",
+        ),
+        (
+            "TPsot == TNsot: the counts are one short",
+            true,
+            grid_of_four(
+                &[],
+                &[
+                    part(0, 0, 1, &[], &[]),
+                    all(1),
+                    part(0, 1, 1, &[], &[]),
+                    part(2, 0, 1, &[], &[]),
+                    part(2, 1, 1, &[], &[]),
+                    all(3),
+                ],
+                &eoc,
+            ),
+            "Codestream(\"tile 1 declares 2 tile-parts but carries 1\")",
+        ),
+        (
+            "two counts",
+            false,
+            grid_of_four(
+                &[],
+                &[part(0, 0, 2, &[], &[]), part(0, 1, 3, &[], &[])],
+                &eoc,
+            ),
+            "Codestream(\"tile 0 declares 3 tile-parts in one `SOT` and 2 in another\")",
+        ),
+        (
+            "a gap in TPsot",
+            false,
+            grid_of_four(
+                &[],
+                &[part(0, 0, 0, &[], &[]), part(0, 2, 0, &[], &[])],
+                &eoc,
+            ),
+            "Codestream(\"tile 0 tile-part index is 2, but 1 of its tile-parts",
+        ),
+        (
+            "a tile past the grid",
+            false,
+            grid_of_four(&[], &[all(4)], &eoc),
+            "Codestream(\"tile-part names tile 4, but the grid holds 4 tiles\")",
+        ),
+        (
+            "a missing tile",
+            true,
+            grid_of_four(&[], &[all(0), all(1), all(3)], &eoc),
+            "Codestream(\"the codestream carries no tile-part for tile 2\")",
+        ),
+        (
+            "missing tiles, strict off",
+            false,
+            grid_of_four(&[], &[all(0), all(3)], &[]),
+            "",
+        ),
+        (
+            "junk after a tile-part",
+            false,
+            grid_of_four(&[], &[all(0)], &[0, 0]),
+            "Codestream(\"expected `SOT` or `EOC` after a tile-part, found 0x0000\")",
+        ),
+        (
+            "a bad SOT length",
+            false,
+            grid_of_four(&[], &[all(0), seg(0xFF90, &[0; 9])], &eoc),
+            "Codestream(\"`SOT` segment has 1 unexpected trailing byte(s)\")",
+        ),
+    ];
+    for (name, strict, bytes, error) in &cases {
+        crate::fuzz::tile_parts_walks_agree(bytes);
+        let parsed = parse_header(bytes).expect(name);
+        let found = format!("{:?}", fault::tile_parts_fault(bytes, &parsed, *strict));
+        if error.is_empty() {
+            assert_eq!(found, "None", "{name}");
+        } else {
+            assert!(
+                found.starts_with(&format!("Some({error}")),
+                "{name}: {found}"
+            );
+        }
+    }
+}

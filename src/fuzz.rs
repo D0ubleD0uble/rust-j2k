@@ -279,6 +279,36 @@ pub fn with_code_block_work_cap(options: crate::DecodeOptions, cap: u64) -> crat
     }
 }
 
+/// Check that the walk of the tile-parts that keeps no tile record, which
+/// `read_header_with` runs where it refuses a tile, gives the error of the
+/// decode's parse of the tile-parts, with `strict` on and off, for the
+/// codestream `data` holds (raw, or in a JP2 file's `jp2c` box). Panics
+/// where the two differ. Input whose main header does not parse is not
+/// checked.
+pub fn tile_parts_walks_agree(data: &[u8]) {
+    use crate::codestream;
+    let codestream = if !data.starts_with(&[0xFF, 0x4F]) && crate::jp2::looks_like_jp2(data) {
+        match crate::jp2::parse(data, &crate::WorkLimit::default()) {
+            Ok(file) => file.codestream,
+            Err(_) => return,
+        }
+    } else {
+        data
+    };
+    let Ok(parsed) = codestream::parse_header(codestream) else {
+        return;
+    };
+    for strict in [true, false] {
+        let lean = codestream::tile_parts_fault(codestream, &parsed, strict);
+        let full = codestream::parse_tiles_with(codestream, parsed.clone(), strict).err();
+        assert_eq!(
+            format!("{lean:?}"),
+            format!("{full:?}"),
+            "the walks differ with `strict` {strict}"
+        );
+    }
+}
+
 /// An [`IncrementalDecoder`](crate::IncrementalDecoder) as if its earlier
 /// refines had spent `blocks` of the code-block work, so the
 /// `incremental_decode` target reaches the cut that bound makes without
