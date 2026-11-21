@@ -80,7 +80,10 @@ on the reference grid the origin sits. The count covers the codestream's
 components, a palette's expanded
 channels, and the channels sRGB output adds (sYCC chroma replicated to the
 luma grid, a gray channel a monochrome profile maps to R, G and B).
-`read_header_with` makes the same check, so it refuses what the decode would.
+`read_header_with` makes the same sample check, so it refuses the sample
+count as the decode would. It checks the tile caps below only where the main
+header shows them (see [Code-blocks and precincts per
+tile](#code-blocks-and-precincts-per-tile)).
 
 Under a window or a tile (`DecodeOptions::region`), the count is the
 samples of the tiles the decode reads, in every component, at the reduction.
@@ -243,8 +246,9 @@ input's length, so padding cannot raise it. It is not a factor of the default:
 the samples the target can address cap it. It holds every count the default
 does: every component of the tiles read (a 16x16 window of one 23171x23171 tile
 counts 536.9 M samples), a palette's expanded channels, and the channels sRGB
-output adds. `read_header_with` with the same options refuses what the decode
-would, before any tile is read.
+output adds. `read_header_with` with the same options refuses the sample count
+as the decode would, before any tile is read, and the tile caps where the main
+header shows them.
 
 The output is then at most `4·n` bytes, and the sample buffers peak at no more
 than about 3.2 times that, from the measurements above (a square tile measured
@@ -260,14 +264,50 @@ well, at least 2^20 and 2^18 (see [Code-blocks and precincts per
 tile](#code-blocks-and-precincts-per-tile)). Past 2^29 their bookkeeping adds
 at most about a third of the `4·n` bytes; below it, the floors are what a
 tile may hold. An `IncrementalDecoder` can hold up to about three times one
-decode's peak, plus the bytes fed.
+decode's peak, plus the bytes fed. What to set around a decode besides the
+ceiling (the input size, a timeout, memory for each concurrent decode) is in
+[Running a decode service](../SECURITY.md#running-a-decode-service).
 
 A refusal under `AtMost(n)` has kind `Samples` (or `TileCodeBlocks` or
 `TilePrecincts`, for a tile's geometry) and names the ceiling and the count.
 It gives no retry (`retry_with` is `None`, so `with_retry` is `None`): the
 caller set the ceiling. In an `IncrementalDecoder` it is an error, not a
-wait, as more bytes do not raise it. `AtMost(0)`, and `AtMost` on
+wait, as more bytes do not raise it, unless the refusal comes from a later
+tile while a refine counts the code-block work: that ends the count as
+`Waiting::BoundSpent` (see [Incremental
+decoding](incremental-decoding.md)). `AtMost(0)`, and `AtMost` on
 `packet_work_limit` or `code_block_work_limit`, is `InvalidOptions`.
+
+### Figures for a decode service
+
+The [operator recipe](../SECURITY.md#running-a-decode-service) quotes these.
+Each was measured on a release build, by timing `decode_with` or as
+`/usr/bin/time` reports the peak resident set, unless it says estimated.
+
+**The palettized file.** `tests/sample_limit.rs` builds it:
+`many_tiles_of_empty_packets(8, 512, 31)` (31 components of 4096 x 4096 in 64
+tiles of 512, six levels, an empty packet each) in a JP2 file whose `pclr` and
+`cmap` map component 0 to one channel (`palette_jp2`). It is 15,069 bytes. The
+header lists one channel of 2^24 samples. The decode at the defaults holds
+31 x 2^24 samples and took 6.5 s with a peak of 2.03 GiB (2,130,788 KiB) in a
+standalone program, and 2.07 GiB under the test harness. Reproduce it with
+`/usr/bin/time -v cargo test --release --test sample_limit -- --ignored
+the_palettized_file_decodes_every_component` and read "Maximum resident set
+size". `AtMost(2^28)` refuses it in well under a millisecond: "a decode of 31
+components needs 520093696 samples". The test
+`at_most_holds_the_codestream_and_the_palette_expansion` asserts the refusal on
+the same header, cut before its tile data.
+
+**The time.** The file is `t1bomb(16384, 6, 27)` from
+`scripts/gen-tier1-work-bound-fixtures.py`: one 16384 x 16384 tile in 64x64
+code-blocks of 27 passes and one byte each. It is 228,378 bytes, and its
+7.25e9 sample-passes are 97% of the code-block bound
+(max(2^26, 2^15 x 228,378) = 7.48e9). At the defaults it decodes in 26 to 27 s
+on one core, with a peak of 1.04 GiB. A variant of 36 passes (239,958 bytes) is
+refused in 34 ms. The estimate for the slowest data is the bound times 8 ns a
+sample-pass (see [The tier-1 work bound](#the-tier-1-work-bound)): 0.5 s at the
+floor, and 2^15 x 8 ns, about 0.25 ms, for each byte of tile data past it. A
+456 KB file taking 52.7 s at the defaults was reported in #474.
 
 ### Code-blocks and precincts per tile
 
@@ -333,7 +373,9 @@ restatements: about a kilobyte of heap for each such tile, and more for
 each `COC` or `QCC`, up to about 13 times the bytes of those headers.
 For the one tile whose joined header is at fault it walks again, after
 letting go of the first walk's record. It reads
-the main header in place, so it copies no `PPM` data. Where the read
+the main header in place and keeps no tile record, so it copies no `PPM`
+data. The decode's own parse holds the `PPM` chunks in its tile records, as
+the heap bound above counts. Where the read
 refuses no tile, a tile-part header the decode finds at fault is left to
 the decode. A differential test over every committed codestream, cut and
 with its `SOT`s changed, and the `header` fuzz target keep that walk's
@@ -365,7 +407,8 @@ tile-part's `COD`, with 255 tile-parts a tile (16.7 million tile-parts,
 tile-parts come together and the window is the last rows, so the walk runs
 to the end; 1.8 ms where the first tile-parts all come first; and under a
 millisecond with nothing over a cap. With 16 tile-parts a tile (15.7 MB)
-the same reads take 4.4 ms and 1.9 ms. With the last tile left out and
+the same reads, under `Raised(3)` (the default refuses 1.6 G samples there,
+over 2^29), take 4.4 ms and 1.9 ms. With the last tile left out and
 `Region::Tile` of it, the refusal takes 240 ms and 704 KiB of heap at 255
 tile-parts a tile, with `strict` on or off, where the decode's own parse
 takes 1.7 s and 290 MiB (`tests/tile_parts_fault_cost.rs`). With one

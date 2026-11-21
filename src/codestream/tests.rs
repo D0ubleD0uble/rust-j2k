@@ -624,9 +624,11 @@ fn irreversible_color_transform_parses() {
 
 /// The three color components must share a wavelet: a COC that moves one of the
 /// first three to the other arm makes the transform undefined (integers on one,
-/// floats on another), and is rejected.
+/// floats on another), and is rejected. G.2 allows RCT only with the 5/3 and
+/// G.3 ICT only with the 9/7, so the pairing is an illegal field, not a
+/// missing feature.
 #[test]
-fn a_color_transform_over_mixed_wavelets_is_unsupported() {
+fn a_color_transform_over_mixed_wavelets_is_marker() {
     // All-9/7 COD with MCT; a COC drops component 1 to 5/3.
     let bytes = codestream(&[
         seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
@@ -634,7 +636,11 @@ fn a_color_transform_over_mixed_wavelets_is_unsupported() {
         seg(marker::COC, &coc_body(&[1], 0, 5, 4, 4, 0, 1)),    // component 1 → 5/3
         seg(marker::QCD, &qcd_expounded(2, &[(8, 0); 16])),
     ]);
-    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+    let e = err(&bytes);
+    assert!(
+        matches!(&e, Error::Marker(m) if m.message().contains("different wavelet")),
+        "got {e:?}"
+    );
 }
 
 /// `Smct = 2` selects Part 2's array MCT, a different feature.
@@ -1698,15 +1704,203 @@ fn structurally_illegal_tile_header_marker_is_codestream() {
     }
 }
 
+/// A tile-part header that meets bytes that are no marker at all has lost
+/// sync, which is damage. A marker it does not read is not (see the reject
+/// matrix).
 #[test]
-fn unexpected_tile_header_marker_is_codestream() {
-    let mut bytes = be16(marker::SOC).to_vec();
-    for part in default_header() {
-        bytes.extend_from_slice(&part);
+fn a_non_marker_in_a_tile_part_header_is_codestream() {
+    for code in [0x1234u16, 0xFF00, 0xFFFF] {
+        let bytes = assemble_with_tile_markers(&default_header(), &[be16(code).to_vec()], &[0]);
+        let e = perr(&bytes);
+        assert!(
+            matches!(&e, Error::Codestream(m) if m.message().contains("expected a marker")),
+            "{code:#06X}: got {e:?}"
+        );
     }
-    bytes.extend_from_slice(&synth::sot(0, 0, 0, 1));
-    bytes.extend_from_slice(&be16(0xFF30)); // reserved, not valid in a header
-    assert!(matches!(perr(&bytes), Error::Codestream(_)));
+}
+
+/// A tile-part header gives a marker it does not read the variant the main
+/// header gives (#563): a Part 2 marker and an unrecognized one are
+/// `Unsupported`, and so is a reserved segment-less one, which A.1.3 has a
+/// decoder skip but OpenJPEG 2.5.0 refuses there. The messages say which.
+#[test]
+fn a_tile_part_header_maps_an_unread_marker_as_the_main_header_does() {
+    for (code, says) in [
+        (marker::MCC, "Part 2"),
+        (0xFF7F, "unrecognized"),
+        (0xFF30, "reserved"),
+        (0xFF3F, "reserved"),
+    ] {
+        let tile = if marker::has_segment(code) {
+            seg(code, &[0, 0])
+        } else {
+            be16(code).to_vec()
+        };
+        let in_tile = perr(&assemble_with_tile_markers(
+            &default_header(),
+            &[tile],
+            &[0],
+        ));
+        assert!(
+            matches!(&in_tile, Error::Unsupported(m) if m.message().contains(says)),
+            "{code:#06X} in a tile-part header: got {in_tile:?}"
+        );
+        if code != 0xFF30 && code != 0xFF3F {
+            let in_main = err(&header_with(&seg(code, &[0, 0])));
+            assert!(
+                matches!(in_main, Error::Unsupported(_)),
+                "{code:#06X} in the main header: got {in_main:?}"
+            );
+        }
+    }
+}
+
+/// A damaged length in a tile-part header can step past `SOD` into the
+/// packet data, where `0xFF` and a byte below `0x90` may follow each other.
+/// Read there, such a pair is damage, not a marker this decoder does not
+/// read: a code is `Unsupported` only when the markers go on from it to a
+/// `SOD` within the tile-part.
+#[test]
+fn a_length_that_runs_into_the_packet_data_is_codestream() {
+    // The `COM` declares 6 bytes and holds 4, so it swallows the `SOD`, and
+    // the next code is read from the data: reserved, unrecognized, Part 2.
+    let com = vec![0xFF, 0x64, 0x00, 0x06, 0xAA, 0xBB];
+    for data in [
+        vec![0xFF, 0x3A, 0x01, 0x02],
+        vec![0xFF, 0x4D, 0x12, 0x34],
+        vec![0xFF, 0x75, 0x00, 0x40],
+    ] {
+        let bytes =
+            assemble_with_tile_markers(&default_header(), std::slice::from_ref(&com), &data);
+        crate::fuzz::tile_parts_walks_agree(&bytes);
+        let e = perr(&bytes);
+        assert!(
+            matches!(&e, Error::Codestream(m) if m.message().contains("not followed by marker segments")),
+            "{data:02X?}: got {e:?}"
+        );
+    }
+
+    // Markers that reach `SOD` only past the tile-part's `Psot`.
+    let mut sot = synth::sot(0, 12 + 4 + 1, 0, 1);
+    sot.extend_from_slice(&seg(0xFF7F, &[]));
+    let bytes = assemble(&default_header(), &sot, &[0, 0], true);
+    let e = perr(&bytes);
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.message().contains("not followed by marker segments")),
+        "got {e:?}"
+    );
+}
+
+/// The review's repro of the case above, on a real file: a `COM` added to
+/// each of the first tile-part headers of `tiles_multipart_lossless.j2k`
+/// (`Psot` grown to hold its 4 bytes), at every length that runs it past
+/// `SOD`. None reads as `Unsupported`, and among them the `COM` ends on a
+/// reserved code (`0xFF3A`) and on an unrecognized one (`0xFF4D`).
+#[test]
+fn a_com_run_past_sod_in_a_real_file_is_never_unsupported() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/tiles_multipart_lossless.j2k");
+    let file = std::fs::read(path).unwrap();
+    let (_, mut at, _) = parse_main_header(&file).unwrap();
+    let mut sots = Vec::new();
+    while read_u16(&file, at) == Some(marker::SOT) && sots.len() < 4 {
+        sots.push(at);
+        let psot = u32::from_be_bytes(file[at + 6..at + 10].try_into().unwrap());
+        at += psot as usize;
+    }
+    let (mut reserved, mut unrecognized) = (0, 0);
+    for &sot in &sots {
+        let psot = u32::from_be_bytes(file[sot + 6..sot + 10].try_into().unwrap());
+        for length in 4..=255u8 {
+            let mut bytes = file[..sot + 12].to_vec();
+            bytes[sot + 6..sot + 10].copy_from_slice(&(psot + 4).to_be_bytes());
+            bytes.extend_from_slice(&[0xFF, 0x64, 0, length]);
+            bytes.extend_from_slice(&file[sot + 12..]);
+            // Where the `COM` ends, the next code is read.
+            match read_u16(&bytes, sot + 12 + 2 + usize::from(length)) {
+                Some(code) if marker::RESERVED_NO_SEGMENT.contains(&code) => reserved += 1,
+                Some(0xFF4D) => unrecognized += 1,
+                _ => {}
+            }
+            crate::fuzz::tile_parts_walks_agree(&bytes);
+            if let Err(e) = parse(&bytes) {
+                assert!(
+                    !matches!(e, Error::Unsupported(_)),
+                    "COM of length {length} in the tile-part at {sot}: got {e:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        reserved > 0 && unrecognized > 0,
+        "{reserved} {unrecognized}"
+    );
+}
+
+/// A.7.4 disallows any `PPT` beside a `PPM`, one with no packet-header
+/// bytes too: `FF61 0003 00`, only its `Zppt`, added to
+/// `packed_overrun/ppm_whole.j2k`, is refused with `strict` on and off,
+/// where it decoded before. OpenJPEG 2.5.0 refuses it too.
+#[test]
+fn an_empty_ppt_beside_a_ppm_is_codestream() {
+    let bytes = assemble_with_tile_markers(
+        &[
+            default_header(),
+            vec![seg(marker::PPM, &[0, 0, 0, 0, 1, 0])],
+        ]
+        .concat(),
+        &[seg(marker::PPT, &[0])],
+        &[0],
+    );
+    crate::fuzz::tile_parts_walks_agree(&bytes);
+    let e = perr(&bytes);
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.message().contains("both `PPM` and `PPT`")),
+        "got {e:?}"
+    );
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/packed_overrun/ppm_whole.j2k");
+    let file = std::fs::read(path).unwrap();
+    let (_, sot, _) = parse_main_header(&file).unwrap();
+    let psot = u32::from_be_bytes(file[sot + 6..sot + 10].try_into().unwrap());
+    let mut bytes = file[..sot + 12].to_vec();
+    bytes[sot + 6..sot + 10].copy_from_slice(&(psot + 5).to_be_bytes());
+    bytes.extend_from_slice(&[0xFF, 0x61, 0x00, 0x03, 0x00]);
+    bytes.extend_from_slice(&file[sot + 12..]);
+    assert!(crate::decode(&file).is_ok());
+    crate::fuzz::tile_parts_walks_agree(&bytes);
+    for strict in [true, false] {
+        let e = crate::decode_with(&bytes, &crate::DecodeOptions::default().with_strict(strict))
+            .expect_err("a PPT beside a PPM");
+        assert!(
+            matches!(&e, Error::Codestream(m) if m.message().contains("both `PPM` and `PPT`")),
+            "strict {strict}: got {e:?}"
+        );
+    }
+}
+
+/// The color-transform rule holds for a tile's resolved coding too: a tile
+/// `COC` that moves component 1 off the main header's 9/7 makes the
+/// transform undefined in that tile, and the error names the tile.
+#[test]
+fn a_tile_coc_that_mixes_the_color_wavelets_is_marker() {
+    let header = vec![
+        seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
+        seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 0)), // mct = 1, 9/7
+        seg(marker::QCD, &qcd_expounded(2, &[(8, 0); 16])),
+    ];
+    let bytes = assemble_with_tile_markers(
+        &header,
+        &[seg(marker::COC, &coc_body(&[1], 0, 5, 4, 4, 0, 1))], // component 1 → 5/3
+        &[0],
+    );
+    crate::fuzz::tile_parts_walks_agree(&bytes);
+    let e = perr(&bytes);
+    assert!(
+        matches!(&e, Error::Marker(m) if m.message().starts_with("in tile 0, the color transform")),
+        "got {e:?}"
+    );
 }
 
 #[test]
@@ -1986,23 +2180,26 @@ fn a_non_marker_where_a_marker_belongs_is_codestream() {
     assert!(matches!(err(&bytes), Error::Codestream(_)));
 }
 
+/// PPT, SOP and EPH are decoded where Table A.2 allows them: a tile-part
+/// header, the packet data, and the packed headers. In the main header each
+/// is a malformed codestream, as PLT is, and the message names the marker
+/// rather than calling it a feature not decoded.
 #[test]
-fn header_altering_markers_are_rejected_not_skipped() {
-    // These are known markers outside the subset. Each changes how the
-    // codestream is interpreted, so each is named and rejected rather than
-    // passed over. PPM has left this list — it is decoded now (issue #71); the
-    // length markers TLM/PLM/PLT are absent too, being informational (#72).
-    // CAP has left it too: it is read (#340).
+fn packet_markers_in_the_main_header_are_codestream() {
     for code in [marker::PPT, marker::SOP] {
-        let bytes = header_with(&seg(code, &[0, 0]));
+        let e = err(&header_with(&seg(code, &[0, 0])));
         assert!(
-            matches!(err(&bytes), Error::Unsupported(_)),
-            "{code:#06X} should be Unsupported"
+            matches!(&e, Error::Codestream(m)
+                if m.message() == format!("{} is not permitted in the main header", marker::describe(code))),
+            "{code:#06X}: got {e:?}"
         );
     }
     // EPH carries no segment, so it is spliced in bare.
-    let bytes = header_with(&be16(marker::EPH));
-    assert!(matches!(err(&bytes), Error::Unsupported(_)));
+    let e = err(&header_with(&be16(marker::EPH)));
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.message().contains("`EPH` (0xFF92) is not permitted")),
+        "got {e:?}"
+    );
 }
 
 #[test]
@@ -2379,8 +2576,9 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
         ),
         // Both color transforms are decoded now (RCT and ICT), so they left
         // this table, and on fewer than three components the transform is
-        // skipped. What remains out of subset: Part 2's array MCT, and a
-        // codestream that mixes wavelets across the three components.
+        // skipped. What remains out of subset is Part 2's array MCT. A
+        // codestream that mixes wavelets across the three components pairs
+        // a transform with the wrong wavelet, which G.2 and G.3 forbid.
         (
             "color transform over mixed wavelets",
             err(&codestream(&[
@@ -2389,7 +2587,21 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
                 seg(marker::COC, &coc_body(&[1], 0, 5, 4, 4, 0, 1)),
                 seg(marker::QCD, &qcd_expounded(2, &[(8, 0); 16])),
             ])),
-            Variant::Unsupported,
+            Variant::Marker,
+        ),
+        // A.7.4 and A.7.5: with a PPM present, PPT is disallowed.
+        (
+            "PPT beside a PPM",
+            perr(&assemble_with_tile_markers(
+                &[
+                    default_header(),
+                    vec![seg(marker::PPM, &[0, 0, 0, 0, 1, 0])],
+                ]
+                .concat(),
+                &[seg(marker::PPT, &[0, 0])],
+                &[0],
+            )),
+            Variant::Codestream,
         ),
         (
             "Part 2 array multiple-component transform",
@@ -2472,21 +2684,74 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
         ),
     ];
 
-    // Every main-header marker the subset does not decode. TLM and PLM have
-    // left this table (informational, decoded — issue #72); PPM too (its packed
-    // packet headers are decoded — issue #71); PLT is decoded in the tile-part
-    // header and structurally illegal in the main one.
-    for (name, code) in [("PPT", marker::PPT), ("SOP", marker::SOP)] {
+    // A marker in the wrong header is a malformed codestream, in either
+    // header (Table A.2): PLT, PPT and SOP in the main header, and TLM, PLM
+    // and SOP in a tile-part header. EPH stands alone in either.
+    let in_tile = |marker: Vec<u8>| {
+        perr(&assemble_with_tile_markers(
+            &default_header(),
+            &[marker],
+            &[0],
+        ))
+    };
+    for (name, code) in [
+        ("PLT in the main header", marker::PLT),
+        ("PPT in the main header", marker::PPT),
+        ("SOP in the main header", marker::SOP),
+    ] {
         rows.push((
             name,
             err(&header_with(&seg(code, &[0, 0]))),
-            Variant::Unsupported,
+            Variant::Codestream,
         ));
+    }
+    rows.push((
+        "EPH in the main header",
+        err(&header_with(&be16(marker::EPH))),
+        Variant::Codestream,
+    ));
+    for (name, code) in [
+        ("TLM in a tile-part header", marker::TLM),
+        ("PLM in a tile-part header", marker::PLM),
+        ("SOP in a tile-part header", marker::SOP),
+    ] {
+        rows.push((name, in_tile(seg(code, &[0, 0])), Variant::Codestream));
+    }
+    rows.push((
+        "EPH in a tile-part header",
+        in_tile(be16(marker::EPH).to_vec()),
+        Variant::Codestream,
+    ));
+    // The main-header-only SIZ, PPM and CRG, and the delimiters, in a
+    // tile-part header. A delimiter would be `Codestream` by another arm
+    // too (it breaks the chain to `SOD`), so each must be refused by name.
+    for (name, marker) in [
+        (
+            "SIZ in a tile-part header",
+            seg(marker::SIZ, &one_component()),
+        ),
+        (
+            "PPM in a tile-part header",
+            seg(marker::PPM, &[0, 0, 0, 0, 1, 0]),
+        ),
+        ("CRG in a tile-part header", seg(marker::CRG, &[0, 0, 0, 0])),
+        ("SOT in a tile-part header", synth::sot(0, 0, 0, 1)),
+        ("SOC in a tile-part header", be16(marker::SOC).to_vec()),
+        ("EOC in a tile-part header", be16(marker::EOC).to_vec()),
+    ] {
+        let error = in_tile(marker);
+        assert!(
+            error
+                .to_string()
+                .contains("is not permitted in a tile-part header"),
+            "{name}: got {error:?}"
+        );
+        rows.push((name, error, Variant::Codestream));
     }
 
     // Every JPEG 2000 Part 2 codestream marker (0xFF74..=0xFF78): out of the
     // Part 1 subset, so each is an `Unsupported` feature the moment it appears,
-    // never half-parsed as Part 1 (issue #78).
+    // in either header, never half-parsed as Part 1 (issue #78).
     for (name, code) in [
         ("MCT", marker::MCT),
         ("MCC", marker::MCC),
@@ -2499,15 +2764,34 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
             err(&header_with(&seg(code, &[0, 0]))),
             Variant::Unsupported,
         ));
+        rows.push((name, in_tile(seg(code, &[0, 0])), Variant::Unsupported));
     }
+
+    // A marker no part of the standard this decoder reads defines: valid
+    // syntax, not decoded, in either header.
     rows.push((
-        "PLT in the main header",
-        err(&header_with(&seg(marker::PLT, &[0, 0]))),
-        Variant::Codestream,
+        "unrecognized marker in the main header",
+        err(&header_with(&seg(0xFF7F, &[0, 0]))),
+        Variant::Unsupported,
     ));
     rows.push((
-        "EPH",
-        err(&header_with(&be16(marker::EPH))),
+        "unrecognized marker in a tile-part header",
+        in_tile(seg(0xFF7F, &[0, 0])),
+        Variant::Unsupported,
+    ));
+    // A reserved segment-less marker: A.1.3 has a decoder skip it, and the
+    // main header does. OpenJPEG 2.5.0 refuses one in a tile-part header,
+    // and so does this decoder, as a marker it does not read.
+    rows.push((
+        "reserved segment-less marker in a tile-part header",
+        in_tile(be16(0xFF30).to_vec()),
+        Variant::Unsupported,
+    ));
+    // An unrecognized marker whose chain to `SOD` steps over a segment-less
+    // code on the way: still a whole header, so `Unsupported`.
+    rows.push((
+        "unrecognized marker, then a reserved one, then SOD",
+        in_tile([seg(0xFF7F, &[]), be16(0xFF30).to_vec()].concat()),
         Variant::Unsupported,
     ));
 
@@ -2854,9 +3138,9 @@ fn a_coc_cannot_smuggle_in_an_undecoded_code_block_style() {
 /// Which color transform applies follows from the wavelet, and COC makes the
 /// wavelet per component. RCT is defined over three integer components, so a COC
 /// that moves one of the first three to 9/7 describes a transform that does not
-/// exist.
+/// exist: G.2 allows RCT only with the 5/3, so the field is illegal.
 #[test]
-fn a_coc_moving_a_color_component_to_the_97_wavelet_is_unsupported() {
+fn a_coc_moving_a_color_component_to_the_97_wavelet_is_marker() {
     // Each 9/7 component gets a scalar QCC so the wavelet/quant pairing is
     // sound and the failure under test is the color transform alone.
     let scalar_qcc = |component: u8| {
@@ -2878,7 +3162,7 @@ fn a_coc_moving_a_color_component_to_the_97_wavelet_is_unsupported() {
         scalar_qcc(1),
     ]);
     let e = err(&bytes);
-    let Error::Unsupported(message) = &e else {
+    let Error::Marker(message) = &e else {
         panic!("got {e:?}")
     };
     assert!(message.message().contains("component 1"), "{message}");
@@ -3693,7 +3977,7 @@ impl Rng {
                 header.components[index].quant = self.quant(levels);
             }
         }
-        (validate_resolved(&header).is_ok() && header.poc.len() <= MAX_POC_VOLUMES)
+        (validate_resolved(&header, None).is_ok() && header.poc.len() <= MAX_POC_VOLUMES)
             .then_some(header)
     }
 
@@ -5078,7 +5362,32 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
                 &[part(0, 0, 1, &seg(0xFF61, &[0, 0]), &[])],
                 &eoc,
             ),
-            "Unsupported(\"a codestream carrying both `PPM` and `PPT`",
+            "Codestream(\"a codestream carrying both `PPM` and `PPT`",
+        ),
+        (
+            "a Part 2 marker in a later tile-part header",
+            true,
+            grid_of_four(
+                &[],
+                &[
+                    part(0, 0, 2, &[], &[]),
+                    part(0, 1, 2, &seg(0xFF75, &[0, 0]), &[]),
+                ],
+                &eoc,
+            ),
+            "Unsupported(\"`MCC` (0xFF75) is a JPEG 2000 Part 2 marker",
+        ),
+        (
+            "a reserved marker in a first tile-part header",
+            false,
+            grid_of_four(&[], &[part(0, 0, 1, &[0xFF, 0x30], &[])], &eoc),
+            "Unsupported(\"reserved marker 0xFF30 in a tile-part header",
+        ),
+        (
+            "an unrecognized marker in a first tile-part header",
+            true,
+            grid_of_four(&[], &[part(0, 0, 1, &seg(0xFF7F, &[0, 0]), &[])], &eoc),
+            "Unsupported(\"unrecognized marker 0xFF7F in a tile-part header",
         ),
         (
             "more tile-parts than PPM chunks",

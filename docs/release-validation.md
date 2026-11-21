@@ -70,7 +70,8 @@ cargo deny check
 CI (`.github/workflows/ci.yml`) runs these, plus `cargo test --doc`, a `cargo
 check` on the minimum Rust version, the package hygiene check ([layer
 7](#7-package-contents)), the fuzz smoke ([layer 3](#3-fuzzing)), `cargo test`
-on macOS aarch64, and the `math_tests` and `jp2_icc` tests on `wasm32-wasip1`.
+on macOS aarch64, and on `wasm32-wasip1` the library tests (`--lib`) and the
+`jp2_icc`, `sample_limit` and `limit_32bit` test binaries.
 Coverage, CodeQL and Semgrep run in their own workflows.
 
 Each PR also gets an independent review by a reviewer who did not write it.
@@ -385,8 +386,9 @@ costs one session, so it stays.
 **Catches:** code that works only where `usize` is 64 bits: a size computed in
 `usize`, an index cast, or a limit that differs by word size.
 
-**Run:** the whole test suite under `wasm32-wasip1`, not only the test
-binaries CI runs there, then the corpus hash from [Against the last
+**Run:** the whole test suite under `wasm32-wasip1`, not only the library
+tests and the three test binaries (`jp2_icc`, `sample_limit`, `limit_32bit`)
+CI runs there, then the corpus hash from [Against the last
 release](#against-the-last-release) on both targets:
 
 ```sh

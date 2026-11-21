@@ -1149,9 +1149,12 @@ fn decode_codestream(
     // not the one it gives. The refusals of a later tile's walk end the
     // count too, as an error does.
     //
-    // The tests reach two of the steps that end the count: the reduction
-    // check and the packet walk. The others cannot fail on a codestream that
-    // parsed. `tile_header` fails only on a header the parse, which checks
+    // The tests reach three of the steps that end the count: the reduction
+    // check, `check_tile` (a later tile over a cap on its code-blocks or
+    // precincts, which the parse does not check; see
+    // `incremental/bound_spent_stands_in_for_a_tile_cap_refusal.seed`) and
+    // the packet walk. The others cannot fail on a codestream that parsed.
+    // `tile_header` fails only on a header the parse, which checks
     // every tile's header, has already refused, or on an `Error::inconsistent`
     // invariant (a missing tile). `footprint_of` and
     // `report_part` fail only on `Error::inconsistent` invariants (in

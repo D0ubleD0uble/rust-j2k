@@ -62,7 +62,8 @@ cargo deny check
 ```
 
 CI runs these too, plus a short fuzz run, the full test suite on macOS (Apple
-Silicon), and the math and ICC tests on wasm32.
+Silicon), and on wasm32 the library tests and the `jp2_icc`, `sample_limit`
+and `limit_32bit` test binaries.
 
 The decoder is fuzzed with cargo-fuzz. To run the main target for a minute
 with the same memory limit as CI:
