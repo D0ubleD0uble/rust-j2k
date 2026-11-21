@@ -212,7 +212,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `cmap` without a `pclr` or before it, a malformed payload) is checked
     before the codestream, as OpenJPEG checks it while it reads `jp2h`. A
     file with such a fault and a codestream fault, an `ihdr` that disagrees
-    with SIZ or a refused option gave the other error first.
+    with SIZ or a refused option gave the other error first. Between these
+    boxes, the first fault in file order wins. An `IncrementalDecoder` now
+    refuses such a file once the `jp2c` box header is in, even when the main
+    header is still cut.
   - The resolution reduction, then the selection, are checked right after
     `ihdr` against SIZ, as a raw codestream checks them, and before what the
     palette and `cdef` say about the components, the header boxes after the

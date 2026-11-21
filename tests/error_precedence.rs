@@ -398,6 +398,42 @@ fn the_box_layout_comes_before_the_codestream_and_the_reduction() {
     assert!(found.is_empty(), "{found:#?}");
 }
 
+/// Between the palette boxes and `cdef`, the first layout fault in file
+/// order wins, as OpenJPEG's box handlers refuse each box as they read it.
+/// `opj_decompress` 2.5 gives:
+/// - a `cdef` of 0 channels, then two `pclr` boxes: "Number of channel
+///   description is equal to zero in CDEF box.";
+/// - two `pclr` boxes, then that `cdef`: "failed to read the header", with no
+///   CDEF message, as its second `pclr` is refused without one.
+#[test]
+fn the_first_box_layout_fault_in_file_order_wins() {
+    let codestream = codestream();
+    let pclr = bx(b"pclr", &[0, 1, 3, 7, 7, 7, 10, 20, 30]);
+    let no_channels = bx(b"cdef", &[0, 0]);
+    let cdef_first = in_jp2(
+        &codestream,
+        17,
+        &[no_channels.clone(), pclr.clone(), pclr.clone()],
+    );
+    let pclr_first = in_jp2(&codestream, 17, &[pclr.clone(), pclr, no_channels]);
+    let mut found = Vec::new();
+    for (what, bytes, want) in [
+        (
+            "cdef first",
+            &cdef_first,
+            "the `cdef` box declares 0 channel definitions",
+        ),
+        (
+            "pclr first",
+            &pclr_first,
+            "the file has more than one `pclr` box",
+        ),
+    ] {
+        found.extend(mismatches(what, bytes, &DecodeOptions::default(), want));
+    }
+    assert!(found.is_empty(), "{found:#?}");
+}
+
 /// What the boxes say about the components comes after the selection, as in
 /// the codestream path, where the selection is the last check: a `cdef` that
 /// names a channel the image lacks, and a `cmap` that names a palette column

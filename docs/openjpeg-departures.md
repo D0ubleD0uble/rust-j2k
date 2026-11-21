@@ -1442,27 +1442,35 @@ channels. OpenJPEG has no sRGB refusal.
 
 This order is what lets `read_header` return the same error as `decode` for
 every header fault. It differs from OpenJPEG's in these places, all between
-two faults that both refuse the file:
+two faults that both refuse the file. Each is an order the decoder already
+had, not a new choice:
 
 - **A main-header fault and an `ihdr` that disagrees with SIZ.** OpenJPEG
   compares them as it reads SIZ, before the rest of the main header, so a
   file with both reports the `ihdr` fault ("Error with SIZ marker: IHDR w(1)
   h(1) vs. SIZ w(64) h(64)" with a `COD` of 2^11 x 2^11 code-blocks). Here
   the whole main header is read first, so that file reports the `COD`'s
-  `Marker`.
+  `Marker`. The decoder already had this order.
 - **A reduction and a later main-header fault.** OpenJPEG refuses the
   reduction as it reads each `COD` or `COC`, so a fault in a marker segment
   after that one is not reached. Here the reduction is checked once the main
-  header is read, so the later segment's fault comes first.
-- **Two layout faults.** OpenJPEG reports the first in file order. Here the
-  palette boxes are checked before `cdef`, wherever they sit.
+  header is read, so the later segment's fault comes first. The decoder
+  already had this order.
+- **A layout fault and a fault in a later `jp2h` box such as `colr`.**
+  OpenJPEG reports the first in file order. Here `colr` is checked in the box
+  walk of step 1, before the layout, so a `cdef` of 0 channels followed by a
+  `colr` of 2 bytes reports the `colr` fault here and "Number of channel
+  description is equal to zero in CDEF box." there. Between the `pclr`,
+  `cmap` and `cdef` boxes, the first fault in file order wins, as in
+  OpenJPEG. The decoder already checked `colr` first.
 - **A sample limit refusal.** OpenJPEG has no sample limit (see
   [resource-bounds.md](resource-bounds.md)), so the refusal here can come
-  before an `ihdr` or reduction fault that OpenJPEG reports.
+  before an `ihdr` or reduction fault that OpenJPEG reports. The decoder
+  already had this order.
 - **A fault in step 5 and a tile fault.** Step 5 runs before the tiles, where
   OpenJPEG checks it after decoding them, so a file with a palette or `cdef`
   fault and a tile fault reports the box fault here and the tile fault
-  there.
+  there. The decoder already had this order.
 
 ### `ftyp` without `jp2 ` or `jph `
 

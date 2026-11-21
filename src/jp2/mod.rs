@@ -56,6 +56,7 @@ mod boxes;
 mod channels;
 mod color;
 mod header;
+mod layout;
 mod lcms;
 mod math;
 mod math_data;
@@ -460,8 +461,7 @@ fn probe_packets(codestream: &[u8], tile: u16, packet_work: &WorkLimit) -> (bool
 /// it reads `jp2h`, before the codestream. What the boxes say about the
 /// components is checked with the plans.
 pub(crate) fn check_box_layout(file: &Jp2File<'_>) -> Result<()> {
-    palette::check_box_layout(&file.header)?;
-    channels::check_box_layout(&file.header, is_jph(&file.file_type))
+    layout::read(&file.header, is_jph(&file.file_type)).map(drop)
 }
 
 /// Hold `ihdr` to the codestream: `HEIGHT` and `WIDTH` must equal the SIZ image
@@ -494,9 +494,9 @@ impl ChannelPlans {
     /// holding a palette's expanded channels to `cap` samples. `siz` is the
     /// codestream's SIZ with its image area cut to what the decode returns
     /// (the selection's area), as the expansion covers only that.
-    /// The palette is planned first, so a malformed palette reports its fault
-    /// before a malformed `cdef` does, as OpenJPEG reads them. `jph` says
-    /// whether the file is a JPH file ([`is_jph`]).
+    /// The box layout is read first ([`layout::read`]), so its first fault in
+    /// file order is the one reported, as OpenJPEG reads the boxes. `jph`
+    /// says whether the file is a JPH file ([`is_jph`]).
     pub(crate) fn plan(
         header: &Jp2Header<'_>,
         siz: &Siz,
@@ -505,9 +505,10 @@ impl ChannelPlans {
         raw_channels: bool,
         jph: bool,
     ) -> Result<Self> {
-        let palette = palette::plan(header, siz, reduction, cap, raw_channels)?;
+        let layout = layout::read(header, jph)?;
+        let palette = palette::plan(layout.palette, siz, reduction, cap, raw_channels)?;
         let count = palette.output_channels(siz, reduction).len();
-        let channels = channels::plan(header, count, raw_channels, jph)?;
+        let channels = channels::plan(layout.cdef, count, raw_channels)?;
         Ok(ChannelPlans { palette, channels })
     }
 
