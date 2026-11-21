@@ -1432,6 +1432,38 @@ fn the_t1bomb_row_seed_counts_past_the_whole_bound_where_decode_with_is_refused(
     check_waiting("t1bomb_row_128_8", &why, &bytes, &options);
 }
 
+/// The seed `incremental/bound_spent_stands_in_for_a_tile_cap_refusal.seed`
+/// is refused by `decode_with` at tile 1 for its precinct count. A probe
+/// decoder with the bound spent is cut at tile 0 and counts on to tile 1, so
+/// its refine waits on `BoundSpent` where the one-shot decode gives that cap
+/// refusal.
+#[test]
+fn the_bound_spent_seed_waits_on_bound_spent_where_decode_with_is_refused_by_a_tile_cap() {
+    use rust_j2k::fuzz::{incremental_with_code_block_work_spent, with_code_block_work_cap};
+    let bytes = std::fs::read(
+        fixtures().join("incremental/bound_spent_stands_in_for_a_tile_cap_refusal.seed"),
+    )
+    .unwrap();
+    let options = with_code_block_work_cap(DecodeOptions::default(), 1 << 22);
+    let Err(Error::Limit(expected)) = decode_with(&bytes, &options.clone().with_strict(false))
+    else {
+        panic!("not refused");
+    };
+    assert_eq!(expected.kind(), LimitKind::TilePrecincts, "{expected}");
+    let mut decoder = incremental_with_code_block_work_spent(options.clone(), u64::MAX).unwrap();
+    decoder.feed(&bytes);
+    let Ok(Refined::Waiting(why)) = decoder.refine() else {
+        panic!("no wait");
+    };
+    let Waiting::BoundSpent { limit, .. } = &why else {
+        panic!("{why:?}");
+    };
+    // The wait names the code-block bound the spent work passes, not the
+    // tile cap the one-shot decode gives.
+    assert_eq!(limit.kind(), LimitKind::CodeBlockWork, "{limit}");
+    check_waiting("bound_spent", &why, &bytes, &options);
+}
+
 /// Where no amount spent cuts a refine before the tile the whole bound
 /// refuses, it decoded every tile before that one, as `decode_with` does,
 /// and waits on the `WorkLimit` `decode_with` gives, detail and all. On

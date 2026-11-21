@@ -174,7 +174,8 @@ two, plus one for each row of tiles a window reads), a tile with leftover bytes 
 and a complete report must hold no missing tiles. `tile_body` makes the same
 check on each of its inputs, so the steered shapes (POC, packed headers,
 tile-parts) reach the strict-off walk too. Seed `decode_partial` as
-`decode`.
+`decode`, but copy only the conformance codestreams of 300000 bytes or less: the
+larger ones are cut to 1 MiB, and mutating those costs about a second a run.
 
 `incremental_decode` feeds each input to an `IncrementalDecoder` in pieces
 whose sizes a hash of the file picks, and refines after each piece. The first
@@ -190,7 +191,7 @@ bytes. The control bytes:
 | 0 | 2 | a layer cap of 1 + (byte 0 >> 3) mod 3 |
 | 0 | 5 | a resolution reduction of 1 |
 | 0 | 6 | change the options between refines (below) |
-| 0 | 7 | (independent of the layer cap, which reads bits 3-6) a sample limit of `WorkLimit::AtMost(n)`, where `n` is the samples the file declares, or half of them (one hash of the file in four), so most draws admit the image: a refusal by it is the one-shot decode's sticky error, never a wait, except that a refine cut short by earlier work may wait on `BoundSpent` where a later tile's cap refusal ends the one-shot decode |
+| 0 | 7 | (independent of the layer cap, which reads bits 3-6) a sample limit of `WorkLimit::AtMost(n)`, where `n` is the samples the file declares, or half of them (one hash of the file in four), so most draws admit the image: a refusal by it is the one-shot decode's sticky error, never a wait, except that a refine cut short by earlier work may wait on `BoundSpent` where a later tile's cap refusal ends the one-shot decode, ceiling or not |
 | 1 | 0-1 | the region: whole, the window of bytes 2 to 5, or a tile |
 | 1 | 2-4 | the tile: 0 for four of the eight values, then 1, 1, 2, 3 |
 | 1 | 5-7 | a component subset of one or two distinct indices |
@@ -438,7 +439,7 @@ cargo +nightly fuzz run ht_block -- -max_total_time=60 -max_len=8192 -rss_limit_
 for t in decode decode_partial; do
   mkdir -p fuzz/corpus/$t
   cp tests/fixtures/*.j2k tests/fixtures/openjph/files/*.j2c fuzz/corpus/$t/
-  find tests/fixtures/conformance/ht/codestreams -size -6k -name '*.j2k' -exec cp {} fuzz/corpus/$t/ \;
+  find tests/fixtures/conformance/ht/codestreams -size -6145c -name '*.j2k' -exec cp {} fuzz/corpus/$t/ \;
   cp tests/fixtures/conformance/ht/codestreams/ds0_hm_15_b8.j2k fuzz/corpus/$t/
 done
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096
@@ -446,9 +447,9 @@ cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_li
 # The incremental target, seeded with the fixtures under 3 KB, and the same
 # behind control bytes that change the options between refines.
 mkdir -p fuzz/corpus/incremental_decode
-find tests/fixtures -maxdepth 1 -size -3k \( -name '*.j2k' -o -name '*.jp2' \) \
+find tests/fixtures -maxdepth 1 -size -3073c \( -name '*.j2k' -o -name '*.jp2' \) \
   -exec cp {} fuzz/corpus/incremental_decode/ \;
-for f in $(find tests/fixtures -maxdepth 1 -size -3k \( -name '*.j2k' -o -name '*.jp2' \)); do
+for f in $(find tests/fixtures -maxdepth 1 -size -3073c \( -name '*.j2k' -o -name '*.jp2' \)); do
   { printf '\100\0\0\0\0\0'; cat "$f"; } > "fuzz/corpus/incremental_decode/set_$(basename "$f")"
 done
 cargo +nightly fuzz run incremental_decode -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=300 -rss_limit_mb=4096

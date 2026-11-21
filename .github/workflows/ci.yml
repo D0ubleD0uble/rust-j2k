@@ -100,6 +100,7 @@ jobs:
   fuzz-smoke:
     name: fuzz smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
@@ -124,26 +125,37 @@ jobs:
         run: |
           mkdir -p fuzz/corpus/decode
           cp tests/fixtures/*.j2k tests/fixtures/openjph/files/*.j2c fuzz/corpus/decode/
-          find tests/fixtures/conformance/ht/codestreams -size -6k -name '*.j2k' -exec cp {} fuzz/corpus/decode/ \;
+          find tests/fixtures/conformance/ht/codestreams -size -6145c -name '*.j2k' -exec cp {} fuzz/corpus/decode/ \;
       # The codestream-reading targets take the J2K marker dictionary so
       # mutation can splice whole marker codes instead of rediscovering them.
       - name: Fuzz decode (60s)
         run: cargo fuzz run decode --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
-      # The partial-decode and incremental-decode targets read the same
-      # codestreams, so they start from the decode corpus. An input that
-      # starts with SOC or the JP2 signature is read whole by
-      # incremental_decode, so the raw fixtures are valid seeds there.
-      - name: Seed decode_partial and incremental_decode from the decode corpus
+      # The partial-decode and incremental-decode targets start from the
+      # fixture seed set, not from the decode corpus, which the run above has
+      # grown. decode_partial takes the decode seeds plus its own fixtures.
+      # incremental_decode takes the fixtures under 3 KB, the same behind
+      # control bytes that change the options between refines (bit 6), and its
+      # own seeds of 4096 bytes or less (-max_len=4096 would truncate the others),
+      # and runs with -max_len=4096. decode_partial is seeded as in fuzz/README.md,
+      # but only with the conformance codestreams of 300000 bytes or less: the
+      # larger ones are cut to 1 MiB, and mutating those costs about a second a run.
+      - name: Seed decode_partial and incremental_decode from the fixtures
         run: |
           mkdir -p fuzz/corpus/decode_partial fuzz/corpus/incremental_decode
-          cp fuzz/corpus/decode/* fuzz/corpus/decode_partial/
-          cp fuzz/corpus/decode/* fuzz/corpus/incremental_decode/
-          cp tests/fixtures/incremental/*.seed fuzz/corpus/incremental_decode/
-          cp tests/fixtures/partial/*.j2k fuzz/corpus/decode_partial/
+          cp tests/fixtures/*.j2k fuzz/corpus/decode_partial/
+          find tests/fixtures/conformance/codestreams -name '*.j2k' -size -300001c -exec cp {} fuzz/corpus/decode_partial/ \;
+          cp tests/fixtures/openjph/files/*.j2c tests/fixtures/partial/*.j2k fuzz/corpus/decode_partial/
+          find tests/fixtures/conformance/ht/codestreams -size -6145c -name '*.j2k' -exec cp {} fuzz/corpus/decode_partial/ \;
+          cp tests/fixtures/conformance/ht/codestreams/ds0_hm_15_b8.j2k fuzz/corpus/decode_partial/
+          find tests/fixtures -maxdepth 1 -size -3073c \( -name '*.j2k' -o -name '*.jp2' \) -exec cp {} fuzz/corpus/incremental_decode/ \;
+          for f in $(find tests/fixtures -maxdepth 1 -size -3073c \( -name '*.j2k' -o -name '*.jp2' \)); do
+            { printf '\100\0\0\0\0\0'; cat "$f"; } > "fuzz/corpus/incremental_decode/set_$(basename "$f")"
+          done
+          find tests/fixtures/incremental -type f -size -4097c -exec cp {} fuzz/corpus/incremental_decode/ \;
       - name: Fuzz decode_partial (30s)
         run: cargo fuzz run decode_partial --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
       - name: Fuzz incremental_decode (45s)
-        run: cargo fuzz run incremental_decode --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=45 -rss_limit_mb=4096 -timeout=30
+        run: cargo fuzz run incremental_decode --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=45 -rss_limit_mb=4096 -timeout=30
       # window_crop starts from the decode corpus plus the window fixtures, the
       # OpenJPH .jph files and the JP2 fixtures under 200 KB. An input that
       # starts with SOC or the JP2 signature is the whole file, so these are
@@ -182,13 +194,30 @@ jobs:
       # The header target checks read_header against decode on the same input.
       - name: Fuzz header (30s)
         run: cargo fuzz run header --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
-      # retry_ladder follows with_retry from each limit refusal; the fixtures
-      # seed it (the retry_ladder directory holds its own).
+      # retry_ladder follows with_retry from each limit refusal. It seeds as
+      # decode's fixtures plus the limit fixtures behind a control byte, as in
+      # fuzz/README.md; the retry_ladder directory holds its own.
       - name: Seed retry_ladder
         run: |
           mkdir -p fuzz/corpus/retry_ladder
-          cp tests/fixtures/*.j2k fuzz/corpus/retry_ladder/
-          cp tests/fixtures/retry_ladder/*.j2k fuzz/corpus/retry_ladder/
+          cp tests/fixtures/*.j2k tests/fixtures/retry_ladder/*.j2k fuzz/corpus/retry_ladder/
+          seed() { { printf "\\x$1"; cat "tests/fixtures/$2"; } > "fuzz/corpus/retry_ladder/$1-${2##*/}"; }
+          for c in 0f 30; do
+            for f in tier1_work_bound/htbomb_1024_64_3.j2k tier1_work_bound/opj_specks2048_16bit.j2k \
+              work_bound/opj_patch2048_b4_q100.j2k work_bound/opj_patch2048_b4_q64.j2k \
+              work_bound/pocdup_4x4_1024_31.j2k work_bound/pocspent_2tiles_60000_559.j2k \
+              work_bound/pocvol_1024x512_1000_2.j2k work_bound/t2bomb_2048x1024_1000.j2k \
+              psot0/jp2_t2bomb_visits.jp2; do
+              seed $c $f
+            done
+          done
+          for c in 00 30 80; do seed $c sample_limit/flat_32769x16385_tiled_lossless.j2k; done
+          for c in 00 80; do seed $c work_bound/pocvol_1024x512_1000_2.j2k; done
+          seed 00 work_bound/pocspent_2tiles_60000_559.j2k
+          seed 00 tier1_work_bound/t1bomb_1024_64_88.j2k
+          seed 40 work_bound/cprl_tall.j2k
+          seed 00 retry_ladder/tile_precincts.j2k
+          seed 00 retry_ladder/tile_code_blocks.j2k
       - name: Fuzz retry_ladder (30s)
         run: cargo fuzz run retry_ladder --target x86_64-unknown-linux-gnu -- -dict=fuzz/j2k.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
       # The ICC target reads a fuzzed profile; the oracle cases' profiles seed it.
@@ -196,6 +225,15 @@ jobs:
         run: python3 scripts/gen-icc-oracles.py --fuzz-seeds
       - name: Fuzz icc_srgb (30s)
         run: cargo fuzz run icc_srgb --target x86_64-unknown-linux-gnu -- -dict=fuzz/icc.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
+      # Keep the crashing input, so a red run can be replayed without a rerun.
+      - name: Upload fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
 
   # The ICC output is documented as identical on every platform where fma is
   # correctly rounded. Every job above is x86-64, so run the full suite on
