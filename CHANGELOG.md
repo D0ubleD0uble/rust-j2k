@@ -56,6 +56,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the limits give a reference. `DecodeOptions` now implements `PartialEq`
   and `Eq`. `DecodeOptions::with_retry` is now `raised_for`, with the same
   signature (#612).
+- `ReportEntry::TruncatedTilePart::declared` is an `Option<u64>`: `None`
+  when the tile-part's `Psot` is 0, and otherwise `Some` of a `Psot` more
+  than `present`. A new `header_cut` field says whether the input ends
+  inside the tile-part's header, and the entry's text says so ("is cut
+  short in its header"). Match `declared: Some(declared)` where you
+  matched `declared` (#614).
 
 ### Added
 
@@ -340,7 +346,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refuses it (#574).
 - With `strict` off, a last tile-part with `Psot` 0 that the input ends
   inside the header of is reported as `ReportEntry::TruncatedTilePart`,
-  with `declared` 0. It was dropped with only `MissingEoc`, and that
+  with `declared` `None`. It was dropped with only `MissingEoc`, and that
   `MissingEoc` is no longer given when the input ends in `FF D9` (#574).
 - A tile over both the precinct and the code-block cap is still refused for
   its precincts (`LimitKind::TilePrecincts`), but `retry_with` now names a

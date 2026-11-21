@@ -1083,8 +1083,8 @@ of the data is the data ending, and the packet adds nothing.
 
 With `strict` off, a tile-part header that the input ends inside decodes:
 the codestream ends at that tile-part, none of the tile-part is read, and the
-report names it as `TruncatedTilePart` (with `declared` 0 when its `Psot` is
-0). OpenJPEG 2.5.0 refuses such a file with "Stream too short", even under
+report names it as `TruncatedTilePart` with `header_cut` set (and `declared`
+`None` when its `Psot` is 0). OpenJPEG 2.5.0 refuses such a file with "Stream too short", even under
 `-allow-partial`. This is what lets every prefix of a file decode as it
 streams in.
 
