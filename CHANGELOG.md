@@ -138,6 +138,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A tile over both the precinct and the code-block cap is still refused for
+  its precincts (`LimitKind::TilePrecincts`), but `retry_with` now names a
+  `WorkLimit::Raised` factor that admits its code-blocks too, and the
+  message says the code-blocks are over. It named the factor for the
+  precincts alone, so a tile whose code-blocks need more took a second
+  refusal and retry. `read_header_with`, `decode_with` and
+  `IncrementalDecoder` name the same factor (#575).
+- The `LimitKind::PocVolumes` docs no longer name a case no caller sees
+  (more packets than the decoder tracks): the kind is for more than 32
+  `POC` volumes in a tile (#575).
 - With `strict` on, `read_header_with` gives the decode's error for a file
   where a tile over a code-block or precinct cap under the main header has
   no tile-part: the decode's error for the tile-parts, which is the first

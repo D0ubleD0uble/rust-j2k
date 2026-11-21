@@ -419,7 +419,7 @@ In an `IncrementalDecoder` a refusal under the default or a `Raised` limit
 is a wait (`Waiting::SampleLimit`), as the caps grow with the bytes fed.
 
 A refusal names the `WorkLimit::Raised` factor of `sample_limit` that admits
-the tile, or twice the factor it ran under when that is more, as the work
+both the tile's precincts and its code-blocks, or twice the factor it ran under when that is more, as the work
 bounds do, since the tiles after it are not counted. Under `AtMost(n)` the
 caps scale from `n`, and a refusal names no retry.
 

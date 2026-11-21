@@ -544,6 +544,8 @@ impl Emitted {
                 return Err(meter.refuse(WorkRefusal::PocReach { reached }));
             }
             Some(words) => Marks::Dense(vec![0; words]),
+            // Only the JP2 `Psot = 0` probe walks without counts, and it
+            // drops this error, so no caller sees it.
             None if !poc_counts => {
                 return Err(Error::limit_fixed(
                     crate::LimitKind::PocVolumes,

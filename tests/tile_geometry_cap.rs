@@ -285,6 +285,8 @@ fn the_precinct_cap_scales_with_the_sample_limit() {
             )),
             "{limit}"
         );
+        // Its code-blocks, one a precinct, are within their cap.
+        assert!(!limit.message().contains(" are over the "), "{limit}");
         let retry = DecodeOptions::default().with_retry(&limit).unwrap();
         decodes(&bytes, &retry, width, height);
 
@@ -298,15 +300,88 @@ fn the_precinct_cap_scales_with_the_sample_limit() {
         assert!(DecodeOptions::default().with_retry(&limit).is_none());
     }
 
-    // A tile over both caps is refused for its precincts.
+    // A tile over both caps is refused for its precincts, which need more
+    // than its code-blocks here: eight times the default against twice.
     let both = precincts_tile(2048, 1024);
     let limit = refusal(&both, &DecodeOptions::default());
+    if cfg!(target_pointer_width = "64") {
+        assert!(
+            limit
+                .message()
+                .contains(", and its 2097152 code-blocks are over the 1048576 too;"),
+            "{limit}"
+        );
+    }
     assert_over_cap(
         &limit,
         LimitKind::TilePrecincts,
         Some(WorkLimit::Raised(8)),
         (0, 2048 * 1024),
     );
+}
+
+/// One tile over both caps whose code-blocks need more than its precincts:
+/// `width` x `height`, no wavelet levels, 4x4 code-blocks in 16x8
+/// precincts, and an empty packet per precinct.
+fn blocks_over_precincts_tile(width: u32, height: u32) -> Vec<u8> {
+    let packets = (width.div_ceil(16) * height.div_ceil(8)) as usize;
+    synth::empty_tiles(
+        [width, height, 0, 0, width, height, 0, 0],
+        0,
+        0,
+        &[0x34],
+        &[packets],
+        0,
+    )
+}
+
+/// A tile refused for its precincts names a factor that admits its
+/// code-blocks too, so one retry from the default decodes it. A 4096 x 8256
+/// tile in 4x4 code-blocks and 16x8 precincts holds 264,192 precincts,
+/// which need twice the default, and 2,113,536 code-blocks, which need
+/// three times it. A hint from the precincts alone named `Raised(2)`, under
+/// which the code-blocks were refused with `Raised(4)`. The header read, the
+/// decode and an `IncrementalDecoder` name the same factor.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn a_tile_over_both_caps_names_a_factor_that_admits_both() {
+    let (width, height) = (4096, 8256);
+    let precincts = 256 * 1032;
+    let blocks = blocks_of(width, height);
+    assert_eq!(blocks, 2_113_536);
+    let bytes = blocks_over_precincts_tile(width, height);
+
+    let limit = refusal(&bytes, &DecodeOptions::default());
+    assert_over_cap(
+        &limit,
+        LimitKind::TilePrecincts,
+        Some(WorkLimit::Raised(3)),
+        (0, precincts),
+    );
+    assert!(
+        limit.message().contains(&format!(
+            ", and its {blocks} code-blocks are over the 1048576 too;"
+        )),
+        "{limit}"
+    );
+
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes);
+    match decoder.refine() {
+        Ok(Refined::Waiting(Waiting::SampleLimit { limit: waited, .. })) => {
+            assert_eq!(waited.to_string(), limit.to_string());
+        }
+        other => panic!("{other:?}"),
+    }
+
+    let retry = DecodeOptions::default().with_retry(&limit).unwrap();
+    decodes(&bytes, &retry, width, height);
+    let mut decoder = IncrementalDecoder::new(retry).unwrap();
+    decoder.feed(&bytes);
+    match decoder.refine() {
+        Ok(Refined::Image(image)) => assert_eq!((image.width, image.height), (width, height)),
+        other => panic!("{other:?}"),
+    }
 }
 
 /// Of two tiles, the one over the cap is the one named, by the header read
