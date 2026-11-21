@@ -1446,13 +1446,13 @@ these steps. On a JP2 file, `read_header` counts them after the sRGB step
 step too. On a raw codestream, they come right after the selection.
 
 When an input has more than one fault, which one is reported can change in
-any release. What holds is that for a fault `read_header_with` finds,
-`decode_with` returns the same error, and a codestream and its JP2 wrapper
-report the same one. Two exceptions: under `ColorOutput::Srgb` the sRGB step
-comes in a different place on the two paths (above), and a fault only
-decoding finds (in the tile data, or in a lower tile, or with `strict` off)
-is not seen by `read_header_with`, which can report a `Limit` or
-`InvalidOptions` for a later tile first. A JP2 file's box faults have no
+any release. What holds is that when `read_header_with` returns an error,
+`decode_with` returns the same one, and a codestream and its JP2 wrapper
+report the same one. The exceptions are sRGB output, whose step comes in a
+different place on the two paths (above), and, for a file the decode refuses
+in its tile data, a `Limit` or `InvalidOptions` for another tile (with
+`strict` off or in a lower tile). Separately, `read_header_with` can return
+`Ok` for a fault only decoding finds. A JP2 file's box faults have no
 codestream counterpart.
 
 This order is what lets `read_header` return the same error as `decode` for
