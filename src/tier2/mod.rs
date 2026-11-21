@@ -43,8 +43,8 @@ use std::ops::Range;
 use tagtree::{Saved, TagTree};
 
 pub(crate) use geometry::{
-    BandGeom, MAX_CODE_BLOCKS, MAX_PRECINCTS, PrecinctGeom, ResolutionGeom, check_tile,
-    resolution_geoms,
+    BandGeom, MAX_CODE_BLOCKS, MAX_PRECINCTS, PrecinctGeom, ResolutionGeom, check_counts,
+    check_tile, resolution_geoms, tile_counts, within_caps,
 };
 pub(crate) use progression::{PacketWalk, for_each_packet};
 

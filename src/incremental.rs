@@ -3,14 +3,15 @@
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
+use std::sync::{Mutex, PoisonError, TryLockError};
 
 use crate::codestream::{MainHeader, Tile};
-use crate::pipeline::decode::{check_options, decode_metered};
+use crate::pipeline::decode::{HeaderCache, check_options, decode_metered, read_header_kept};
 use crate::tier2::resume::{Repeats, Walks};
 use crate::tier2::{CodedData, Meter, Reach, Refused};
 use crate::{
     DecodeOptions, Error, Header, Image, LimitDetail, LimitKind, Region, Result, WorkLimit,
-    decode_with, jp2, read_header_with,
+    decode_with, jp2,
 };
 
 /// A decoder for a file that arrives a piece at a time, from a network or a
@@ -77,8 +78,11 @@ use crate::{
 /// On top of these bounds the decoder keeps a table of 24 bytes for each
 /// tile index up to the highest it has seen, which comes to about 1.5 MiB
 /// for the 65535 tiles a file can have (up to twice that in capacity as
-/// the table grows). Each refine also holds what [`decode_with`] holds for
-/// the same bytes, so the decoder holds at most about three times one
+/// the table grows). What [`header`](Self::header) keeps between its calls
+/// comes to about 140 bytes for each tile counted under its own header and
+/// a byte for each other tile, plus a copy of the main header, `PPM` data
+/// included. Each refine also holds what [`decode_with`] holds for the same
+/// bytes, so the decoder holds at most about three times one
 /// decode's peak memory, plus the bytes fed. After the options change,
 /// these bounds hold from the first refine that decodes under the new
 /// options; until then the walks kept may stay within the room of the old
@@ -183,6 +187,9 @@ pub struct IncrementalDecoder {
     repeat_bound: u64,
     /// The error a refine returned, which every later call returns.
     failed: Option<Error>,
+    /// What [`header`](Self::header) keeps between its calls. A lock, so
+    /// that the decoder stays [`Sync`] and `header` takes `&self`.
+    header_kept: Mutex<HeaderCache>,
 }
 
 impl IncrementalDecoder {
@@ -208,6 +215,7 @@ impl IncrementalDecoder {
             refused_by_repeats: false,
             repeat_bound: 0,
             failed: None,
+            header_kept: Mutex::default(),
         })
     }
 
@@ -284,8 +292,9 @@ impl IncrementalDecoder {
         &self.options
     }
 
-    /// The header of the bytes fed so far, as [`read_header_with`] reads it
-    /// under the decoder's options: it describes the image
+    /// The header of the bytes fed so far, as
+    /// [`read_header_with`](crate::read_header_with) reads it under the
+    /// decoder's options with `strict` off: it describes the image
     /// [`refine`](Self::refine) returns. `Ok(None)` means the bytes fed end
     /// before the first `SOT` marker, or, in a JP2 file, inside the boxes
     /// before it, so the main header is not complete yet. An error is the
@@ -304,14 +313,35 @@ impl IncrementalDecoder {
     /// and `refine` returns it as an error too: a server that streams files
     /// in can refuse one as soon as its main header has come in.
     ///
-    /// Call it after a feed rather than after each byte: each call parses
-    /// the main header again and counts again the tiles over the caps under
-    /// it. For a tile over a cap that is one walk of the tile-parts fed so
-    /// far, no further than the last tile it counts, plus up to the read's
-    /// budget: 45 ms for a window of 1530 tiles of a 235 MB file of 16.7
-    /// million tile-parts, and 63 ms for 1000 tiles of 4096 components.
+    /// Each call parses the main header again. For the tiles over a cap
+    /// under it, the decoder keeps what the last call found: the walk of the
+    /// tile-parts and the counts of the tiles' own headers. A call goes on
+    /// from there, so the calls after each feed walk the tile-parts about
+    /// once in all, and each call costs the tile-parts fed since plus up to
+    /// the read's budget. The header of a tile-part not yet fed in full, or
+    /// of a last tile-part whose `Psot` is 0, is read again on each call. On
+    /// a window of 1530 tiles of a 235 MB file of 16.7 million tile-parts,
+    /// calls after each 256 KiB fed took 5.9 s in all and now take 66 ms.
+    /// What is kept, about 140 bytes for each tile counted under its own
+    /// header and a byte for each other tile plus a copy of the main header
+    /// (its `PPM` data included), is held until the options change, which
+    /// drops it. A call made while another thread is in one reads from the
+    /// start.
     pub fn header(&self) -> Result<Option<Header>> {
-        match read_header_with(&self.bytes, &self.lenient) {
+        // A call on another thread holding the lock reads from the start. A
+        // call that panicked may have left the walk half done, so it is
+        // dropped.
+        let mut kept = match self.header_kept.try_lock() {
+            Ok(kept) => Some(kept),
+            Err(TryLockError::Poisoned(poisoned)) => {
+                let mut kept = poisoned.into_inner();
+                *kept = HeaderCache::default();
+                self.header_kept.clear_poison();
+                Some(kept)
+            }
+            Err(TryLockError::WouldBlock) => None,
+        };
+        match read_header_kept(&self.bytes, &self.lenient, kept.as_deref_mut()) {
             Ok(header) => Ok(Some(header)),
             Err(Error::Incomplete(_)) => Ok(None),
             Err(error) => Err(error),
@@ -399,6 +429,11 @@ impl IncrementalDecoder {
         self.lenient = options.clone().with_strict(false);
         self.options = options;
         self.failed = None;
+        // What the header read kept is for the old selection.
+        *self
+            .header_kept
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner) = HeaderCache::default();
         Ok(())
     }
 
