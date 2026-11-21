@@ -29,8 +29,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `WorkLimit::AtMost(n)` on `DecodeOptions::sample_limit` sets a fixed
   ceiling of `n` samples, whatever the input's length or padding: at most
   `4·n` bytes of output, and sample buffers of no more than about 3.2 times
-  that. The input and the tile-part parse (under 1 KiB for each tile the
-  input carries, at most about 52 times the input plus 128 KiB) are on top.
+  that. The input, the tile-part parse (under 1 KiB for each tile the
+  input carries, at most about 52 times the input plus 128 KiB) and one
+  tile's code-block and precinct records are on top. The records do not
+  shrink with `n`: a tile may hold at least 2^20 code-blocks and 2^18
+  precincts at any ceiling, estimated at about 0.8 GiB. Below about
+  `n` = 2^26 they, not the samples, set the peak. Code-block segment
+  records add up to about 350 bytes for each byte of input (estimated:
+  about 130 bytes a segment, one segment per 3 header bits; measured 11.2
+  GiB for a 37 MB file under `AtMost(2^24)`).
   It holds every count the default limit holds (the tiles a region reads, in
   every component the codestream codes, a palette's expanded channels and
   sRGB output). `read_header_with` refuses the sample count as the decode

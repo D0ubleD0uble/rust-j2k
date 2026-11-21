@@ -154,6 +154,58 @@ def t1bomb(size: int, cb: int, passes: int, tiles: int = 1) -> bytes:
     return b"\xff\x4f" + siz + cod + qcd + parts + b"\xff\xd9"
 
 
+def shaped_bomb(size: int, cb: int, passes: int, termall: bool = False, last_len: int = 1) -> bytes:
+    """A `t1bomb` variant for the memory and time figures in
+    docs/resource-bounds.md. With `termall`, the COD code-block style is 0x04
+    (terminate on each pass): each pass is its own codeword segment of zero
+    bytes, which costs about 3 header bits and the decoder about 130 bytes of
+    heap. Otherwise each code-block has one segment of one byte, except the
+    last, which has `last_len` bytes of zeros. A length of `last_len` needs
+    its Lblock raised: Lblock starts at 3 and the length field has
+    Lblock + floor(log2(passes)) bits, so one 1 bit per increment and a 0 go
+    before the field (B.10.7.1)."""
+    assert 2 <= cb <= 6 and 1 <= passes <= 164
+    cols = rows = ceil(size, 1 << cb)
+    levels = tag_tree_nodes(cols, rows)
+    bits = Bits()
+    bits.put(1)
+    known = [set(), set()]
+    lg = passes.bit_length() - 1
+    body = 0
+    for y in range(rows):
+        for x in range(cols):
+            for tree in range(2):
+                for level in range(len(levels) - 1, -1, -1):
+                    node = (level, x >> level, y >> level)
+                    if node not in known[tree]:
+                        known[tree].add(node)
+                        bits.put(1)
+            num_passes_code(bits, passes)
+            if termall:
+                bits.put(0)
+                for _ in range(passes):
+                    bits.put_int(0, 3)  # one pass: 3 + floor(log2(1)) bits
+            elif last_len > 1 and y == rows - 1 and x == cols - 1:
+                k = max(0, last_len.bit_length() - lg - 3)
+                for _ in range(k):
+                    bits.put(1)
+                bits.put(0)
+                bits.put_int(last_len, 3 + k + lg)
+                body += last_len
+            else:
+                bits.put(0)
+                bits.put_int(1, 3 + lg)
+                body += 1
+    data = bits.finish() + b"\x00" * body
+    style = 0x04 if termall else 0
+    cod = seg(0xFF52, bytes([0, 0]) + struct.pack(">H", 1) + bytes([0, 0, cb - 2, cb - 2, style, 1]))
+    qcd = seg(0xFF5C, bytes([0x40, 29 << 3]))
+    siz = seg(0xFF51, struct.pack(">HIIIIIIIIH", 0, size, size, 0, 0, size, size, 0, 0, 1) + bytes([7, 1, 1]))
+    psot = 12 + 2 + len(data)
+    part = struct.pack(">HHHIBB", 0xFF90, 10, 0, psot, 0, 1) + b"\xff\x93" + data
+    return b"\xff\x4f" + siz + cod + qcd + part + b"\xff\xd9"
+
+
 # Committed: name -> bytes.
 FILES = {
     # 1024^2 in 64x64 code-blocks, 88 passes: 9.2e7 sample-passes in 1.3 KB.
@@ -168,6 +220,20 @@ INCREMENTAL = {
     # cap (which charges 4 for each sample on top): tiles 0 and 1 fit its
     # bound of 2^22, and tile 2 passes it.
     "t1bomb_row_128_8.seed": t1bomb(128, 6, 88, 8),
+}
+
+# Not committed (`--memory DIR`): the shapes behind the memory and time
+# figures in docs/resource-bounds.md ("Figures for a decode service").
+MEMORY = {
+    # Code-blocks of 4x4 with one pass-terminated segment per pass: 1024^2 is
+    # 2.3 MB and peaks at 720 MiB under AtMost(2^20); 2048^2 is 9.3 MB.
+    "termall_1024_2_88.j2k": lambda: shaped_bomb(1024, 2, 88, termall=True),
+    "termall_2048_2_88.j2k": lambda: shaped_bomb(2048, 2, 88, termall=True),
+    "termall_4096_2_88.j2k": lambda: shaped_bomb(4096, 2, 88, termall=True),
+    # The last code-block of an 8192^2 tile holds 120,000 zero bytes: 196,526
+    # bytes that gzip to 944 and decode in 13 s at the defaults.
+    "zeros_8192_6_88.j2k": lambda: shaped_bomb(8192, 6, 88, last_len=120000),
+    "zeros_none_8192_6_88.j2k": lambda: shaped_bomb(8192, 6, 88),
 }
 
 # Not committed (`--big DIR`): the issue's timing shape.
@@ -240,6 +306,12 @@ def main() -> None:
         out = pathlib.Path(sys.argv[sys.argv.index("--big") + 1])
         out.mkdir(parents=True, exist_ok=True)
         for name, make in BIG.items():
+            (out / name).write_bytes(make())
+            written.append(out / name)
+    elif "--memory" in sys.argv:
+        out = pathlib.Path(sys.argv[sys.argv.index("--memory") + 1])
+        out.mkdir(parents=True, exist_ok=True)
+        for name, make in MEMORY.items():
             (out / name).write_bytes(make())
             written.append(out / name)
     elif "--opj" in sys.argv:
