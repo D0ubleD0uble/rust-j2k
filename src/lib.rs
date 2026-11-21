@@ -455,7 +455,8 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// give this
 /// [`Error::Limit`], or a reduction refusal
 /// ([`Error::InvalidOptions`]), instead of the decode's error where it
-/// refuses a tile it found a tile-part for. The decode can also refuse the file before it
+/// refuses a tile it found a tile-part for, as it does not run that parse.
+/// The decode can also refuse the file before it
 /// gets to that tile, for what only decoding finds, and then names another
 /// tile, kind or factor, or another error: a fault or a work bound in the
 /// packets or code-blocks of a lower tile (with `strict` on, data that ends

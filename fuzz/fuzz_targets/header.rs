@@ -4,8 +4,9 @@
 //! Same contract as `decode`: a typed result for every input, never a panic,
 //! an allocation sized from an unchecked field, or a hang. Every input is run
 //! under a fixed list of option sets (the defaults, `raw_channels`, a
-//! resolution reduction of 1, sRGB output, reduction 1 with sRGB, and the
-//! sample limit lifted), so a plain `.j2k` or `.jp2` seed is used as it is.
+//! resolution reduction of 1, sRGB output, reduction 1 with sRGB, the
+//! sample limit lifted, and `strict` off), so a plain `.j2k` or `.jp2` seed
+//! is used as it is.
 //! `raw_channels` is left out for a raw codestream, where it repeats the
 //! defaults. The header is read
 //! under every set; the full decode that follows a header that reads runs
@@ -21,6 +22,13 @@
 //!   can see (`decode_finds_first_in_a_lower_tile`). That excuse holds only
 //!   if decoding that tile alone (`Region::Tile`) gives the header's error
 //!   too, so a header that refuses a tile the decode accepts is still caught;
+//! - with `strict` off, also where the header refuses that tile and the
+//!   decode refuses the file first for a fault in the tile-parts, which the
+//!   decode's parse finds before it counts any tile and the header read does
+//!   not look for with `strict` off (`decode_finds_a_tile_parts_fault_first`).
+//!   That excuse holds only if the header read with `strict` on, which runs
+//!   that parse, gives the fault, and decoding that tile alone with its
+//!   refusal lifted, and another tile alone, give it too;
 //! - when `decode_with` succeeds, `read_header_with` reports the decoded
 //!   image's area, each channel's format, and the same JP2 metadata.
 //!
@@ -54,6 +62,9 @@ fuzz_target!(|data: &[u8]| {
         default
             .clone()
             .with_sample_limit(rust_j2k::WorkLimit::Unlimited),
+        // `strict` off: the decode takes missing data as missing, and the
+        // header read admits a tile with no tile-part.
+        default.clone().with_strict(false),
     ];
     // `raw_channels` skips the palette and the channel definitions, which a
     // raw codestream does not have, so there it repeats the defaults.
@@ -117,6 +128,7 @@ fn check(
     let decoded = rust_j2k::decode_with(data, options);
     match (&header, &decoded) {
         (Err(h), Err(d)) if decode_finds_first_in_a_lower_tile(data, options, h, d) => {}
+        (Err(h), Err(d)) if decode_finds_a_tile_parts_fault_first(data, options, h, d) => {}
         (Err(h), _) => assert_eq!(
             decoded.as_ref().err().map(|e| format!("{e:?}")),
             Some(format!("{h:?}")),
@@ -185,42 +197,10 @@ fn decode_finds_first_in_a_lower_tile(
     header: &rust_j2k::Error,
     decode: &rust_j2k::Error,
 ) -> bool {
-    use rust_j2k::{Error, LimitKind};
-    let (tile, lifted) = match header {
-        Error::Limit(limit)
-            if matches!(
-                limit.kind(),
-                LimitKind::TilePrecincts | LimitKind::TileCodeBlocks | LimitKind::AddressSpace
-            ) =>
-        {
-            let Some(tile) = refused_tile(limit.message()) else {
-                return false;
-            };
-            (
-                tile,
-                options.with_retry(limit).unwrap_or_else(|| options.clone()),
-            )
-        }
-        Error::InvalidOptions(detail) => {
-            let Some(tile) = reduced_tile(detail.message()) else {
-                return false;
-            };
-            (tile, options.clone().with_resolution_reduction(0))
-        }
-        _ => return false,
+    let Some((tile, lifted)) = refusal_of(options, header) else {
+        return false;
     };
-    let own_header = match decode {
-        Error::Limit(other) => matches!(
-            other.kind(),
-            LimitKind::Samples
-                | LimitKind::TilePrecincts
-                | LimitKind::TileCodeBlocks
-                | LimitKind::AddressSpace
-        ),
-        Error::InvalidOptions(_) => true,
-        _ => false,
-    };
-    if own_header {
+    if from_own_header(decode) {
         return false;
     }
     let debug = |result: rust_j2k::Result<rust_j2k::Image>| result.err().map(|e| format!("{e:?}"));
@@ -241,6 +221,133 @@ fn decode_finds_first_in_a_lower_tile(
     }
     let alone = lifted.with_region(region);
     debug(rust_j2k::decode_with(data, &alone)) != expected
+}
+
+/// Whether, with `strict` off, `decode` is a fault in the tile-parts that the
+/// decode finds before it counts the tile that the header's refusal `header`
+/// names. The decode parses every tile-part first, whatever the selection.
+/// With `strict` on the header read runs that parse where it refuses a
+/// tile; with it off it does not, as the parse keeps a record of every
+/// tile-part. The `read_header_with` rustdoc and `docs/resource-bounds.md`
+/// list this difference. A strict-off walk that finds these faults (#545)
+/// removes it, and this excuse with it.
+///
+/// It holds only when all of these do:
+///
+/// - `strict` is off. With it on the header read gives the parse's fault,
+///   so this excuse never loosens a strict check.
+/// - `header` is a refusal of one tile, T, as for
+///   [`decode_finds_first_in_a_lower_tile`], and `decode` is not an error
+///   the header itself gives from a tile's own header.
+/// - The header read with `strict` on fails, and gives `decode` or what the
+///   decode with `strict` on gives. Where it refuses a tile it runs the
+///   decode's parse of the tile-parts and gives its fault, and that parse
+///   reads no packet data, so the fault is in the tile-parts: not in packet
+///   data, such as an `SOP` out of sequence, whatever tile it is in. The
+///   strict-on fault can be one only a strict walk finds (a missing tile, a
+///   tile-part past its `TNsot`) ahead of `decode`; then both strict-on reads
+///   must agree on it.
+/// - The decode of T alone, with T's refusal lifted, gives `decode`.
+/// - The decode of another tile alone (tile 0, or tile 1 for T = 0), under
+///   the options as given, gives `decode` too. A grid of one tile has no
+///   other tile.
+///
+/// The decode never gets to T, so the strict-off refusal of T is checked
+/// only through the strict-on header read: one that admits T reads `Ok`,
+/// and the excuse fails. A wrong strict-off refusal of T is missed only
+/// where the strict-on read wrongly refuses T too, or where a strict-only
+/// fault comes first and the strict-on read never gets to T.
+fn decode_finds_a_tile_parts_fault_first(
+    data: &[u8],
+    options: &rust_j2k::DecodeOptions,
+    header: &rust_j2k::Error,
+    decode: &rust_j2k::Error,
+) -> bool {
+    use rust_j2k::{Error, Region};
+    if options.strict || from_own_header(decode) {
+        return false;
+    }
+    let Some((tile, lifted)) = refusal_of(options, header) else {
+        return false;
+    };
+    let expected = Some(format!("{decode:?}"));
+    let debug = |result: rust_j2k::Result<rust_j2k::Image>| result.err().map(|e| format!("{e:?}"));
+    let strict = options.clone().with_strict(true);
+    let Err(strict_header) = rust_j2k::read_header_with(data, &strict) else {
+        return false;
+    };
+    let strict_header = Some(format!("{strict_header:?}"));
+    if strict_header != expected && strict_header != debug(rust_j2k::decode_with(data, &strict)) {
+        return false;
+    }
+    if debug(rust_j2k::decode_with(
+        data,
+        &lifted.with_region(Region::Tile(tile)),
+    )) != expected
+    {
+        return false;
+    }
+    let other = u32::from(tile == 0);
+    let alone = options.clone().with_region(Region::Tile(other));
+    match rust_j2k::decode_with(data, &alone) {
+        Err(Error::InvalidOptions(detail))
+            if other == 1
+                && detail
+                    .message()
+                    .starts_with("tile 1 is past the image's 1 tile") =>
+        {
+            true
+        }
+        result => debug(result) == expected,
+    }
+}
+
+/// The tile that `header` refuses and the options with that refusal
+/// lifted: for a tile cap refusal ("tile T holds ..."), the retry it names
+/// (the options as they are where none raises it); for a reduction past the
+/// levels of T's own header, reduction 0. `None` for any other error.
+fn refusal_of(
+    options: &rust_j2k::DecodeOptions,
+    header: &rust_j2k::Error,
+) -> Option<(u32, rust_j2k::DecodeOptions)> {
+    use rust_j2k::{Error, LimitKind};
+    match header {
+        Error::Limit(limit)
+            if matches!(
+                limit.kind(),
+                LimitKind::TilePrecincts | LimitKind::TileCodeBlocks | LimitKind::AddressSpace
+            ) =>
+        {
+            let tile = refused_tile(limit.message())?;
+            Some((
+                tile,
+                options.with_retry(limit).unwrap_or_else(|| options.clone()),
+            ))
+        }
+        Error::InvalidOptions(detail) => {
+            let tile = reduced_tile(detail.message())?;
+            Some((tile, options.clone().with_resolution_reduction(0)))
+        }
+        _ => None,
+    }
+}
+
+/// Whether `decode` is an error the header read gives from a tile's own
+/// header too: a tile cap or sample limit refusal, or a reduction past a
+/// tile's levels.
+fn from_own_header(decode: &rust_j2k::Error) -> bool {
+    use rust_j2k::{Error, LimitKind};
+    match decode {
+        Error::Limit(other) => matches!(
+            other.kind(),
+            LimitKind::Samples
+                | LimitKind::TilePrecincts
+                | LimitKind::TileCodeBlocks
+                | LimitKind::AddressSpace
+        ),
+        Error::InvalidOptions(_) => true,
+        _ => false,
+    }
 }
 
 /// The tile a reduction refusal of a tile's own header names: "resolution
