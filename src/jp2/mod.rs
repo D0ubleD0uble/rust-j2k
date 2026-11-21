@@ -454,6 +454,16 @@ fn probe_packets(codestream: &[u8], tile: u16, packet_work: &WorkLimit) -> (bool
     (ends, meter.spent())
 }
 
+/// Check the layout of the file's palette and channel definition boxes
+/// (`pclr`, `cmap` and `cdef`), which needs nothing from the codestream: how
+/// many there are, their order and their payloads. OpenJPEG refuses these as
+/// it reads `jp2h`, before the codestream. What the boxes say about the
+/// components is checked with the plans.
+pub(crate) fn check_box_layout(file: &Jp2File<'_>) -> Result<()> {
+    palette::check_box_layout(&file.header)?;
+    channels::check_box_layout(&file.header, is_jph(&file.file_type))
+}
+
 /// Hold `ihdr` to the codestream: `HEIGHT` and `WIDTH` must equal the SIZ image
 /// area (I.5.3.1), as OpenJPEG requires. `NC` is not held to `Csiz`: OpenJPEG
 /// lets the codestream decide the image, and the palette's `cmap` and the

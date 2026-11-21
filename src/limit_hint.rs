@@ -397,6 +397,14 @@ mod tests {
             };
             let retry = base.with_retry(&limit);
             assert_eq!(retry.is_some(), kind.is_adjustable(), "{kind:?}");
+            // A kind no option raises gives `None` even with a limit to
+            // retry with, which no refusal carries.
+            let carried = crate::error::any_limit(kind, Some(WorkLimit::Raised(7)));
+            assert_eq!(
+                base.with_retry(&carried).is_some(),
+                kind.is_adjustable(),
+                "{kind:?} with a retry"
+            );
             let Some(retry) = retry else { continue };
             let raised = Some(WorkLimit::Raised(7));
             let set = |limit: &WorkLimit| (*limit != WorkLimit::Default).then(|| limit.clone());

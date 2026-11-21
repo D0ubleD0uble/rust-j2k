@@ -338,17 +338,20 @@ pub(crate) enum PalettePlan {
     },
 }
 
-/// Read the file's palette boxes into a [`PalettePlan`], for a decode at
-/// `reduction` resolution levels down. The box layout is always checked; the
-/// mapping, the column depths and the expanded sample count only when the
-/// palette is applied.
-pub(crate) fn plan(
-    header: &Jp2Header<'_>,
-    siz: &Siz,
-    reduction: u8,
-    cap: samples::Cap,
-    raw_channels: bool,
-) -> Result<PalettePlan> {
+/// The file's palette boxes, read without the codestream: the palette and
+/// its `cmap` entries, when there is one.
+type Layout = Option<(Palette, Option<Vec<(u16, u8, u8)>>)>;
+
+/// Check the layout of the file's palette boxes, which needs nothing from the
+/// codestream: at most one `pclr` and one `cmap`, no `cmap` without a `pclr`
+/// or before it, and each box's payload. OpenJPEG refuses these while it
+/// reads `jp2h`, before the codestream.
+pub(super) fn check_box_layout(header: &Jp2Header<'_>) -> Result<()> {
+    read_layout(header).map(drop)
+}
+
+/// [`check_box_layout`], keeping what it reads.
+fn read_layout(header: &Jp2Header<'_>) -> Result<Layout> {
     let (pclrs, cmaps) = (header.pclr(), header.cmap());
     if pclrs.len() > 1 {
         return Err(Error::file_format("the file has more than one `pclr` box"));
@@ -358,7 +361,7 @@ pub(crate) fn plan(
     }
     let Some(pclr) = pclrs.first() else {
         if cmaps.is_empty() {
-            return Ok(PalettePlan::None);
+            return Ok(None);
         }
         return Err(Error::file_format(
             "the file has a `cmap` box but no `pclr` box",
@@ -370,10 +373,27 @@ pub(crate) fn plan(
         ));
     }
     let palette = Palette::parse(pclr)?;
-    let Some(cmap) = cmaps.first() else {
+    let entries = match cmaps.first() {
+        Some(cmap) => Some(parse_cmap(cmap, palette.columns.len())?),
+        None => None,
+    };
+    Ok(Some((palette, entries)))
+}
+
+/// Read the file's palette boxes into a [`PalettePlan`], for a decode at
+/// `reduction` resolution levels down. The box layout is always checked
+/// ([`check_box_layout`]); the mapping, the column depths and the expanded
+/// sample count only when the palette is applied.
+pub(crate) fn plan(
+    header: &Jp2Header<'_>,
+    siz: &Siz,
+    reduction: u8,
+    cap: samples::Cap,
+    raw_channels: bool,
+) -> Result<PalettePlan> {
+    let Some((palette, Some(entries))) = read_layout(header)? else {
         return Ok(PalettePlan::None);
     };
-    let entries = parse_cmap(cmap, palette.columns.len())?;
     if raw_channels {
         let mut index_components = vec![false; siz.components.len()];
         for &(component, mtyp, _) in &entries {

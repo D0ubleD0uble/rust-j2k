@@ -175,6 +175,22 @@ pub(crate) enum ChannelPlan {
     },
 }
 
+/// Check the layout of the file's `cdef` box, which needs nothing from the
+/// codestream: at most one, and its payload. OpenJPEG refuses these while it
+/// reads `jp2h`, before the codestream.
+pub(super) fn check_box_layout(header: &Jp2Header<'_>, jph: bool) -> Result<()> {
+    read_layout(header, jph).map(drop)
+}
+
+/// [`check_box_layout`], keeping the entries, if the file has a `cdef`.
+fn read_layout(header: &Jp2Header<'_>, jph: bool) -> Result<Option<Vec<Entry>>> {
+    let boxes = header.cdef();
+    if boxes.len() > 1 {
+        return Err(Error::file_format("the file has more than one `cdef` box"));
+    }
+    boxes.first().map(|payload| parse(payload, jph)).transpose()
+}
+
 /// Read the file's `cdef` box into a [`ChannelPlan`] for `channels` input
 /// channels: the codestream's components, or the palette's channels when the
 /// palette applies. The box layout is always checked; the entries are checked
@@ -188,14 +204,9 @@ pub(crate) fn plan(
     raw_channels: bool,
     jph: bool,
 ) -> Result<ChannelPlan> {
-    let boxes = header.cdef();
-    if boxes.len() > 1 {
-        return Err(Error::file_format("the file has more than one `cdef` box"));
-    }
-    let Some(payload) = boxes.first() else {
+    let Some(entries) = read_layout(header, jph)? else {
         return Ok(ChannelPlan::None);
     };
-    let entries = parse(payload, jph)?;
     if raw_channels {
         return Ok(ChannelPlan::None);
     }
