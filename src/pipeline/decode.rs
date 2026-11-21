@@ -7,6 +7,7 @@
 //! [`decode_metered`] with its [`Ledger`](incremental::Ledger), and
 //! [`check_options`] when it is built.
 
+use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 
 use super::report::{Scope, report_part, report_tile};
@@ -20,10 +21,30 @@ use crate::{
 /// The [`Header`] that [`read_header_with`](crate::read_header_with) returns
 /// for `bytes` under `options`.
 pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Header> {
+    read_header_kept(bytes, options, None)
+}
+
+/// [`read_header`], going on from what `kept` holds of an earlier call on
+/// bytes that `bytes` extend, and keeping in it what a later call on more
+/// bytes can go on from (see [`HeaderCache`]). It gives what
+/// [`read_header`] gives.
+pub(crate) fn read_header_kept(
+    bytes: &[u8],
+    options: &DecodeOptions,
+    kept: Option<&mut HeaderCache>,
+) -> Result<Header> {
+    // What is kept is not keyed on `strict`: only reads with it off keep.
+    debug_assert!(kept.is_none() || !options.strict);
     check_options(options)?;
     let reduction = options.resolution_reduction;
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
         let prefix = read_jp2_prefix(bytes, options)?;
+        // Where the codestream starts in the input, which keys what is kept.
+        let start = prefix
+            .codestream
+            .as_ptr()
+            .addr()
+            .wrapping_sub(bytes.as_ptr().addr());
         check_geometry(
             prefix.codestream,
             &prefix.parsed,
@@ -31,6 +52,7 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
             reduction,
             samples::cap(&options.sample_limit, bytes.len()),
             options.strict,
+            kept.map(|kept| (kept, start)),
         )?;
         let area = &prefix.selection.area;
         let (width, height) = area.image_extent_at(reduction);
@@ -81,6 +103,7 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
         reduction,
         samples::cap(&options.sample_limit, bytes.len()),
         options.strict,
+        kept.map(|kept| (kept, 0)),
     )?;
     let (width, height) = selection.area.image_extent_at(reduction);
     Ok(Header {
@@ -141,6 +164,9 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// with no tile over a cap under the main header is still read no further
 /// than the first `SOT`. With `strict` on, a refusal or a stop at a budget
 /// gives the decode's error for the tile-parts where its parse finds one.
+///
+/// `kept` is what an earlier call on the start of the same input left, with
+/// where the codestream `bytes` starts in that input (see [`HeaderCache`]).
 fn check_geometry(
     bytes: &[u8],
     parsed: &codestream::ParsedHeader,
@@ -148,8 +174,9 @@ fn check_geometry(
     reduction: u8,
     cap: samples::Cap,
     strict: bool,
+    kept: Option<(&mut HeaderCache, usize)>,
 ) -> Result<()> {
-    let counted = count_geometry(bytes, parsed, selection, reduction, cap, strict);
+    let counted = count_geometry(bytes, parsed, selection, reduction, cap, strict, kept);
     if !strict {
         return counted.map(|_| ());
     }
@@ -176,6 +203,7 @@ fn count_geometry(
     reduction: u8,
     cap: samples::Cap,
     strict: bool,
+    kept: Option<(&mut HeaderCache, usize)>,
 ) -> Result<bool> {
     let header = &parsed.header;
     let siz = &header.siz;
@@ -184,15 +212,27 @@ fn count_geometry(
     // The most resolutions a tile-part header can give a tile: 32 levels in
     // each component.
     let most_resolutions = components.saturating_mul(33);
-    let reads = selection.tiles(siz);
+    // What an earlier call kept, if it was kept for this codestream, main
+    // header, selected area and reduction.
+    let area = selection.area.image_rect();
+    let (mut kept, start) = kept.map_or((None, 0), |(kept, start)| (Some(kept), start));
+    let mut earlier = kept
+        .as_deref_mut()
+        .and_then(|kept| kept.take(start, bytes.len(), parsed, area, reduction));
+    // The tiles read depend on the area alone, so those kept are reused.
+    let reads = match &mut earlier {
+        Some(earlier) => std::mem::take(&mut earlier.reads),
+        None => selection.tiles(siz),
+    };
     // For a tile read, whether its size shows it within both caps under the
     // main header, and whether its own header could refuse it: take it over
     // a cap (its size does not show it within them under any header) or,
     // under a reduction, have too few levels for it.
     let fits = |index: u32| {
-        let rect = siz
-            .tile_rect(index)
-            .filter(|_| reads.get(index as usize) == Some(&true))?;
+        if reads.get(index as usize) != Some(&true) {
+            return None;
+        }
+        let rect = siz.tile_rect(index)?;
         let (w, h) = (u64::from(rect.x1 - rect.x0), u64::from(rect.y1 - rect.y0));
         // A component's tile-component is at most w x h, and its resolution
         // at level s at most (w / 2^s + 1) x (h / 2^s + 1), so its
@@ -211,7 +251,10 @@ fn count_geometry(
             reduction > 0 || !under(most_resolutions),
         ))
     };
-    let mut steps = 0u64;
+    let mut counts = match &mut earlier {
+        Some(earlier) => Some(std::mem::take(&mut earlier.counts)),
+        None => kept.is_some().then(BTreeMap::new),
+    };
     let mut rescue = Rescue {
         bytes,
         parsed,
@@ -219,60 +262,195 @@ fn count_geometry(
         reduction,
         cap,
         strict,
-        walk: None,
+        walk: earlier.as_mut().and_then(|earlier| earlier.walk.take()),
+        begun: false,
+        known: match &mut earlier {
+            Some(earlier) => Some(std::mem::take(&mut earlier.known)),
+            None => kept.is_some().then(BTreeMap::new),
+        },
         steps: 0,
     };
-    // The lowest tile read since the last one counted whose own header
-    // could refuse it.
-    let mut pending: Option<u32> = None;
-    for index in 0..reads.len() as u32 {
-        let Some((main_fits, may_refuse)) = fits(index) else {
-            continue;
-        };
-        if !may_refuse {
-            continue;
-        }
-        let over = if main_fits {
-            None
-        } else {
-            steps = steps.saturating_add(main_resolutions);
-            if steps > GEOMETRY_STEPS {
-                return Ok(false);
+    let mut count = || {
+        let mut steps = 0u64;
+        // The lowest tile read since the last one counted whose own header
+        // could refuse it.
+        let mut pending: Option<u32> = None;
+        for index in 0..reads.len() as u32 {
+            let Some((main_fits, may_refuse)) = fits(index) else {
+                continue;
+            };
+            if !may_refuse {
+                continue;
             }
-            tier2::check_tile(header, index, cap)
-                .err()
-                .filter(|error| matches!(error, Error::Limit(_)))
-        };
-        let Some(error) = over else {
-            pending.get_or_insert(index);
-            continue;
-        };
-        // The decode counts the lower tiles under their own headers first,
-        // and with `strict` on it refuses a file with a tile read missing
-        // before it counts any tile, so the tiles read up to the one over a
-        // cap are looked up first: that tile, which walks the tile-parts as
-        // far as it, then the lower ones the walk has passed.
-        if let Some(lowest) = pending.take() {
-            rescue.begin(lowest as usize);
-            if strict
-                && (lowest..=index)
-                    .rev()
-                    .any(|tile| fits(tile).is_some() && rescue.find(tile).is_none())
-            {
-                return Err(rescue.walk_fault().unwrap_or(error));
-            }
-            for lower in lowest..index {
-                let counted = fits(lower).is_some_and(|(_, may_refuse)| may_refuse);
-                if counted && !rescue.count(lower, None)? {
+            let over = if main_fits {
+                None
+            } else {
+                steps = steps.saturating_add(main_resolutions);
+                if steps > GEOMETRY_STEPS {
                     return Ok(false);
                 }
+                over_under_main(header, index, cap, counts.as_mut())
+            };
+            let Some(over) = over else {
+                pending.get_or_insert(index);
+                continue;
+            };
+            // The decode counts the lower tiles under their own headers
+            // first, and with `strict` on it refuses a file with a tile read
+            // missing before it counts any tile, so the tiles read up to the
+            // one over a cap are looked up first: that tile, which walks the
+            // tile-parts as far as it, then the lower ones the walk has
+            // passed.
+            if let Some(lowest) = pending.take() {
+                rescue.begin(lowest as usize);
+                if strict
+                    && (lowest..=index)
+                        .rev()
+                        .any(|tile| fits(tile).is_some() && rescue.find(tile).is_none())
+                {
+                    return Err(rescue
+                        .walk_fault()
+                        .unwrap_or_else(|| over.error(index, cap)));
+                }
+                for lower in lowest..index {
+                    let counted = fits(lower).is_some_and(|(_, may_refuse)| may_refuse);
+                    if counted && !rescue.count(lower, None)? {
+                        return Ok(false);
+                    }
+                }
+            }
+            if !rescue.count(index, Some(over))? {
+                return Ok(false);
             }
         }
-        if !rescue.count(index, Some(error))? {
-            return Ok(false);
+        Ok(true)
+    };
+    let counted = count();
+    if let Some(kept) = kept {
+        let (walk, known) = (rescue.walk, rescue.known);
+        kept.keep(Kept {
+            start,
+            len: bytes.len(),
+            parsed: earlier.map_or_else(|| parsed.clone(), |earlier| earlier.parsed),
+            area,
+            reads,
+            reduction,
+            walk,
+            counts: counts.unwrap_or_default(),
+            known: known.unwrap_or_default(),
+        });
+    }
+    counted
+}
+
+/// Whether tile `index` is over a cap under the main header, as
+/// [`tier2::check_tile`] has it, with the [`tier2::tile_counts`] of the
+/// tiles already counted taken from `counts`, and this tile's added to it.
+fn over_under_main(
+    header: &codestream::MainHeader,
+    index: u32,
+    cap: samples::Cap,
+    counts: Option<&mut BTreeMap<u32, (u64, u64)>>,
+) -> Option<Over> {
+    let refusal = |error: Error| matches!(error, Error::Limit(_)).then_some(Over::Refused(error));
+    let Some(counts) = counts else {
+        return tier2::check_tile(header, index, cap)
+            .err()
+            .and_then(refusal);
+    };
+    let known = match counts.get(&index) {
+        Some(&known) => known,
+        None => match tier2::tile_counts(header, index) {
+            Ok(known) => *counts.entry(index).or_insert(known),
+            Err(error) => return refusal(error),
+        },
+    };
+    (!tier2::within_caps(known, cap)).then_some(Over::Counts(known))
+}
+
+/// A tile over a cap under the main header: the refusal, or the tile's
+/// counts there, from which [`error`](Self::error) makes it only when it is
+/// needed, as a call on the bytes fed so far counts the same tiles again.
+enum Over {
+    Refused(Error),
+    Counts((u64, u64)),
+}
+
+impl Over {
+    /// The refusal of tile `index` under `cap`, the error
+    /// [`tier2::check_tile`] gives.
+    fn error(self, index: u32, cap: samples::Cap) -> Error {
+        match self {
+            Over::Refused(error) => error,
+            Over::Counts(counts) => tier2::check_counts(index, counts, cap)
+                .err()
+                .unwrap_or_else(|| Error::inconsistent(format!("tile {index} is within the caps"))),
         }
     }
-    Ok(true)
+}
+
+/// What [`IncrementalDecoder::header`](crate::IncrementalDecoder::header)
+/// keeps between its calls, so that each goes on from where the last one
+/// stopped instead of reading the bytes fed again from the start: the walk
+/// of the tile-parts, with where it found the first tile-part of each tile
+/// the selection reads, the precincts and code-blocks of each tile counted
+/// under the main header, and what the count read of each tile-part that
+/// is whole in the input ([`Own`]). The bytes fed only grow, so what a call
+/// found in them stays so, and a call gives what a read from the start
+/// gives. It is kept for one codestream, main header, selection and
+/// reduction; a call that reads another, as after a change of region,
+/// starts again.
+#[derive(Default)]
+pub(crate) struct HeaderCache {
+    kept: Option<Kept>,
+}
+
+/// [`HeaderCache`]'s contents, and what they were kept for.
+struct Kept {
+    /// Where the codestream starts in the input.
+    start: usize,
+    /// The bytes of the codestream the last call read.
+    len: usize,
+    parsed: codestream::ParsedHeader,
+    /// The area the selection reads, on the reference grid.
+    area: codestream::markers::Rect,
+    /// Which tiles it reads.
+    reads: Vec<bool>,
+    reduction: u8,
+    walk: Option<Walk>,
+    /// The [`tier2::tile_counts`] under the main header of the tiles
+    /// counted under it.
+    counts: BTreeMap<u32, (u64, u64)>,
+    /// [`Rescue::known`].
+    known: BTreeMap<u32, Own>,
+}
+
+impl HeaderCache {
+    /// What was kept, if it was kept for a codestream at `start` of the
+    /// input that `len` bytes of it now extend, with the main header
+    /// `parsed`, the area read `area` and the reduction `reduction`.
+    /// Anything else kept is dropped.
+    fn take(
+        &mut self,
+        start: usize,
+        len: usize,
+        parsed: &codestream::ParsedHeader,
+        area: codestream::markers::Rect,
+        reduction: u8,
+    ) -> Option<Kept> {
+        self.kept.take().filter(|kept| {
+            kept.start == start
+                && kept.len <= len
+                && kept.reduction == reduction
+                && kept.area == area
+                && kept.parsed == *parsed
+        })
+    }
+
+    /// Keep `kept` for the next call.
+    fn keep(&mut self, kept: Kept) {
+        self.kept = Some(kept);
+    }
 }
 
 /// The resolutions of tile-components `header` gives a tile.
@@ -298,10 +476,42 @@ struct Rescue<'a> {
     /// where it found the first tile-part of each tile the selection reads:
     /// at index `tile - from`, for each tile from the first counted to the
     /// last read, 8 bytes a tile, or 0 where it has found none yet (a `SOT`
-    /// is never at 0). `None` until a tile is counted.
+    /// is never at 0). `None` until a tile is counted, unless an earlier
+    /// call on the start of the input kept one ([`HeaderCache`]).
     walk: Option<Walk>,
+    /// Whether [`begin`](Self::begin) has been called.
+    begun: bool,
+    /// What [`count`](Self::count) read of the first tile-part of each tile
+    /// it counted whose first tile-part is whole in the input, so that a
+    /// later call on more of the input need not read it again. `None` where
+    /// nothing is kept for a later call.
+    known: Option<BTreeMap<u32, Own>>,
     /// The steps taken reading and counting the tiles' own headers.
     steps: u64,
+}
+
+/// What [`Rescue::count`] read of a tile's first tile-part, whole in the
+/// input, which reads the same in any input that extends it.
+#[derive(Clone, Copy)]
+struct Own {
+    /// [`may_set_coding`](codestream::FirstPart::may_set_coding).
+    sets_coding: bool,
+    /// What its header gave, or `None` if it was not read.
+    header: Option<OwnHeader>,
+}
+
+/// [`Own::header`].
+#[derive(Clone, Copy)]
+enum OwnHeader {
+    /// At fault, which is the decode's to report.
+    Fault,
+    /// Read, and within the reduction (the one [`Kept`] is for): the
+    /// resolutions it gives the tile, and its [`tier2::tile_counts`], or
+    /// `None` where those are at fault, which is the decode's to report too.
+    Read {
+        resolutions: u64,
+        counts: Option<(u64, u64)>,
+    },
 }
 
 /// [`Rescue::walk`].
@@ -314,7 +524,21 @@ struct Walk {
 impl<'a> Rescue<'a> {
     /// The walk, started for the tiles from `from` on if it has not started
     /// yet. A tile below where it started is never looked up.
+    ///
+    /// A walk an earlier call kept on the start of the input goes on, in the
+    /// longer input, if it started at `from` or below: it has noted, or will
+    /// note, every tile the selection reads from `from` on, where a walk
+    /// from the start would. One that started above `from` is dropped.
     fn begin(&mut self, from: usize) -> &mut Walk {
+        if !self.begun {
+            self.begun = true;
+            if self.walk.as_ref().is_some_and(|walk| walk.from > from) {
+                self.walk = None;
+            }
+            if let Some(walk) = &mut self.walk {
+                walk.parts.resume();
+            }
+        }
         let (parsed, reads) = (self.parsed, self.reads);
         self.walk.get_or_insert_with(|| {
             let span = reads
@@ -388,47 +612,133 @@ impl<'a> Rescue<'a> {
     /// tile-parts only from the first tile counted on. Only the header read
     /// here is held. `Ok(false)` means the steps passed [`GEOMETRY_STEPS`]
     /// and the rest is left to the decode.
-    fn count(&mut self, index: u32, error: Option<Error>) -> Result<bool> {
+    ///
+    /// What [`known`](Self::known) holds of the tile stands in for reading
+    /// its tile-part again, and is charged the same steps.
+    fn count(&mut self, index: u32, over: Option<Over>) -> Result<bool> {
+        let known = self.known.as_ref().and_then(|known| known.get(&index));
+        if let Some(&Own {
+            sets_coding,
+            header,
+        }) = known
+        {
+            if over.is_none() && !sets_coding {
+                return Ok(true);
+            }
+            if let Some(header) = header {
+                return self.count_known(index, header);
+            }
+        }
         // A tile with no tile-part: the decode refuses the file with `strict`
         // on, and leaves the tile out with it off.
         let part = match self.find(index) {
             Some(part) => part,
             None if self.strict => {
-                return match self.walk_fault().or(error) {
+                let cap = self.cap;
+                return match self
+                    .walk_fault()
+                    .or_else(|| over.map(|over| over.error(index, cap)))
+                {
                     Some(fault) => Err(fault),
                     None => Ok(true),
                 };
             }
             None => return Ok(true),
         };
+        let whole = part.is_whole();
+        let sets_coding = part.may_set_coding();
         // A tile not over a cap under the main header whose tile-part
         // carries no `COD` or `COC` is coded as the main header has it, which
         // passed the reduction and the caps, so it is neither read nor
         // charged.
-        if error.is_none() && !part.may_set_coding() {
+        if over.is_none() && !sets_coding {
+            self.learn(index, whole, sets_coding, None);
             return Ok(true);
         }
-        // Reading a tile's header copies the main header's coding parameters
-        // when the tile-part overrides them, so it is charged a step for each
-        // component and, as that copy costs about ten counting steps per
-        // component, ten more, before it is read.
-        let read_cost = 11 * self.parsed.header.components.len() as u64;
-        self.steps = self.steps.saturating_add(read_cost);
-        if self.steps > GEOMETRY_STEPS {
+        if !self.charge(self.read_cost()) {
             return Ok(false);
         }
         // A tile-part header at fault is the decode's to report.
-        if let Ok(own) = part.header() {
-            self.steps = self.steps.saturating_add(resolutions(&own));
-            if self.steps > GEOMETRY_STEPS {
-                return Ok(false);
-            }
-            check_reduction(&own, self.reduction, Some(index as usize))?;
-            if let Err(error @ Error::Limit(_)) = tier2::check_tile(&own, index, self.cap) {
-                return Err(error);
-            }
+        let Ok(own) = part.header() else {
+            self.learn(index, whole, sets_coding, Some(OwnHeader::Fault));
+            return Ok(true);
+        };
+        let resolutions = resolutions(&own);
+        if !self.charge(resolutions) {
+            return Ok(false);
         }
-        Ok(true)
+        check_reduction(&own, self.reduction, Some(index as usize))?;
+        let counts = match tier2::tile_counts(&own, index) {
+            Ok(counts) => Some(counts),
+            Err(error @ Error::Limit(_)) => return Err(error),
+            Err(_) => None,
+        };
+        self.learn(
+            index,
+            whole,
+            sets_coding,
+            Some(OwnHeader::Read {
+                resolutions,
+                counts,
+            }),
+        );
+        self.check_own(index, counts)
+    }
+
+    /// [`count`](Self::count) for a tile whose own header gave `header`.
+    fn count_known(&mut self, index: u32, header: OwnHeader) -> Result<bool> {
+        if !self.charge(self.read_cost()) {
+            return Ok(false);
+        }
+        let OwnHeader::Read {
+            resolutions,
+            counts,
+        } = header
+        else {
+            return Ok(true);
+        };
+        if !self.charge(resolutions) {
+            return Ok(false);
+        }
+        // It was within the reduction when it was read.
+        self.check_own(index, counts)
+    }
+
+    /// Hold tile `index` to the caps under its own header, which gave its
+    /// tile `counts`, as [`tier2::check_tile`] holds it.
+    fn check_own(&self, index: u32, counts: Option<(u64, u64)>) -> Result<bool> {
+        match counts.map(|counts| tier2::check_counts(index, counts, self.cap)) {
+            Some(Err(error @ Error::Limit(_))) => Err(error),
+            _ => Ok(true),
+        }
+    }
+
+    /// The steps reading a tile's header costs. It copies the main header's
+    /// coding parameters when the tile-part overrides them, so it is charged
+    /// a step for each component and, as that copy costs about ten counting
+    /// steps per component, ten more, before it is read.
+    fn read_cost(&self) -> u64 {
+        11 * self.parsed.header.components.len() as u64
+    }
+
+    /// Charge `steps`, and whether they are within [`GEOMETRY_STEPS`].
+    fn charge(&mut self, steps: u64) -> bool {
+        self.steps = self.steps.saturating_add(steps);
+        self.steps <= GEOMETRY_STEPS
+    }
+
+    /// Note in [`known`](Self::known) what tile `index`'s first tile-part
+    /// gave, if it is `whole` in the input.
+    fn learn(&mut self, index: u32, whole: bool, sets_coding: bool, header: Option<OwnHeader>) {
+        if let Some(known) = self.known.as_mut().filter(|_| whole) {
+            known.insert(
+                index,
+                Own {
+                    sets_coding,
+                    header,
+                },
+            );
+        }
     }
 
     /// The error the decode gives for the tile-parts with `strict` on, for a
@@ -1579,5 +1889,200 @@ pub(crate) mod tests {
         assert_eq!(reads, 63 * 16 + 1 + 1 + (63 * 16 + 1));
         // With it off the tile is left out and the rest are read by offset.
         assert_eq!(sot_reads(&missing, &lenient), 63 * 16 + 1 + 63);
+    }
+
+    /// `IncrementalDecoder::header` goes on from what its last call found,
+    /// so calling it after each feed reads each `SOT` about once in all: 64
+    /// tiles of 16 tile-parts, each over the cap under the main header and
+    /// brought within by its own `COD`, fed 5 bytes at a time. A call reads
+    /// the `SOT`s fed since the last one, the one where the walk stopped for
+    /// want of bytes, and that of a first tile-part not yet whole. A read
+    /// from the start on each call reads them all again.
+    #[test]
+    fn header_after_each_feed_reads_each_sot_about_once() {
+        let bytes = rescued_tiles(64, 16, &[], &[]);
+        let lenient = DecodeOptions::default().with_strict(false);
+        let mut decoder =
+            crate::IncrementalDecoder::new(DecodeOptions::default()).expect("valid options");
+        let (mut kept, mut afresh, mut calls) = (0, 0, 0u64);
+        for chunk in bytes.chunks(5) {
+            decoder.feed(chunk);
+            codestream::tests::SOT_READS.with(|reads| reads.set(0));
+            let header = decoder.header();
+            kept += codestream::tests::SOT_READS.with(std::cell::Cell::get);
+            let (reads, alone) = sot_reads_of(decoder.bytes(), &lenient);
+            afresh += reads;
+            calls += 1;
+            let alone = match alone {
+                Ok(header) => Ok(Some(header)),
+                Err(Error::Incomplete(_)) => Ok(None),
+                Err(error) => Err(error),
+            };
+            assert_eq!(format!("{header:?}"), format!("{alone:?}"));
+        }
+        let parts = 64 * 16;
+        eprintln!("{kept} reads in {calls} calls, {afresh} from the start");
+        assert!(kept > 0);
+        assert!(kept <= parts + 2 * calls, "{kept} reads in {calls} calls");
+        assert!(kept * 100 < afresh, "{kept} reads, {afresh} from the start");
+    }
+
+    /// A gray codestream of `tiles` tiles in a row, whose main header and
+    /// tiles' first tile-parts are `main` and `own(tile)`, as marker
+    /// segments, with an empty packet in each tile.
+    fn tiles_of(grid: [u32; 8], main: &[Vec<u8>], own: impl Fn(u16) -> Vec<u8>) -> Vec<u8> {
+        use crate::synth;
+        let siz = synth::siz_body(grid, &[[7, 1, 1]]);
+        let mut bytes = [vec![0xFF, 0x4F], synth::seg(0xFF51, &siz), main.concat()].concat();
+        let tiles = (grid[0] - grid[6]).div_ceil(grid[4]) * (grid[1] - grid[7]).div_ceil(grid[5]);
+        for tile in 0..tiles as u16 {
+            bytes.extend(synth::tile_part(tile, 0, 1, &own(tile), &[0]));
+        }
+        bytes.extend_from_slice(&[0xFF, 0xD9]);
+        bytes
+    }
+
+    /// What a header read keeps is for one area and reduction, and its walk
+    /// for the tiles from where it started on: a read under other options
+    /// on the same [`HeaderCache`] gives what [`read_header`] gives. The
+    /// decoder drops what it keeps on any change of options, so only a read
+    /// here can mix them.
+    ///
+    /// The first file has three tiles of 2048 x 1024 in 1x1 precincts, the
+    /// first cut to 400 wide by the image offset: over the precinct cap
+    /// under the default sample limit, but not under `Raised(4)`, while the
+    /// other two, brought within by their own `COD`, are over it under
+    /// both. Under `Raised(4)` the walk starts at tile 1; under the default
+    /// it must start at tile 0, which it refuses, and so must a read of the
+    /// whole image after a read of tile 1. In the second, of one level, tile
+    /// 1's own `COD` has none, which a reduction of 1 refuses.
+    #[test]
+    fn what_is_kept_is_for_one_area_reduction_and_walk() {
+        use crate::synth;
+        let check = |bytes: &[u8], sequence: &[DecodeOptions]| {
+            let mut kept = HeaderCache::default();
+            for (call, options) in sequence.iter().enumerate() {
+                let got = read_header_kept(bytes, options, Some(&mut kept));
+                let want = read_header(bytes, options);
+                assert_eq!(format!("{got:?}"), format!("{want:?}"), "call {call}");
+            }
+        };
+        let lenient = DecodeOptions::default().with_strict(false);
+        let mut cod = synth::cod_body(1, 0, 4, 0);
+        cod[0] = 1;
+        cod.push(0x00);
+        let main = [
+            synth::seg(0xFF52, &cod),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+        ];
+        let rescue = synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0));
+        let grid = [3 * 2048, 1024, 1648, 0, 2048, 1024, 0, 0];
+        let narrow_first = tiles_of(
+            grid,
+            &main,
+            |tile| {
+                if tile == 0 { vec![] } else { rescue.clone() }
+            },
+        );
+        let refused = read_header(&narrow_first, &lenient);
+        assert!(
+            matches!(&refused, Err(Error::Limit(limit)) if limit.message().starts_with("tile 0 ")),
+            "{refused:?}"
+        );
+        // On a 32-bit target the caps stop at their floor, so a raised
+        // limit does not raise them.
+        if cfg!(target_pointer_width = "64") {
+            let raised = lenient.clone().with_sample_limit(WorkLimit::Raised(4));
+            assert!(read_header(&narrow_first, &raised).is_ok());
+            check(&narrow_first, &[raised, lenient.clone()]);
+        }
+        let tile = lenient.clone().with_region(Region::Tile(1));
+        check(&narrow_first, &[tile, lenient.clone()]);
+
+        let mut cod = synth::cod_body(1, 1, 4, 0);
+        cod[0] = 1;
+        cod.extend([0x00, 0x11]);
+        let main = [
+            synth::seg(0xFF52, &cod),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 4])),
+        ];
+        let no_levels = [
+            synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0)),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+        ]
+        .concat();
+        let one_level = synth::seg(0xFF52, &synth::cod_body(1, 1, 4, 0));
+        let grid = [2 * 1040, 512, 0, 0, 1040, 512, 0, 0];
+        let own_no_levels = tiles_of(grid, &main, |tile| {
+            if tile == 1 {
+                no_levels.clone()
+            } else {
+                one_level.clone()
+            }
+        });
+        let reduced = lenient.clone().with_resolution_reduction(1);
+        let refused = read_header(&own_no_levels, &reduced);
+        assert!(
+            matches!(&refused, Err(Error::InvalidOptions(message)) if message.to_string().ends_with("in tile 1")),
+            "{refused:?}"
+        );
+        assert!(read_header(&own_no_levels, &lenient).is_ok());
+        check(&own_no_levels, &[lenient, reduced]);
+    }
+
+    /// What a header read keeps is for one input, which grows: a read of
+    /// another on the same [`HeaderCache`] gives what [`read_header`] gives.
+    /// Each file has two tiles of 1040 x 512 and one level, the main
+    /// `COD`'s precincts `precincts`, and in tile 0's first tile-part a `COD`
+    /// of maximal precincts or a `COM` of the same length. With 1x1
+    /// precincts at the lowest resolution the tiles are over the precinct
+    /// cap, so tile 0 is refused without its `COD`.
+    ///
+    /// The second file of each pair is no shorter than the first and lays
+    /// its tile-parts out at the same offsets. Its codestream starts
+    /// elsewhere (in a JP2 file) or its main header differs, so what the
+    /// first read kept does not hold for it.
+    #[test]
+    fn what_is_kept_is_for_one_input() {
+        use crate::synth;
+        let file = |precincts: [u8; 2], rescued: bool| {
+            let mut cod = synth::cod_body(1, 1, 4, 0);
+            cod[0] = 1;
+            cod.extend(precincts);
+            let rescue = synth::seg(0xFF52, &synth::cod_body(1, 1, 4, 0));
+            let mut comment = vec![0, 1];
+            comment.resize(rescue.len() - 4, b'x');
+            let comment = synth::seg(0xFF64, &comment);
+            assert_eq!(comment.len(), rescue.len());
+            let main = [
+                synth::seg(0xFF52, &cod),
+                synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 4])),
+            ];
+            let grid = [2 * 1040, 512, 0, 0, 1040, 512, 0, 0];
+            tiles_of(grid, &main, |tile| match tile {
+                0 if !rescued => comment.clone(),
+                _ => rescue.clone(),
+            })
+        };
+        let lenient = DecodeOptions::default().with_strict(false);
+        let check = |first: &[u8], second: &[u8]| {
+            assert!(read_header(first, &lenient).is_ok());
+            let want = read_header(second, &lenient);
+            assert!(
+                matches!(&want, Err(Error::Limit(limit)) if limit.message().starts_with("tile 0 ")),
+                "{want:?}"
+            );
+            let mut kept = HeaderCache::default();
+            read_header_kept(first, &lenient, Some(&mut kept)).expect("a header");
+            let got = read_header_kept(second, &lenient, Some(&mut kept));
+            assert_eq!(format!("{got:?}"), format!("{want:?}"));
+        };
+        // The same main header, its codestream at another start.
+        let over = [0x00, 0x11];
+        let refused = file(over, false);
+        let jp2 = synth::wrap_jp2_boxes(0x0C, &refused, &[]);
+        check(&file(over, true), &jp2);
+        // Another main header: one whose tiles are within the caps first.
+        check(&file([0x11, 0x11], false), &refused);
     }
 }
