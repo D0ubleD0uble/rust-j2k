@@ -36,7 +36,6 @@
 //! [`ChannelPlan::apply`] then reorders the channels the palette step built,
 //! and [`ChannelPlan::describe`] labels them.
 
-use super::header::Jp2Header;
 use super::metadata::{
     Association, ChannelDefinition, ChannelDefinitionEntry, ChannelType, Jp2Metadata,
 };
@@ -134,24 +133,15 @@ pub(super) fn parse(payload: &[u8], jph: bool) -> Result<Vec<Entry>> {
         .collect())
 }
 
-/// The file's `cdef` entries as written, or `None` without a `cdef` box (or
-/// with one that does not parse, which planning has already refused). `jph`
-/// says whether the file is a JPH file.
-pub(super) fn definitions(
-    header: &Jp2Header<'_>,
-    jph: bool,
-) -> Option<Vec<ChannelDefinitionEntry>> {
-    let payload = header.cdef().first().copied()?;
-    let entries = parse(payload, jph).ok()?;
-    Some(
-        entries
-            .into_iter()
-            .map(|e| ChannelDefinitionEntry {
-                channel: e.channel,
-                definition: e.definition(),
-            })
-            .collect(),
-    )
+/// The file's `cdef` entries as written, for the metadata.
+pub(super) fn definitions(entries: &[Entry]) -> Vec<ChannelDefinitionEntry> {
+    entries
+        .iter()
+        .map(|e| ChannelDefinitionEntry {
+            channel: e.channel,
+            definition: e.definition(),
+        })
+        .collect()
 }
 
 /// Check a `cdef` payload's layout only, as OpenJPEG reads the box.

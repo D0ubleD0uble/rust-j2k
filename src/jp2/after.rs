@@ -193,13 +193,7 @@ impl State {
                 if self.mapped {
                     return Err(fault("the file has a second `cmap` box"));
                 }
-                if payload.len() < columns * 4 {
-                    return Err(fault(format!(
-                        "the `cmap` box holds {} bytes; mapping {columns} palette columns needs {}",
-                        payload.len(),
-                        columns * 4
-                    )));
-                }
+                palette::parse_cmap(payload, columns).map_err(context)?;
                 self.mapped = true;
             }
             b"cdef" => {
