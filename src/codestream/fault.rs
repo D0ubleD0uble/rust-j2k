@@ -26,8 +26,8 @@ use std::collections::hash_map::Entry;
 use super::{
     Cursor, Error, MAX_POC_VOLUMES, Overrides, ParsedHeader, Restated, Result, TileHeader,
     both_packed_headers, check_poc_budget, check_restatement, check_tile_in_full,
-    count_is_one_short, decode_sot, marker, read_tile_part_header, read_u16, segment, sot_at,
-    tile_overrides_are_valid,
+    count_is_one_short, decode_sot, marker, part_end, read_tile_part_header, read_u16, segment,
+    sot_at, tile_overrides_are_valid,
 };
 
 /// What the walk keeps of one tile, 6 bytes.
@@ -230,7 +230,8 @@ fn walk(
             cur.pos += 2;
             Ok(None)
         } else {
-            read_tile_part_header(&mut cur, main, first_part).map(Some)
+            let end = part_end(bytes.len(), part_offset, sot.psot);
+            read_tile_part_header(&mut cur, end, main, first_part).map(Some)
         };
         let read = match read {
             Ok(read) => read,
@@ -242,7 +243,7 @@ fn walk(
         };
         let mut packed_headers = false;
         if let Some((tile_header, packed)) = read {
-            packed_headers = !packed.is_empty();
+            packed_headers = packed.is_some();
             if first_part {
                 let own = &tile_header.overrides;
                 if own.codes_or_quantizes() {
@@ -272,8 +273,12 @@ fn walk(
                     let first_again = || -> Result<Overrides> {
                         #[cfg(test)]
                         super::tests::FIRST_REREADS.with(|reads| reads.set(reads.get() + 1));
+                        // It read in full before, so no arm that `end`
+                        // decides is reached, and the input's end serves.
                         let mut at = Cursor::at(bytes, firsts.get(index));
-                        Ok(read_tile_part_header(&mut at, main, true)?.0.overrides)
+                        Ok(read_tile_part_header(&mut at, bytes.len(), main, true)?
+                            .0
+                            .overrides)
                     };
                     if tile.flags & CODES == 0 {
                         let own = Overrides::default();

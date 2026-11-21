@@ -1755,6 +1755,153 @@ fn a_tile_part_header_maps_an_unread_marker_as_the_main_header_does() {
     }
 }
 
+/// A damaged length in a tile-part header can step past `SOD` into the
+/// packet data, where `0xFF` and a byte below `0x90` may follow each other.
+/// Read there, such a pair is damage, not a marker this decoder does not
+/// read: a code is `Unsupported` only when the markers go on from it to a
+/// `SOD` within the tile-part.
+#[test]
+fn a_length_that_runs_into_the_packet_data_is_codestream() {
+    // The `COM` declares 6 bytes and holds 4, so it swallows the `SOD`, and
+    // the next code is read from the data: reserved, unrecognized, Part 2.
+    let com = vec![0xFF, 0x64, 0x00, 0x06, 0xAA, 0xBB];
+    for data in [
+        vec![0xFF, 0x3A, 0x01, 0x02],
+        vec![0xFF, 0x4D, 0x12, 0x34],
+        vec![0xFF, 0x75, 0x00, 0x40],
+    ] {
+        let bytes = assemble_with_tile_markers(&default_header(), &[com.clone()], &data);
+        crate::fuzz::tile_parts_walks_agree(&bytes);
+        let e = perr(&bytes);
+        assert!(
+            matches!(&e, Error::Codestream(m) if m.message().contains("not followed by marker segments")),
+            "{data:02X?}: got {e:?}"
+        );
+    }
+
+    // Markers that reach `SOD` only past the tile-part's `Psot`.
+    let mut sot = synth::sot(0, 12 + 4 + 1, 0, 1);
+    sot.extend_from_slice(&seg(0xFF7F, &[]));
+    let bytes = assemble(&default_header(), &sot, &[0, 0], true);
+    let e = perr(&bytes);
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.message().contains("not followed by marker segments")),
+        "got {e:?}"
+    );
+}
+
+/// The review's repro of the case above, on a real file: a `COM` added to
+/// each of the first tile-part headers of `tiles_multipart_lossless.j2k`
+/// (`Psot` grown to hold its 4 bytes), at every length that runs it past
+/// `SOD`. None reads as `Unsupported`, and among them the `COM` ends on a
+/// reserved code (`0xFF3A`) and on an unrecognized one (`0xFF4D`).
+#[test]
+fn a_com_run_past_sod_in_a_real_file_is_never_unsupported() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/tiles_multipart_lossless.j2k");
+    let file = std::fs::read(path).unwrap();
+    let (_, mut at, _) = parse_main_header(&file).unwrap();
+    let mut sots = Vec::new();
+    while read_u16(&file, at) == Some(marker::SOT) && sots.len() < 4 {
+        sots.push(at);
+        let psot = u32::from_be_bytes(file[at + 6..at + 10].try_into().unwrap());
+        at += psot as usize;
+    }
+    let (mut reserved, mut unrecognized) = (0, 0);
+    for &sot in &sots {
+        let psot = u32::from_be_bytes(file[sot + 6..sot + 10].try_into().unwrap());
+        for length in 4..=255u8 {
+            let mut bytes = file[..sot + 12].to_vec();
+            bytes[sot + 6..sot + 10].copy_from_slice(&(psot + 4).to_be_bytes());
+            bytes.extend_from_slice(&[0xFF, 0x64, 0, length]);
+            bytes.extend_from_slice(&file[sot + 12..]);
+            // Where the `COM` ends, the next code is read.
+            match read_u16(&bytes, sot + 12 + 2 + usize::from(length)) {
+                Some(code) if marker::RESERVED_NO_SEGMENT.contains(&code) => reserved += 1,
+                Some(0xFF4D) => unrecognized += 1,
+                _ => {}
+            }
+            crate::fuzz::tile_parts_walks_agree(&bytes);
+            if let Err(e) = parse(&bytes) {
+                assert!(
+                    !matches!(e, Error::Unsupported(_)),
+                    "COM of length {length} in the tile-part at {sot}: got {e:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        reserved > 0 && unrecognized > 0,
+        "{reserved} {unrecognized}"
+    );
+}
+
+/// A.7.4 disallows any `PPT` beside a `PPM`, one with no packet-header
+/// bytes too: `FF61 0003 00`, only its `Zppt`, added to
+/// `packed_overrun/ppm_whole.j2k`, is refused with `strict` on and off,
+/// where it decoded before. OpenJPEG 2.5.0 refuses it too.
+#[test]
+fn an_empty_ppt_beside_a_ppm_is_codestream() {
+    let bytes = assemble_with_tile_markers(
+        &[
+            default_header(),
+            vec![seg(marker::PPM, &[0, 0, 0, 0, 1, 0])],
+        ]
+        .concat(),
+        &[seg(marker::PPT, &[0])],
+        &[0],
+    );
+    crate::fuzz::tile_parts_walks_agree(&bytes);
+    let e = perr(&bytes);
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.message().contains("both `PPM` and `PPT`")),
+        "got {e:?}"
+    );
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/packed_overrun/ppm_whole.j2k");
+    let file = std::fs::read(path).unwrap();
+    let (_, sot, _) = parse_main_header(&file).unwrap();
+    let psot = u32::from_be_bytes(file[sot + 6..sot + 10].try_into().unwrap());
+    let mut bytes = file[..sot + 12].to_vec();
+    bytes[sot + 6..sot + 10].copy_from_slice(&(psot + 5).to_be_bytes());
+    bytes.extend_from_slice(&[0xFF, 0x61, 0x00, 0x03, 0x00]);
+    bytes.extend_from_slice(&file[sot + 12..]);
+    assert!(crate::decode(&file).is_ok());
+    crate::fuzz::tile_parts_walks_agree(&bytes);
+    for strict in [true, false] {
+        let e = crate::decode_with(&bytes, &crate::DecodeOptions::default().with_strict(strict))
+            .expect_err("a PPT beside a PPM");
+        assert!(
+            matches!(&e, Error::Codestream(m) if m.message().contains("both `PPM` and `PPT`")),
+            "strict {strict}: got {e:?}"
+        );
+    }
+}
+
+/// The color-transform rule holds for a tile's resolved coding too: a tile
+/// `COC` that moves component 1 off the main header's 9/7 makes the
+/// transform undefined in that tile, and the error names the tile.
+#[test]
+fn a_tile_coc_that_mixes_the_color_wavelets_is_marker() {
+    let header = vec![
+        seg(marker::SIZ, &siz_body(3, &[(7, 1, 1); 3])),
+        seg(marker::COD, &cod_body(0, 0, 1, 1, 5, 4, 4, 0, 0)), // mct = 1, 9/7
+        seg(marker::QCD, &qcd_expounded(2, &[(8, 0); 16])),
+    ];
+    let bytes = assemble_with_tile_markers(
+        &header,
+        &[seg(marker::COC, &coc_body(&[1], 0, 5, 4, 4, 0, 1))], // component 1 → 5/3
+        &[0],
+    );
+    crate::fuzz::tile_parts_walks_agree(&bytes);
+    let e = perr(&bytes);
+    assert!(
+        matches!(&e, Error::Marker(m) if m.message().starts_with("in tile 0, the color transform")),
+        "got {e:?}"
+    );
+}
+
 #[test]
 fn psot_overrun_is_codestream() {
     let data = [1, 2];
@@ -2574,6 +2721,32 @@ fn reject_matrix_maps_every_out_of_subset_input_to_its_typed_error() {
         in_tile(be16(marker::EPH).to_vec()),
         Variant::Codestream,
     ));
+    // The main-header-only SIZ, PPM and CRG, and the delimiters, in a
+    // tile-part header. A delimiter would be `Codestream` by another arm
+    // too (it breaks the chain to `SOD`), so each must be refused by name.
+    for (name, marker) in [
+        (
+            "SIZ in a tile-part header",
+            seg(marker::SIZ, &one_component()),
+        ),
+        (
+            "PPM in a tile-part header",
+            seg(marker::PPM, &[0, 0, 0, 0, 1, 0]),
+        ),
+        ("CRG in a tile-part header", seg(marker::CRG, &[0, 0, 0, 0])),
+        ("SOT in a tile-part header", synth::sot(0, 0, 0, 1)),
+        ("SOC in a tile-part header", be16(marker::SOC).to_vec()),
+        ("EOC in a tile-part header", be16(marker::EOC).to_vec()),
+    ] {
+        let error = in_tile(marker);
+        assert!(
+            error
+                .to_string()
+                .contains("is not permitted in a tile-part header"),
+            "{name}: got {error:?}"
+        );
+        rows.push((name, error, Variant::Codestream));
+    }
 
     // Every JPEG 2000 Part 2 codestream marker (0xFF74..=0xFF78): out of the
     // Part 1 subset, so each is an `Unsupported` feature the moment it appears,
@@ -3796,7 +3969,7 @@ impl Rng {
                 header.components[index].quant = self.quant(levels);
             }
         }
-        (validate_resolved(&header).is_ok() && header.poc.len() <= MAX_POC_VOLUMES)
+        (validate_resolved(&header, None).is_ok() && header.poc.len() <= MAX_POC_VOLUMES)
             .then_some(header)
     }
 
