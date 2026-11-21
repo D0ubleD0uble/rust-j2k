@@ -347,4 +347,81 @@ mod tests {
         assert_eq!(walk(max), Some(WorkLimit::Unlimited));
         assert_eq!(walk(u64::MAX), Some(WorkLimit::Unlimited));
     }
+
+    /// `DecodeOptions::with_retry` gives options exactly for the kinds an
+    /// option raises, and sets that option to the limit the refusal gave.
+    #[test]
+    fn with_retry_is_some_exactly_for_the_adjustable_kinds() {
+        use crate::DecodeOptions;
+        // Every kind: the match fails to build when a kind is added, so that
+        // it is added to the list too.
+        let listed = |kind: LimitKind| match kind {
+            LimitKind::Samples
+            | LimitKind::PacketWork
+            | LimitKind::CodeBlockWork
+            | LimitKind::AddressSpace
+            | LimitKind::TileCodeBlocks
+            | LimitKind::TilePrecincts
+            | LimitKind::PocVolumes
+            | LimitKind::BitPlanes => kind,
+        };
+        let kinds = [
+            LimitKind::Samples,
+            LimitKind::PacketWork,
+            LimitKind::CodeBlockWork,
+            LimitKind::AddressSpace,
+            LimitKind::TileCodeBlocks,
+            LimitKind::TilePrecincts,
+            LimitKind::PocVolumes,
+            LimitKind::BitPlanes,
+        ]
+        .map(listed);
+        let base = DecodeOptions::default();
+        for kind in kinds {
+            let error = if kind.is_adjustable() {
+                let option = match kind {
+                    LimitKind::PacketWork => "packet_work_limit",
+                    LimitKind::CodeBlockWork => "code_block_work_limit",
+                    _ => "sample_limit",
+                };
+                Error::limit_retry(
+                    kind,
+                    WorkLimit::Raised(7),
+                    format!("retry with `DecodeOptions::{option}` at `WorkLimit::Raised(7)`"),
+                )
+            } else {
+                Error::limit_fixed(kind, "no option raises it")
+            };
+            let Error::Limit(limit) = error else {
+                unreachable!()
+            };
+            let retry = base.with_retry(&limit);
+            assert_eq!(retry.is_some(), kind.is_adjustable(), "{kind:?}");
+            // A kind no option raises gives `None` even with a limit to
+            // retry with, which no refusal carries.
+            let carried = crate::error::any_limit(kind, Some(WorkLimit::Raised(7)));
+            assert_eq!(
+                base.with_retry(&carried).is_some(),
+                kind.is_adjustable(),
+                "{kind:?} with a retry"
+            );
+            let Some(retry) = retry else { continue };
+            let raised = Some(WorkLimit::Raised(7));
+            let set = |limit: &WorkLimit| (*limit != WorkLimit::Default).then(|| limit.clone());
+            let expected = match kind {
+                LimitKind::PacketWork => (None, raised, None),
+                LimitKind::CodeBlockWork => (None, None, raised),
+                _ => (raised, None, None),
+            };
+            assert_eq!(
+                (
+                    set(&retry.sample_limit),
+                    set(&retry.packet_work_limit),
+                    set(&retry.code_block_work_limit),
+                ),
+                expected,
+                "{kind:?}"
+            );
+        }
+    }
 }

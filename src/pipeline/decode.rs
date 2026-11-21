@@ -600,13 +600,28 @@ struct Jp2Prefix<'a> {
     selection: window::Selection,
 }
 
-/// Read a JP2 file up to its tile data, in OpenJPEG's order: the box walk,
-/// the codestream's main header, `ihdr` against SIZ, then the channel plans.
-/// The header boxes after the codestream, which OpenJPEG reads again once it
-/// has decoded, are checked next, then the sRGB step is planned; all of it
-/// before any tile is read.
+/// Read a JP2 file up to its tile data, in OpenJPEG's order, all of it
+/// before any tile is read:
+/// 1. the box walk, then the layout of the palette and channel definition
+///    boxes, which OpenJPEG checks as it reads `jp2h`;
+/// 2. the codestream's main header, then the sample limit, which OpenJPEG
+///    does not have, on the area the selection reads;
+/// 3. `ihdr` against SIZ, then the reduction, which OpenJPEG refuses as it
+///    reads SIZ and then `COD` or `COC`;
+/// 4. the selection, which OpenJPEG refuses when the decoded area is set;
+/// 5. the channel plans against the components, then the header boxes after
+///    the codestream, which OpenJPEG checks once it has decoded, then the
+///    metadata;
+/// 6. the sRGB step, which OpenJPEG does not refuse.
+///
+/// Steps 2 to 4 are in the codestream path's order. The one difference is
+/// sRGB output: a codestream declares no color space, so the codestream path
+/// refuses sRGB output of three or more components before the reduction and
+/// the selection, while here the sRGB step is planned last, from the color
+/// space and the channels the plans give.
 fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Prefix<'a>> {
     let file = jp2::parse(bytes, &options.packet_work_limit)?;
+    jp2::check_box_layout(&file)?;
     let parsed = codestream::parse_header(file.codestream)?;
     let siz = &parsed.header.siz;
     let cap = samples::cap(&options.sample_limit, bytes.len());
@@ -615,25 +630,22 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
         samples::check_read(siz, selection, options.resolution_reduction, cap)?;
     }
     jp2::check_against_siz(&file.header, siz)?;
+    check_reduction(&parsed.header, options.resolution_reduction, None)?;
+    let selection = selection?;
     // A component subset names codestream components, which come out as
     // coded: OpenJPEG bypasses the JP2 channel transforms under `-c`.
     let raw_channels = options.raw_channels || options.components.is_some();
-    // A palette expands the area the decode returns. A refused selection has
-    // no area, so the plan counts nothing: its other faults are found at the
-    // same place whatever the image's size, and the selection's refusal
-    // follows them.
-    let plan_cap = if selection.is_ok() { cap } else { cap.lifted() };
+    // A palette expands the area the decode returns.
     let plans = jp2::ChannelPlans::plan(
         &file.header,
-        selection.as_ref().map_or(siz, |selection| &selection.area),
+        &selection.area,
         options.resolution_reduction,
-        plan_cap,
+        cap,
         raw_channels,
         jp2::is_jph(&file.file_type),
     )?;
     jp2::check_after_codestream(&file, raw_channels)?;
     let mut metadata = jp2::metadata(&file, &plans, siz)?;
-    let selection = selection?;
     if selection.subset {
         metadata.channels = pick(metadata.channels, &selection.order);
     }
@@ -664,7 +676,6 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
             Some(plan)
         }
     };
-    check_reduction(&parsed.header, options.resolution_reduction, None)?;
     Ok(Jp2Prefix {
         codestream: file.codestream,
         parsed,

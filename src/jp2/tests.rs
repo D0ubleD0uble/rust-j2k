@@ -656,10 +656,12 @@ fn every_header_colr_is_reported_in_file_order() {
     );
 }
 
-/// A file with a header or codestream fault and a malformed `cdef` reports
-/// the first fault: the `cdef` is read after the codestream's main header.
+/// A malformed `cdef` comes before an `ihdr` that disagrees with SIZ and
+/// before a codestream fault: its layout is checked as `jp2h` is read, as
+/// OpenJPEG does. `opj_decompress` 2.5 gives "Number of channel description
+/// is equal to zero in CDEF box." for both files.
 #[test]
-fn a_structural_fault_wins_over_a_malformed_cdef() {
+fn a_malformed_cdef_wins_over_a_header_or_codestream_fault() {
     let with_cdef = |ihdr_box: Vec<u8>, stream: &[u8]| {
         file(&[
             jp2_ftyp(),
@@ -669,12 +671,12 @@ fn a_structural_fault_wins_over_a_malformed_cdef() {
     };
     file_format(
         &with_cdef(ihdr(1, 1, 1), CODESTREAM),
-        "`ihdr` declares a 1x1 image",
+        "declares 0 channel definitions",
     );
-    assert!(matches!(
-        decode(&with_cdef(good_ihdr(), b"not a codestream")),
-        Err(Error::Codestream(_))
-    ));
+    file_format(
+        &with_cdef(good_ihdr(), b"not a codestream"),
+        "declares 0 channel definitions",
+    );
 }
 
 /// The JP2 box layer's reject matrix: every malformed box shape, mapped to

@@ -50,7 +50,7 @@ const APPLICATION_DEFINED: u16 = 3;
 
 /// One `cdef` entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Entry {
+pub(super) struct Entry {
     /// `Cn`: the channel the entry describes.
     channel: u16,
     /// `Typ`.
@@ -101,7 +101,7 @@ impl Entry {
 
 /// Parse a `cdef` payload into its entries, for a JPH file when `jph`. The
 /// length is checked before anything is allocated.
-fn parse(payload: &[u8], jph: bool) -> Result<Vec<Entry>> {
+pub(super) fn parse(payload: &[u8], jph: bool) -> Result<Vec<Entry>> {
     let &[n0, n1, ref body @ ..] = payload else {
         return Err(Error::file_format(format!(
             "the `cdef` box holds {} bytes, fewer than its 2-byte count",
@@ -175,27 +175,21 @@ pub(crate) enum ChannelPlan {
     },
 }
 
-/// Read the file's `cdef` box into a [`ChannelPlan`] for `channels` input
+/// Plan the file's `cdef` entries (`entries`, from [`super::layout::read`],
+/// which checked the box layout) into a [`ChannelPlan`] for `channels` input
 /// channels: the codestream's components, or the palette's channels when the
-/// palette applies. The box layout is always checked; the entries are checked
-/// against `channels` only when they are applied, so a caller asking for the
-/// raw channels gets them whatever the entries say, as OpenJPEG does with its
-/// "ignore palette and channel definitions" flag. `jph` says whether the file
-/// is a JPH file, where `Typ` 3 is application-defined.
+/// palette applies. The entries are checked against `channels` only when they
+/// are applied, so a caller asking for the raw channels gets them whatever
+/// the entries say, as OpenJPEG does with its "ignore palette and channel
+/// definitions" flag.
 pub(crate) fn plan(
-    header: &Jp2Header<'_>,
+    entries: Option<Vec<Entry>>,
     channels: usize,
     raw_channels: bool,
-    jph: bool,
 ) -> Result<ChannelPlan> {
-    let boxes = header.cdef();
-    if boxes.len() > 1 {
-        return Err(Error::file_format("the file has more than one `cdef` box"));
-    }
-    let Some(payload) = boxes.first() else {
+    let Some(entries) = entries else {
         return Ok(ChannelPlan::None);
     };
-    let entries = parse(payload, jph)?;
     if raw_channels {
         return Ok(ChannelPlan::None);
     }

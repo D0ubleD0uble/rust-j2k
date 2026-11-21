@@ -46,7 +46,6 @@
 //! palette" flag. The budget bounds the expanded channels; with the decoded
 //! components still held, the peak is about twice it (`check_budget`).
 
-use super::header::Jp2Header;
 use super::metadata::{Association, ChannelDefinition, ChannelType, Jp2Metadata};
 use crate::codestream::markers::Siz;
 use crate::samples;
@@ -104,7 +103,7 @@ pub struct Palette {
     /// `NE`, 1..=1024.
     entries: u16,
     /// One per column (`NPC`, 1..=255).
-    columns: Vec<PaletteColumn>,
+    pub(super) columns: Vec<PaletteColumn>,
     /// `NE * NPC` values, entry-major: entry `j` column `i` at
     /// `j * NPC + i`.
     values: Vec<i32>,
@@ -338,42 +337,23 @@ pub(crate) enum PalettePlan {
     },
 }
 
-/// Read the file's palette boxes into a [`PalettePlan`], for a decode at
-/// `reduction` resolution levels down. The box layout is always checked; the
-/// mapping, the column depths and the expanded sample count only when the
-/// palette is applied.
+/// A palette and its `cmap` entries, when the file has a `cmap`.
+pub(super) type PaletteBoxes = (Palette, Option<Vec<(u16, u8, u8)>>);
+
+/// Plan the palette the file's boxes hold (`layout`, from
+/// [`super::layout::read`], which checked the box layout) for a decode at
+/// `reduction` resolution levels down. The mapping, the column depths and the
+/// expanded sample count are checked only when the palette is applied.
 pub(crate) fn plan(
-    header: &Jp2Header<'_>,
+    layout: Option<PaletteBoxes>,
     siz: &Siz,
     reduction: u8,
     cap: samples::Cap,
     raw_channels: bool,
 ) -> Result<PalettePlan> {
-    let (pclrs, cmaps) = (header.pclr(), header.cmap());
-    if pclrs.len() > 1 {
-        return Err(Error::file_format("the file has more than one `pclr` box"));
-    }
-    if cmaps.len() > 1 {
-        return Err(Error::file_format("the file has more than one `cmap` box"));
-    }
-    let Some(pclr) = pclrs.first() else {
-        if cmaps.is_empty() {
-            return Ok(PalettePlan::None);
-        }
-        return Err(Error::file_format(
-            "the file has a `cmap` box but no `pclr` box",
-        ));
-    };
-    if cmap_before_pclr(header) {
-        return Err(Error::file_format(
-            "the `cmap` box comes before the `pclr` box it maps",
-        ));
-    }
-    let palette = Palette::parse(pclr)?;
-    let Some(cmap) = cmaps.first() else {
+    let Some((palette, Some(entries))) = layout else {
         return Ok(PalettePlan::None);
     };
-    let entries = parse_cmap(cmap, palette.columns.len())?;
     if raw_channels {
         let mut index_components = vec![false; siz.components.len()];
         for &(component, mtyp, _) in &entries {
@@ -404,20 +384,9 @@ pub(crate) fn plan(
     Ok(PalettePlan::Apply { palette, channels })
 }
 
-/// Whether the first `cmap` comes before the first `pclr` in read order (every
-/// `jp2h`, then the header boxes misplaced after it). OpenJPEG needs the
-/// palette first to know how many `cmap` entries to read.
-fn cmap_before_pclr(header: &Jp2Header<'_>) -> bool {
-    let position = |kind: &[u8; 4]| header.children.iter().position(|c| &c.kind == kind);
-    match (position(b"cmap"), position(b"pclr")) {
-        (Some(cmap), Some(pclr)) => cmap < pclr,
-        _ => false,
-    }
-}
-
 /// Parse a `cmap` box into `(CMP, MTYP, PCOL)` triples, one per palette
 /// column. Bytes after the last of them are ignored, as OpenJPEG does.
-fn parse_cmap(payload: &[u8], count: usize) -> Result<Vec<(u16, u8, u8)>> {
+pub(super) fn parse_cmap(payload: &[u8], count: usize) -> Result<Vec<(u16, u8, u8)>> {
     let needed = count * 4;
     let Some(body) = payload.get(..needed) else {
         return Err(Error::file_format(format!(
