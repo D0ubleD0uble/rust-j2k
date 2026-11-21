@@ -1168,18 +1168,14 @@ fn walk_tiles<'a>(
         }
 
         let first_part = sot.tile_part_index == 0;
-        // Not strict, a tile-part the input ends inside (its `Psot` runs past
-        // the end, or it has none) may end inside its header too. Then the
-        // codestream ends at this tile-part, and none of it is read.
-        let cut = !strict
-            && (sot.psot == 0
-                || part_offset
-                    .checked_add(sot.psot as usize)
-                    .is_none_or(|end| end > bytes.len()));
+        let header_at = cur.pos;
         let end = part_end(bytes.len(), part_offset, sot.psot);
         let (tile_header, packed) = match read_tile_part_header(&mut cur, end, main, first_part) {
             Ok(read) => read,
-            Err(_) if cut => {
+            // Not strict, a tile-part the input ends inside may end inside
+            // its header too. Then the codestream ends at this tile-part, and
+            // none of it is read.
+            Err(_) if !strict && header_may_be_cut(bytes, part_offset, sot.psot, header_at) => {
                 if sot.psot != 0 {
                     entries.push(ReportEntry::TruncatedTilePart {
                         tile: u32::from(sot.tile_index),
@@ -1619,6 +1615,22 @@ pub(super) fn part_end(len: usize, offset: usize, psot: u32) -> usize {
     }
 }
 
+/// Whether a fault in the header (from `header_at`) of the tile-part at
+/// `offset` may be the input cut short, which a walk with `strict` off reads
+/// as the end of the codestream: its `Psot` runs past the end of the input,
+/// or it is 0 (the tile-part runs to the end) and the header's markers run
+/// to the end of the input before they reach `SOD`. A `Psot` 0 tile-part
+/// whose header the input holds in full is the last one, not a cut one, so
+/// a fault in its header is refused.
+pub(super) fn header_may_be_cut(bytes: &[u8], offset: usize, psot: u32, header_at: usize) -> bool {
+    match psot {
+        0 => header_is_cut(bytes, header_at),
+        psot => offset
+            .checked_add(psot as usize)
+            .is_none_or(|end| end > bytes.len()),
+    }
+}
+
 /// A codestream carrying `PPT` beside a `PPM`, which A.7.4 and A.7.5
 /// disallow. The fault walk gives it too, so it is built in one place.
 pub(super) fn both_packed_headers() -> Error {
@@ -1791,25 +1803,51 @@ fn read_tile_part_header(
 /// segment by its length. A delimiter (`SOC`, `SOT`, `EOC`), a byte pair that
 /// is no marker, a length below 2, or running past `end` breaks the chain.
 /// One pass over the rest of the header, made only where it is refused.
-fn reaches_sod(bytes: &[u8], mut at: usize, end: usize) -> bool {
+fn reaches_sod(bytes: &[u8], at: usize, end: usize) -> bool {
+    header_chain(bytes, at, end) == Chain::Sod
+}
+
+/// Whether the input ends inside the tile-part header whose first marker is
+/// at `at`: its marker segments run to the end of the input before they
+/// reach `SOD` or break, stepped over as [`reaches_sod`] steps over them.
+/// The chain over a longer input starts the same way, so a header whose
+/// markers reach `SOD`, or break, within the input does so in every longer
+/// input too.
+fn header_is_cut(bytes: &[u8], at: usize) -> bool {
+    header_chain(bytes, at, bytes.len()) == Chain::Ends
+}
+
+/// How the marker segments of a tile-part header end, for [`reaches_sod`]
+/// and [`header_is_cut`].
+#[derive(Debug, PartialEq, Eq)]
+enum Chain {
+    /// At a `SOD` that ends at or before `end`.
+    Sod,
+    /// At a delimiter, a byte pair that is no marker, or a length below 2.
+    Broken,
+    /// At `end`, or in a marker or segment that runs past it.
+    Ends,
+}
+
+/// The chain of marker segments from `at`, followed until it ends.
+fn header_chain(bytes: &[u8], mut at: usize, end: usize) -> Chain {
     loop {
         if at.saturating_add(2) > end {
-            return false;
+            return Chain::Ends;
         }
         let Some(code) = read_u16(bytes, at) else {
-            return false;
+            return Chain::Ends;
         };
         match code {
-            marker::SOD => return true,
-            marker::SOC | marker::SOT | marker::EOC => return false,
-            _ if !marker::is_marker(code) => return false,
+            marker::SOD => return Chain::Sod,
+            marker::SOC | marker::SOT | marker::EOC => return Chain::Broken,
+            _ if !marker::is_marker(code) => return Chain::Broken,
             _ if !marker::has_segment(code) => at += 2,
-            _ => {
-                let Some(length) = read_u16(bytes, at + 2).filter(|&length| length >= 2) else {
-                    return false;
-                };
-                at += 2 + usize::from(length);
-            }
+            _ => match read_u16(bytes, at + 2) {
+                Some(length) if length >= 2 => at += 2 + usize::from(length),
+                Some(_) => return Chain::Broken,
+                None => return Chain::Ends,
+            },
         }
     }
 }

@@ -26,8 +26,8 @@ use std::collections::hash_map::Entry;
 use super::{
     Cursor, Error, MAX_POC_VOLUMES, Overrides, ParsedHeader, Restated, Result, TileHeader,
     both_packed_headers, check_poc_budget, check_restatement, check_tile_in_full,
-    count_is_one_short, decode_sot, marker, part_end, read_tile_part_header, read_u16, segment,
-    sot_at, tile_overrides_are_valid,
+    count_is_one_short, decode_sot, header_may_be_cut, marker, part_end, read_tile_part_header,
+    read_u16, segment, sot_at, tile_overrides_are_valid,
 };
 
 impl ParsedHeader {
@@ -224,11 +224,6 @@ fn walk(
         }
 
         let first_part = sot.tile_part_index == 0;
-        let cut = !strict
-            && (sot.psot == 0
-                || part_offset
-                    .checked_add(sot.psot as usize)
-                    .is_none_or(|end| end > bytes.len()));
         let header_at = cur.pos;
         // A header of `SOD` alone, as most later tile-parts have, reads as
         // nothing: no marker of its own, no `POC` volume and no packed
@@ -242,7 +237,7 @@ fn walk(
         };
         let read = match read {
             Ok(read) => read,
-            Err(_) if cut => {
+            Err(_) if !strict && header_may_be_cut(bytes, part_offset, sot.psot, header_at) => {
                 ended_early = true;
                 break;
             }

@@ -5218,8 +5218,62 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
     let other_qcd = seg(0xFF5C, &synth::qcd_none_body(1, &[8]));
     let coc = seg(0xFF53, &[0, 0, 0, 1, 1, 0, 1]);
     let all = |tile: u16| part(tile, 0, 1, &[], &[]);
+    // A last tile-part of tile 3 with `Psot` 0, `extra` in its header and
+    // `data` after its `SOD`.
+    let last = |extra: &[u8], data: &[u8]| {
+        let mut bytes = part(3, 0, 1, extra, data);
+        bytes[6..10].fill(0);
+        bytes
+    };
+    // The same, with the input ending inside a `COM` in its header.
+    let cut_last = {
+        let mut bytes = last(&[0xFF, 0x64, 0, 16, 1, 2, 3], &[]);
+        bytes.truncate(bytes.len() - 2);
+        bytes
+    };
     // (name, strict, bytes, the start of the error, or "" for none)
     let cases: Vec<(&str, bool, Vec<u8>, &str)> = vec![
+        (
+            "an unrecognized marker in a whole `Psot` 0 header",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), last(&seg(0xFF7F, &[]), &[])],
+                &eoc,
+            ),
+            "Unsupported(\"unrecognized marker 0xFF7F in a tile-part header",
+        ),
+        (
+            "a reserved marker in a whole `Psot` 0 header",
+            false,
+            grid_of_four(
+                &[],
+                &[all(0), all(1), all(2), last(&[0xFF, 0x30], &[])],
+                &eoc,
+            ),
+            "Unsupported(\"reserved marker 0xFF30 in a tile-part header",
+        ),
+        (
+            "a `Psot` 0 header segment whose length runs past `SOD`",
+            false,
+            grid_of_four(
+                &[],
+                &[
+                    all(0),
+                    all(1),
+                    all(2),
+                    last(&[0xFF, 0x64, 0, 4], &[0x12, 0x34]),
+                ],
+                &eoc,
+            ),
+            "Codestream(\"expected a marker in a tile-part header, found 0x1234\")",
+        ),
+        (
+            "a `Psot` 0 header the input ends inside",
+            false,
+            grid_of_four(&[], &[all(0), all(1), all(2), cut_last], &[]),
+            "",
+        ),
         (
             "restated COD and QCD",
             true,
