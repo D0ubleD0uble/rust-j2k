@@ -49,6 +49,10 @@ mod synth;
 #[path = "../../tests/support/tile_body.rs"]
 mod tile_body;
 use libfuzzer_sys::fuzz_target;
+
+#[path = "../../tests/support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
 use tile_body::wrap_roi;
 
 #[path = "../common/partial.rs"]
@@ -66,6 +70,6 @@ fuzz_target!(|data: &[u8]| {
     // a body that runs short or long instead of refusing it.
     let bytes = wrap_roi(variant, roi, body);
     let options = rust_j2k::DecodeOptions::default();
-    let strict = rust_j2k::decode_with(&bytes, &options);
+    let strict = checked(rust_j2k::decode_with(&bytes, &options));
     partial::check(&bytes, &options, &strict);
 });

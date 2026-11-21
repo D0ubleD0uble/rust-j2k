@@ -22,6 +22,10 @@
 #[path = "../../tests/support/synth.rs"]
 mod synth;
 use libfuzzer_sys::fuzz_target;
+
+#[path = "../../tests/support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
 use rust_j2k::{ColorOutput, DecodeOptions};
 use synth::bx;
 
@@ -70,8 +74,8 @@ fuzz_target!(|data: &[u8]| {
         _ => (RGB8, (24, 16), 3, 8),
     };
     let options = DecodeOptions::default().with_color(ColorOutput::Srgb);
-    let _ = rust_j2k::decode_with(
+    let _ = checked(rust_j2k::decode_with(
         &wrap(codestream, size, components, depth, profile),
         &options,
-    );
+    ));
 });

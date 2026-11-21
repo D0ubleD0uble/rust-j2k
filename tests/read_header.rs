@@ -12,6 +12,10 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "support/inconsistent.rs"]
+mod inconsistent;
+use inconsistent::checked;
+
 use rust_j2k::{
     ColorSpace, DecodeOptions, Error, Header, Image, Jp2Metadata, Ratio, Region, decode_with,
     read_header, read_header_with,
@@ -378,12 +382,12 @@ fn sweep_agrees_with_decode(reduction: u8) {
         let bytes = std::fs::read(path).unwrap();
         {
             let options = DecodeOptions::default().with_resolution_reduction(reduction);
-            let header = read_header_with(&bytes, &options);
-            let decoded = decode_with(&bytes, &options);
+            let header = checked(read_header_with(&bytes, &options));
+            let decoded = checked(decode_with(&bytes, &options));
             if reduction == 0 {
                 assert_eq!(
                     keyed(header.clone()),
-                    keyed(read_header(&bytes)),
+                    keyed(checked(read_header(&bytes))),
                     "{name}: read_header is the default"
                 );
             }

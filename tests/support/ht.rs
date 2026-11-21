@@ -423,7 +423,7 @@ impl HtCodestream {
 /// `Unsupported` fails the grade, and `Unsupported` is *not yet decoded*.
 fn decode_graded(bytes: &[u8], options: &DecodeOptions) -> Result<rust_j2k::Image, Grade> {
     match panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        rust_j2k::decode_with(bytes, options)
+        super::inconsistent::checked(rust_j2k::decode_with(bytes, options))
     })) {
         Err(_) => Err(Grade::Failed(
             "panicked (decode must return a typed error)".into(),

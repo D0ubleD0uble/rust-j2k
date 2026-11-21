@@ -72,7 +72,7 @@ pub fn samples(weight: u64) -> u64 {
 /// The samples `data` declares, counted as [`over`] counts them, before the budget.
 pub fn declared(data: &[u8]) -> u128 {
     let options = DecodeOptions::default().with_sample_limit(WorkLimit::Unlimited);
-    let header = rust_j2k::read_header_with(data, &options)
+    let header = super::inconsistent::checked(rust_j2k::read_header_with(data, &options))
         .map(|header| {
             header
                 .components
