@@ -136,6 +136,15 @@ const RESCUED_BY_A_TILE_PART: &[&str] = &[
     "header/rescued_lower_tile_then_data_fault.j2k",
 ];
 
+/// Files whose `SIZ` alone is refused: a component with no sample in the
+/// image. A prefix that holds the whole `SIZ` gets that error, so only the
+/// cuts before its end are `Incomplete`.
+const REFUSED_AT_SIZ: &[&str] = &[
+    "tile_header/tilecomp_16_256.j2k",
+    "tile_header/tilecomp_heavy_16_256.j2k",
+    "tile_header/tilecomp_override_16_256.j2k",
+];
+
 /// Every prefix of `bytes` that ends before the whole first `SOT` marker of
 /// the codestream which starts at `cs_at`, with that `SOT` at `cs_at + sot`,
 /// is `Incomplete`: from `read_header`, a strict decode and a partial one.
@@ -208,7 +217,16 @@ fn every_cut_inside_the_main_header_is_incomplete() {
     for path in &paths {
         let bytes = std::fs::read(path).unwrap();
         let name = path.strip_prefix(fixtures()).unwrap().display().to_string();
-        if let Some((sot, ht)) = walk(&bytes) {
+        if REFUSED_AT_SIZ.contains(&name.as_str()) {
+            let siz_end = 4 + usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+            assert_cuts_are_incomplete(&name, &bytes, 0, siz_end - 2, false);
+            let refused = read_header(&bytes[..siz_end]).map(|_| ());
+            assert!(
+                matches!(refused, Err(Error::Marker(_))),
+                "{name}: {refused:?}"
+            );
+            codestreams += 1;
+        } else if let Some((sot, ht)) = walk(&bytes) {
             // A mixed-mode codestream decodes, so its cuts are `Incomplete`
             // like any other's.
             assert_cuts_are_incomplete(&name, &bytes, 0, sot, true);

@@ -25,8 +25,8 @@ use super::progression::{
 use super::{
     BandState, Budget, CodedData, ComponentCoded, Delimiters, END_VISITS, Journal, Meter, Packet,
     PacketStreams, PacketWalk, Reach, Refused, Resolution, ResolutionGeom, Scratch, Undo,
-    WorkRefusal, band_states, build_subbands, dropped_blocks, mark_gap, parse_packet, refused,
-    tile_geometry, undo,
+    WorkRefusal, band_states, build_subbands, dropped_blocks, empty_components, mark_gap,
+    parse_packet, refused, tile_geometry, undo,
 };
 
 /// The bytes the walks kept may hold whatever the bytes fed, when that is
@@ -486,6 +486,15 @@ enum Advanced {
     Failed(Error, u64),
 }
 
+// [`TileWalk::bytes`] counts the walk's own size against the room the
+// walks may keep, so a change to it moves where an `IncrementalDecoder`
+// keeps or lets go of a walk, and so what a refine spends. A field added
+// here is a change to that behavior, not only to the struct: a new size
+// means measuring the spend again against main's, not only updating the
+// number.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<TileWalk>() == 1200);
+
 /// One tile's walk.
 struct TileWalk {
     /// How many `POC` volumes the tile's header had when the walk started.
@@ -854,6 +863,15 @@ impl TileWalk {
         }
         if let Some(error) = &self.failure {
             return Err(Refused::Other(error.clone()));
+        }
+        // The components the tile holds no sample of, charged once the
+        // geometry is built, as a decode charges them.
+        if let Some(why @ WorkRefusal::EmptyComponents { steps, .. }) =
+            empty_components(header, tile.index)
+        {
+            if !meter.try_spend(steps) {
+                return Err(Refused::Work(why));
+            }
         }
         // `dedup` is whether the order has more than one volume; the order
         // itself is let go once the walk is done.

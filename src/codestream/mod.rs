@@ -2571,6 +2571,17 @@ fn validate_geometry(siz: &Siz) -> Result<()> {
             siz.y_offset,
         )));
     }
+    // A component sub-sampled past the image's extent holds no sample of it
+    // (ISO B.2, Eq. B-2 gives `x0 == x1` or `y0 == y1`). A single tile may
+    // hold none of a component, but the image must hold some: OpenJPEG
+    // fails to decode such a component.
+    for comp in 0..siz.components.len() {
+        if siz.component_rect(comp).is_some_and(|rect| rect.is_empty()) {
+            return Err(Error::marker(format!(
+                "component {comp} holds no sample in the image"
+            )));
+        }
+    }
     // `Isot` is a `u16` running 0..=65534 (Table A-10), so a grid finer than
     // that has tiles no tile-part can name. The bound also caps the per-tile
     // bookkeeping — one resolved header and one geometry walk each — that the

@@ -601,12 +601,12 @@ decode's error for the tile-parts is kept too, with its heap above, where
 it stood after the last tile-part it read whose `Psot` is not 0 and whose
 end is followed by an `SOT`: every step before there read only bytes a
 longer input holds the same. Each call that refuses a tile, stops at a
-budget or meets a tile whose counts under its own header are at fault
-goes on from there, reading the tile-parts fed since and the one it was
-kept before. It checks each tile's own header as it reads the tile's first
-tile-part, and the tile's `POC` volumes as each later one adds to them, so
-a walk that stops on a fault is kept at the start of that tile-part and
-reads it again on the next call. The walk depends on no option but
+budget or meets a tile whose own header is at fault goes on from there,
+reading the tile-parts fed since and the one it was kept before. It checks
+each tile's own header as it reads the tile's first tile-part, and the
+tile's `POC` volumes as each later one adds to them, so a walk that stops
+on a fault is kept at the start of that tile-part and reads it again on
+the next call. The walk depends on no option but
 `strict`, which the header read always has off, so it is kept over a
 change of options. With tile 0 refused and `Region::Tile(0)`, calls after
 each 1 MiB fed of the 235 MB file took 21.5 s in all with a walk from the
@@ -705,13 +705,15 @@ visit 262144 code-blocks per layer; it now decodes in 0.15 s.
 The walk needs a bound because a one-byte header can still step over each
 row of its precinct, and a positional order can sweep positions that hold
 no packet. Walking every tile's packets may take at most max(2^24, 32 × the
-tiles' data bytes) steps. A step is a
-packet read, a span stepped over, or a sweep position, once for each
-(component, resolution) checked there. Only the pairs that hold a precinct
-are checked, and RPCL sweeps no resolution where none does. Code-block
-entries that read a bit are not counted, since the header's bytes already
-pay for them. Past the bound the decode is `Limit`. It is one bound for the
-whole decode, not one per tile. `DecodeOptions::packet_work_limit`
+tiles' data bytes) steps. A step is a packet read, a span stepped over, or a
+sweep position, once for each (component, resolution) checked there. Only
+the pairs that hold a precinct are checked, and RPCL sweeps no resolution
+where none does. Code-block entries that read a bit are not counted, since
+the header's bytes already pay for them. A tile-component that holds no
+sample costs 32 steps for each of its resolutions
+([Tile-components with no sample](#tile-components-with-no-sample)). Past
+the bound the decode is `Limit`. It is one bound for the whole decode, not
+one per tile. `DecodeOptions::packet_work_limit`
 raises it (`WorkLimit::Raised(n)`, n times the floor and the rate) or lifts
 it (`WorkLimit::Unlimited`), for the walk `read_header_with` makes too
 ([The `read_header` walk](#the-read_header-walk)).
@@ -757,7 +759,9 @@ asserts each is under 1/32 of it.
 
 ### Tile geometry
 
-At full resolution, setting up a tile's geometry is not counted. A tile of
+At full resolution, setting up a tile's geometry is not counted, but for a
+tile-component that holds no sample
+([Tile-components with no sample](#tile-components-with-no-sample)). A tile of
 one sample at an odd origin has 32 resolutions per component that hold no
 precinct, and each component of each tile costs about a byte. Since #271
 those resolutions get no band or code-block geometry, and the walk checks no
@@ -782,6 +786,40 @@ known per byte. The same change lets the layer orders decode 8 such
 components in one tile, and the positional orders a 16-component column
 of 2^17 rows, which were `Limit` and which OpenJPEG decodes
 (`tests/work_bound.rs`).
+
+### Tile-components with no sample
+
+A tile narrower or shorter than a component's sub-sampling holds no sample
+of it (ISO B.3, Eq. B-12). Such a tile-component has no precinct and no
+packet, and decodes as the standard defines it (#595). OpenJPEG 2.5.0
+agrees where it decodes such a file, and fails some
+([openjpeg-departures.md](openjpeg-departures.md#a-tile-with-no-sample-of-a-component)).
+Its setup and decode still cost about 0.3 µs, plus 0.1 µs for each
+resolution, and no byte pays for them. So each resolution of a tile-component with no sample costs
+32 steps, as the end of a tile's data does with `strict` off: the default
+bound's 2^24 steps hold about a quarter of a second of it. A tile-component
+that holds a sample has a packet, which pays for it, so a file without an
+empty one spends no more than it did.
+
+Measured on release builds. Each shape is one-sample tiles from the origin,
+component 0 full size and the others sub-sampled 255 both ways, so each of
+them holds one sample, in one tile, and every other tile holds none. The
+first three are `one_tile_holds_the_rest` in `tests/empty_tile_component.rs`,
+with the sample in tile 0; the last is `tilecomp_255_16384` from
+`scripts/gen-tile-header-fixtures.py --big`, with the sample in the last
+tile. "Not charged" is the decode with the fix for #595 but without the
+charge.
+
+| Shape | Size | Not charged | Charged | OpenJPEG 2.5.0 |
+| ----- | ---- | ----------- | ------- | -------------- |
+| 64x64 tiles, 4096 components | 78 KB | 10.2 s | `Limit`, 0.2 s | 11.2 s, 17.8 GB |
+| 64x64 tiles, 16384 components | 127 KB | 30.3 s | `Limit`, 0.24 s | |
+| 32x32 tiles, 4096 components, 32 levels | 163 KB | 15.7 s | `Limit`, 0.24 s | |
+| 255x255 tiles, 16384 components | 1.0 MB | over 120 s | `Limit`, 0.3 to 0.5 s | 25 s, 55 GB |
+
+The OpenJPEG figure for the last shape is from #256.
+`the_setup_of_an_empty_tile_component_spends_the_work_bound` checks the
+charge against the default bound, with and without wavelet levels.
 
 ### Geometry at a reduction
 
@@ -1123,10 +1161,12 @@ entries and 300 components, and
 
 At decode, a tile with no markers runs under the main header, borrowed. A
 tile with markers is resolved in full, sized by the component count, and
-the decode then spends at least that much on its components: every
-tile-component must hold a sample, so tiles × components is at most the
-sample limit for a file that decodes. TLM entries are checked and dropped,
-since nothing reads them. Measured on release builds
+the decode then spends at least that much on its components. A
+tile-component that holds a sample has a packet, a byte of the file, and
+one that holds none costs steps of the packet work bound
+([Tile-components with no sample](#tile-components-with-no-sample)), so
+tiles × components is bounded for a file that decodes. TLM entries are
+checked and dropped, since nothing reads them. Measured on release builds
 (`scripts/gen-tile-header-fixtures.py --big`):
 
 | Shape | Size | Before #256 | After #256 | OpenJPEG 2.5.0 |
@@ -1138,5 +1178,11 @@ since nothing reads them. Measured on release builds
 | 65025 tiles, 1 MB of TLM entries, decodes | 2.0 MB | 13.2 s | 56 ms | 0.34 s |
 | 65025 tiles, 4 MB of TLM entries, decodes | 5.2 MB | 85.5 s | 63 ms | 0.35 s |
 
-The first four are refused at tile 0, where every component but the first holds
-no sample. The OpenJPEG figures for the 16384-component shapes are from #256.
+The first two hold no sample of any component but the first, so they are
+refused with `SIZ` (`Error::Marker`) since #595; the 3 and 9 ms figures are
+from before, when they were refused at tile 0. In the next two each of
+those components holds one sample, in the last tile, and they are refused
+by the packet work bound in 0.3 to 0.5 s
+([Tile-components with no sample](#tile-components-with-no-sample)); the
+17 and 26 ms figures are from before #595, when they too were refused at
+tile 0. The OpenJPEG figures for the 16384-component shapes are from #256.

@@ -639,11 +639,10 @@ enum OwnHeader {
     /// At fault ([`Rescue::own_fault`]).
     Fault,
     /// Read, and within the reduction (the one [`Kept`] is for): the
-    /// resolutions it gives the tile, and its [`tier2::tile_counts`], or
-    /// `None` where those are at fault ([`Rescue::own_fault`] too).
+    /// resolutions it gives the tile, and its [`tier2::tile_counts`].
     Read {
         resolutions: u64,
-        counts: Option<(u64, u64)>,
+        counts: (u64, u64),
     },
 }
 
@@ -735,9 +734,10 @@ impl<'a> Rescue<'a> {
     /// checked first, as the decode checks it, and one with none with the
     /// decode's error for the tile-parts with `strict` on
     /// ([`walk_fault`](Self::walk_fault)) and not at all with it off (the
-    /// decode leaves it out). A tile whose tile-part header is at fault, or
-    /// whose counts under it are, gets the decode's error for the
-    /// tile-parts ([`own_fault`](Self::own_fault)). So a tile-part `COD`
+    /// decode leaves it out). A tile whose tile-part header is at fault
+    /// gets the decode's error for the tile-parts
+    /// ([`own_fault`](Self::own_fault)). A header that reads gives counts
+    /// that hold: what `tile_counts` refuses, the parse refuses first. So a tile-part `COD`
     /// that brings a tile within the caps is admitted, and one that takes
     /// it over them is refused. A tile within them (`None`) whose first
     /// tile-part has no `COD` or `COC` is admitted unread and uncharged.
@@ -806,11 +806,7 @@ impl<'a> Rescue<'a> {
             return Ok(false);
         }
         check_reduction(&own, self.reduction, Some(index as usize))?;
-        let counts = match tier2::tile_counts(&own, index) {
-            Ok(counts) => Some(counts),
-            Err(error @ Error::Limit(_)) => return Err(error),
-            Err(_) => None,
-        };
+        let counts = tier2::tile_counts(&own, index)?;
         self.learn(
             index,
             whole,
@@ -843,30 +839,23 @@ impl<'a> Rescue<'a> {
     }
 
     /// Hold tile `index` to the caps under its own header, which gave its
-    /// tile `counts`, as [`tier2::check_tile`] holds it. Counts at fault
-    /// (`None`) are [`own_fault`](Self::own_fault)'s.
-    fn check_own(&mut self, index: u32, counts: Option<(u64, u64)>) -> Result<bool> {
-        let Some(counts) = counts else {
-            return self.own_fault();
-        };
+    /// tile `counts`, as [`tier2::check_tile`] holds it.
+    fn check_own(&self, index: u32, counts: (u64, u64)) -> Result<bool> {
         match tier2::check_counts(index, counts, self.cap) {
             Err(error @ Error::Limit(_)) => Err(error),
             _ => Ok(true),
         }
     }
 
-    /// The error for a tile whose own tile-part header, or whose counts
-    /// under it, are at fault: the decode's error for the tile-parts, with
+    /// The error for a tile whose own tile-part header is at fault: the
+    /// decode's error for the tile-parts, with
     /// `strict` as the read has it ([`codestream::tile_parts_fault`]), as
     /// the decode parses every tile-part before it counts any tile. A
     /// tile-part header at fault is one that parse finds, if it finds no
     /// fault before it, except, with `strict` off, a fault the input may
     /// yet complete, which [`count`](Self::count) leaves to the decode
-    /// unwalked. Where the parse finds none (counts at fault that only the
-    /// decode's count of the tile finds), the tile is left to the decode.
-    /// So are counts at fault in a tile-part not whole in the input (cut,
-    /// or with a `Psot` of 0), where the parse with `strict` off finds no
-    /// fault. The tile-parts are walked once at most a call, and a call of
+    /// unwalked. Where the parse finds none, the tile is left to the
+    /// decode. The tile-parts are walked once at most a call, and a call of
     /// [`IncrementalDecoder::header`](crate::IncrementalDecoder::header)
     /// goes on from the walk the last one kept ([`Faults`]).
     fn own_fault(&mut self) -> Result<bool> {
@@ -2198,69 +2187,6 @@ pub(crate) mod tests {
         eprintln!("{kept} reads in {calls} calls, {faults} at fault");
         assert!(faults * 10 > calls * 9, "{faults} of {calls}");
         assert!(kept <= parts + 2 * calls, "{kept} reads in {calls} calls");
-    }
-
-    /// The calls of `IncrementalDecoder::header` after each feed walk the
-    /// tile-parts about once in all for a tile whose counts under its own
-    /// header are at fault, where the parse finds no fault, as each call
-    /// goes on from the fault walk the last one kept. Two tiles of 255
-    /// tile-parts each, read at a reduction of 1: tile 0, one sample wide,
-    /// has an empty area on component 1 and a tile-part `COD`, and tile 1 is
-    /// over the caps under the main header and within them under its own.
-    /// Fed 5 bytes at a time, a call reads the `SOT`s fed since the last one
-    /// and the one where the walk was kept. A walk from the start on each
-    /// call read 364,368 `SOT`s here.
-    #[test]
-    fn header_after_each_feed_walks_for_counts_at_fault_about_once() {
-        use crate::synth::{cod_body, qcd_none_body, seg, siz_body, tile_part};
-        let mut main_cod = cod_body(1, 1, 4, 0);
-        main_cod[0] = 1;
-        main_cod.extend([0x00, 0x11]);
-        let own_cod = seg(0xff52, &cod_body(1, 1, 4, 0));
-        let siz = siz_body(
-            [2048, 1024, 1023, 0, 1024, 1024, 0, 0],
-            &[[7, 1, 1], [7, 255, 1]],
-        );
-        let mut bytes = vec![0xff, 0x4f];
-        bytes.extend(seg(0xff51, &siz));
-        bytes.extend(seg(0xff52, &main_cod));
-        bytes.extend(seg(0xff5c, &qcd_none_body(2, &[8; 4])));
-        bytes.extend(tile_part(0, 0, 0, &own_cod, &[]));
-        bytes.extend(tile_part(1, 0, 0, &own_cod, &[]));
-        for part in 1..255u8 {
-            bytes.extend(tile_part(0, part, 0, &[], &[]));
-            bytes.extend(tile_part(1, part, 0, &[], &[]));
-        }
-        bytes.extend([0xff, 0xd9]);
-        let options = DecodeOptions::default().with_resolution_reduction(1);
-        let lenient = options.clone().with_strict(false);
-        // The header reads, and the decode refuses tile 0.
-        assert!(read_header(&bytes, &lenient).is_ok());
-        let decoded = decode_with(&bytes, &lenient);
-        assert!(
-            matches!(&decoded, Err(Error::Codestream(d)) if d.message() == "tile 0 has an empty area on component 1"),
-            "{:?}",
-            decoded.map(|_| ())
-        );
-        let mut decoder = crate::IncrementalDecoder::new(options).expect("valid options");
-        let (mut kept, mut calls) = (0u64, 0u64);
-        for chunk in bytes.chunks(5) {
-            decoder.feed(chunk);
-            codestream::tests::SOT_READS.with(|reads| reads.set(0));
-            let header = decoder.header();
-            kept += codestream::tests::SOT_READS.with(std::cell::Cell::get);
-            calls += 1;
-            let alone = match read_header(decoder.bytes(), &lenient) {
-                Ok(header) => Ok(Some(header)),
-                Err(Error::Incomplete(_)) => Ok(None),
-                Err(error) => Err(error),
-            };
-            assert_eq!(format!("{header:?}"), format!("{alone:?}"));
-        }
-        let parts = 2 * 255;
-        eprintln!("{kept} reads in {calls} calls of {parts} tile-parts");
-        assert!(kept > 0);
-        assert!(kept <= parts + calls, "{kept} reads in {calls} calls");
     }
 
     /// A gray codestream of `tiles` tiles in a row, whose main header and

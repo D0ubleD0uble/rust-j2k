@@ -35,7 +35,8 @@ fn cod(levels: u8) -> Vec<u8> {
 
 /// `SIDE^2` 1x1 tiles on the image `[1, SIDE + 1)^2` (`tilecomp` in
 /// `scripts/gen-tile-header-fixtures.py`): component 0 full size, the other
-/// `components - 1` subsampled 255 times both ways. Every tile but the last
+/// `components - 1` subsampled `SIDE` times both ways, so each holds one
+/// sample, in the last tile, and the image is valid. Every tile but the last
 /// carries a COD restating the main header's when `tile_cod` is set; the last
 /// carries a COD of one level, which the main QCD's one step cannot
 /// quantize, so the tile headers are refused, at the last one.
@@ -43,7 +44,7 @@ fn tiles(components: u16, tile_cod: bool) -> Vec<u8> {
     assert!(components >= 1, "SIZ needs a component");
     let siz = synth::siz_body([SIDE + 1, SIDE + 1, 1, 1, 1, 1, 1, 1], &{
         let mut c = vec![[7, 1, 1]];
-        c.resize(usize::from(components), [7, 255, 255]);
+        c.resize(usize::from(components), [7, SIDE as u8, SIDE as u8]);
         c
     });
     let mut cs = vec![0xFF, 0x4F];

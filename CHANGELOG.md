@@ -25,6 +25,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - an `RGN`, or a MIXED code-block style, that `CAP` rules out.
 - A `PPT` or `PPM` of length 3 (only its `Zppt` or `Zppm`) is refused as
   `Error::Marker`, where some such files decoded before.
+- A `SIZ` whose image holds no sample of a component is refused as
+  `Error::Marker` ("component C holds no sample in the image"), by
+  `read_header` too. The decode refused it at the first tile as
+  `Error::Codestream` ("tile N has an empty area on component C"), and
+  `read_header` read it.
 
 ### Added
 
@@ -206,6 +211,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A tile narrower than a component's `XRsiz` or shorter than its `YRsiz`,
+  which holds no sample of that component, decodes as the standard
+  defines it: the tile-component has no precinct and no packet, and adds
+  no sample. OpenJPEG 2.5.0 agrees wherever it decodes such a file, and
+  fails some (see `docs/openjpeg-departures.md`). It was refused as
+  `Error::Codestream` ("tile N has an empty area on component C").
+  `read_header`, a window, `Region::Tile` and `IncrementalDecoder` follow.
+  A component with no sample in the whole image is refused with `SIZ`
+  instead (see Migrating from 0.5).
+  No byte pays for the setup of such a tile-component, so each of its
+  resolutions costs 32 steps of the packet work bound: a 1 MB file of
+  65025 tiles and 16384 components is refused as `Error::Limit` in under
+  half a second, where it would take minutes (#595).
 - A `PPT` or `PPM` marker that holds only its `Zppt` or `Zppm` (`Lppt` or
   `Lppm` 3) is refused as `Error::Marker`, since the segment is too short
   for its fields, as OpenJPEG 2.5.0 refuses it. Such a `PPT` decoded before
