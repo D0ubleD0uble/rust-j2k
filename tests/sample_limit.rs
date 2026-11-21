@@ -1111,7 +1111,7 @@ fn at_most_holds_the_codestream_and_the_palette_expansion() {
 /// memory. `SECURITY.md` quotes the peak; reproduce it with
 /// `/usr/bin/time -v cargo test --release --test sample_limit -- --ignored
 /// the_palettized_file_decodes_every_component` and read "Maximum resident
-/// set size" (about 2.1 GB, with the harness).
+/// set size" (about 2.07 GiB, 2,166,088 KiB, with the harness).
 #[cfg(target_pointer_width = "64")]
 #[test]
 #[ignore = "peaks near 2 GiB"]

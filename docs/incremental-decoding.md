@@ -45,7 +45,7 @@ does again on each refine.
   eighth of its samples: about 64 MiB just past 2^29 samples, and more for a
   larger image. Each refine before that waits on `Waiting::SampleLimit`. The
   cadence doubles the bytes between tries, so the first image can come at up
-  to twice that: a file over 2^29 samples of 296 MB gave its first image at
+  to twice that: a 296 MB file of more than 2^29 samples gave its first image at
   128 MiB fed (measured, reported in #474). The sample count is taken at the
   reduction, so a viewer that wants a preview sooner can set a resolution
   reduction first. The tile caps on code-blocks and precincts are not counted
@@ -210,8 +210,7 @@ refused once its `jp2c` box header is in), and `bytes` borrows the bytes fed.
   decode charges to the packet bound. So a change of the reduction alone
   keeps every walk, and each walk charges the code-blocks the new
   reduction drops, counted from the geometry it holds. A walk whose
-  geometry failed holds none to count from, and is let go. That is
-  defensive. The public API does not reach this: a decoder keeps a walk
+  geometry failed holds none to count from, and is let go. The public API does not reach this: a decoder keeps a walk
   only after `check_tile` has built the same geometry and passed the caps. A
   larger reduction has a smaller image, so the walks kept may no longer fit in
   the room (see [Work and memory](#work-and-memory)). Then the next refine

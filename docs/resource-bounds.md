@@ -293,7 +293,7 @@ header lists one channel of 2^24 samples. The decode at the defaults holds
 standalone program, and 2.07 GiB under the test harness. Reproduce it with
 `/usr/bin/time -v cargo test --release --test sample_limit -- --ignored
 the_palettized_file_decodes_every_component` and read "Maximum resident set
-size". `AtMost(2^28)` refuses it in about 50 microseconds: "a decode of 31
+size". `AtMost(2^28)` refuses it in well under a millisecond: "a decode of 31
 components needs 520093696 samples". The test
 `at_most_holds_the_codestream_and_the_palette_expansion` asserts the refusal on
 the same header, cut before its tile data.
