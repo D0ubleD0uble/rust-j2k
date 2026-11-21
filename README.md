@@ -220,8 +220,9 @@ has the value R, which is how eccodes and NCEP's g2clib read it.
 
 Every failure comes back as an `Error`. With the default limits, decoding never
 panics or hangs, whatever the input, and needs at most about 6.4 GiB of memory
-for an input of up to 64 MiB, or about 102 bytes per byte of input past that. If
-the machine can't supply that, the allocation fails and the process aborts, as
+for an input of up to 64 MiB, or about 102 bytes per byte of input past that,
+for the shapes measured; files of many one-pass codeword segments need more
+(see `SECURITY.md`). If the machine can't supply that, the allocation fails and the process aborts, as
 in any Rust program. Those figures cover the one-shot decode functions;
 `IncrementalDecoder` keeps per-tile state and can hold up to about three times
 one decode's peak, plus the bytes fed and a table of 24 bytes per tile index up
@@ -328,7 +329,7 @@ use rust_j2k::{DecodeOptions, Error, Image, LimitKind, WorkLimit, decode_with};
 /// is 8 GiB of output and up to about 26 GiB of sample buffers, plus a tile's
 /// code-block and precinct records, and each of the three bounds can reach 4
 /// times its default, and the decode time grows with them. The loop makes at
-/// most five decodes, so up to about 15 times one default decode's work in
+/// most five decodes, so up to about 17 times one default decode's work in
 /// all. Pick the factor you can afford.
 fn decode_raising_limits(bytes: &[u8]) -> Result<Image, Error> {
     const MAX_FACTOR: u32 = 4;

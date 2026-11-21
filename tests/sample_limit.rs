@@ -1145,7 +1145,30 @@ fn the_header_only_file_spends_its_time_in_the_sample_path() {
     assert_eq!((image.width, image.height), (23170, 23170));
 }
 
-/// `AtMost(2^20)` on a tile of 2^18 precincts at its first resolution: the
+/// Decodes the file named by `PEAK_FILE`, under `AtMost(2^PEAK_LOG2_N)` when
+/// `PEAK_LOG2_N` is set and at the defaults otherwise, so a peak in
+/// `docs/resource-bounds.md` can be read with `/usr/bin/time -v`. The files
+/// come from `scripts/gen-tier1-work-bound-fixtures.py --memory DIR`.
+#[test]
+#[ignore = "reads PEAK_FILE; can take seconds and gigabytes"]
+fn decode_the_file_in_peak_file() {
+    let path = std::env::var("PEAK_FILE").expect("set PEAK_FILE to a codestream");
+    let options = match std::env::var("PEAK_LOG2_N") {
+        Ok(log2) => at_most(1 << log2.parse::<u32>().expect("PEAK_LOG2_N is a number")),
+        Err(_) => DecodeOptions::default(),
+    };
+    let bytes = std::fs::read(&path).unwrap();
+    let start = std::time::Instant::now();
+    let result = decode_with(&bytes, &options);
+    let outcome = result.map(|image| (image.width, image.height));
+    eprintln!(
+        "{} bytes in {:?}: {outcome:?}",
+        bytes.len(),
+        start.elapsed()
+    );
+}
+
+/// `AtMost(2^20)` on a tile of 2^18 precincts at resolution 1: the
 /// tile caps are floors, so the bookkeeping dwarfs the 13 MiB the samples
 /// need. Reproduce the peak in `docs/resource-bounds.md` with
 /// `/usr/bin/time -v cargo test --release --test sample_limit -- --ignored

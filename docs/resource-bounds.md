@@ -208,6 +208,9 @@ other docs come from this table and include the input.
 Past 64 MiB of input that is about 43 bytes of peak memory per byte of input
 for a square tile, and up to about 102 for a tile one sample wide. The
 figures past the floor are scaled from the measured multiples, not measured.
+They hold for the shapes measured, not for a file of one-pass codeword
+segments: see [Segment records](#segment-records), which can reach about 350
+bytes of heap per byte of input.
 A tiled image peaks lower, as each tile is reconstructed in turn, and a
 one-tile image is also held to the code-blocks and precincts a tile allows
 ([Code-blocks and precincts per tile](#code-blocks-and-precincts-per-tile)),
@@ -264,12 +267,14 @@ well, at least 2^20 and 2^18 (see [Code-blocks and precincts per
 tile](#code-blocks-and-precincts-per-tile)). Past 2^29 their bookkeeping adds
 at most about a third of the `4·n` bytes; below it, the floors are what a
 tile may hold, and they do not shrink with `n`. One tile's records then add
-up to about 0.6 GiB whatever `n` is (an estimate: 2^20 code-blocks x 480
-bytes + 2^18 precincts x 260 bytes, from the peaks in [Figures for a decode
+up to about 0.8 GiB whatever `n` is (an estimate: 2^20 code-blocks x 560
+bytes + 2^18 precincts x 750 bytes, from the peaks in [Figures for a decode
 service](#figures-for-a-decode-service)). So below about 2^26 the records, not
-the samples, set the peak, and the figure to plan on is 3.2 x 4n + 0.6 GiB +
-the input, not 3.2 x 4n. The measured peaks against `n` are in that section. An `IncrementalDecoder` can hold up to about three times one
-decode's peak, plus the bytes fed. What to set around a decode besides the
+the samples, set the peak. The figure to plan on is 3.2 x 4n for the samples,
+plus about 0.8 GiB for one tile's records, plus up to about 350 bytes for each
+byte of input for [segment records](#segment-records), plus the input. The
+measured peaks against `n` are in that section. An `IncrementalDecoder` can
+hold up to about three times one decode's peak, plus the bytes fed. What to set around a decode besides the
 ceiling (the input size, a timeout, memory for each concurrent decode) is in
 [Running a decode service](../SECURITY.md#running-a-decode-service).
 
@@ -325,12 +330,41 @@ same builder.
 | 2^24 | 205 MiB | `t1bomb(4096, 2, 1)`, 2,054,638 bytes | 674 MiB |
 | 2^26 | 820 MiB | `t1bomb(8192, 3, 1)`, 2,054,638 bytes | 837 MiB |
 
-Every file decoded. Past about 2^26 the sample buffers dominate. The 0.6 GiB
-planning term is an estimate, not a measurement: the records cost about 480
-bytes a code-block (the 2^24 row: (674 - 205) MiB over 2^20 code-blocks) and
-the precinct figure of 260 bytes or more is not isolated here, so no file
-has been measured with both caps full. The largest records measured are the
-2^24 row's.
+Every file decoded. Past about 2^26 the sample buffers dominate. The 0.8 GiB
+planning term is an estimate. The 2^24 row gives the cost of a code-block: its
+sample buffers of a square tile are about 1.35 x 4n = 86 MiB, which leaves
+(674 - 86) MiB over about 2^20 code-blocks, about 560 bytes each. The 2^20 row
+holds 261,632 precincts and about 800,000 code-blocks, nearly both caps, and
+peaks at 239 MiB, so the two caps together have not been shown to reach the
+estimate; the precinct figure of 750 bytes is from #583's probes and is not
+isolated here.
+
+### Segment records
+
+The caps count code-blocks, not codeword segments. With the code-block style
+`termall` (0x04) each coding pass is its own segment, and the decoder keeps
+about 130 bytes of records for each one (an estimate from the measurements
+below), while a file can code a segment of no bytes in about 3 header bits.
+So heap can reach about 350 bytes for each byte of input, which neither the
+caps nor `AtMost(n)` hold down. Each file below is 4 x 4 code-blocks of 88
+passes, from `scripts/gen-tier1-work-bound-fixtures.py --memory DIR`
+(`termall_SIZE_2_88.j2k`), decoded once in a release build with `/usr/bin/time
+-v`.
+
+| File | Size | Limit | Peak | Source |
+| ---- | ---- | ----- | ---- | ------ |
+| 1024 x 1024 | 2.3 MB | `AtMost(2^20)` | 720 MiB | measured here |
+| 2048 x 2048 | 9.3 MB | `AtMost(2^22)` | 2.80 GiB | reported in #585 |
+| 4096 x 4096 | 37 MB | `AtMost(2^24)` | 11.2 GiB | reported in #585 |
+| 4096 x 4096 | 37 MB | the defaults | 11.2 GiB | reported in #585 |
+
+Reproduce the first row with `PEAK_FILE=DIR/termall_1024_2_88.j2k
+PEAK_LOG2_N=20 /usr/bin/time -v cargo test --release --test sample_limit --
+--ignored decode_the_file_in_peak_file` (read "Maximum resident set size":
+737,632 KiB with the harness). Leave `PEAK_LOG2_N` unset for the
+defaults. The peaks are about 320 to 350 bytes a byte of input, against the 43
+to 102 of the default-limit table above. #585 tracks the fix; until it lands,
+size memory for this shape.
 
 **The sample path.** A 102-byte file of 23170 x 23170 samples (536,848,900,
 under 2^29), one tile of five levels and an empty packet for each
@@ -346,16 +380,23 @@ it with `/usr/bin/time -v cargo test --release --test sample_limit --
 tile data, so they raise the work bound, and the decode still runs its passes
 over them. `t1bomb(8192, 6, 88)` with a 120,000-byte last code-block of zeros
 is 196,526 bytes, gzips to 944 bytes, and decodes at the defaults in 13.0 s
-(peak 275 MiB), about 108 us a byte. The same file without the zeros (76,525
+(peak 275 MiB), about 108 µs a byte. The same file without the zeros (76,525
 bytes) is refused in 10 ms by the code-block work bound. The file was made by
-the generator's builder with the last block's length field set to 120,000;
-it is not committed.
+`scripts/gen-tier1-work-bound-fixtures.py --memory DIR`
+(`zeros_8192_6_88.j2k`, and `zeros_none_8192_6_88.j2k` without the zeros). A
+length of 120,000 needs its Lblock raised: Lblock starts at 3 and the length
+field is Lblock + floor(log2(88)) bits, so 8 increments (eight 1 bits and a
+0) put the field at 17 bits, enough for 120,000. Neither file is committed. Reproduce the time
+with `PEAK_FILE=DIR/zeros_8192_6_88.j2k /usr/bin/time -v cargo test --release
+--test sample_limit -- --ignored decode_the_file_in_peak_file` (13.1 s, 275
+MiB).
 
 **The retry loop.** The README's loop makes at most five decodes (the first
 and four retries). Each of the three bounds can be raised to 4 times its
-default, so across the kinds the tier-1 work reaches about 1 + 2 + 4 + 4 + 4
-= 15 times one default decode's. That sum is an estimate from the caps in the
-loop, not a measurement. The memory peak is one decode at the largest factor,
+default, so across the kinds the tier-1 work reaches about 1 + 4 + 4 + 4 + 4
+= 17 times one default decode's (a first refusal can already name
+`Raised(4)`). That sum is an estimate from the caps in the loop, not a
+measurement. The memory peak is one decode at the largest factor,
 not five, plus the tile records above.
 
 **The time.** The file is `t1bomb(16384, 6, 27)` from
