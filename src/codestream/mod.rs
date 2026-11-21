@@ -3211,9 +3211,12 @@ fn decode_plt(mut b: Cursor<'_>) -> Result<()> {
 /// across every marker in `Zppm` order, the payload is a run of `(Nppm, bytes)`
 /// records — `Nppm` a 4-byte length, `bytes` that tile-part's packet headers —
 /// one record per tile-part. The payloads are concatenated before the
-/// records are read, so an `Nppm` may straddle a marker boundary; OpenJPEG's
-/// `opj_j2k_merge_ppm` refuses that, and an `Nppm` of 0. Each returned chunk feeds a tile-part's packet-header
-/// stream in [`walk_tiles`], the same role `PPT` plays for a single tile-part.
+/// records are read, so an `Nppm` field may be split across segments, as
+/// may a chunk's bytes. OpenJPEG's `opj_j2k_merge_ppm` carries chunk bytes
+/// across segments too, but refuses an `Nppm` field split across segments,
+/// and a `PPM` whose `Nppm`s are all 0. Each returned chunk feeds a
+/// tile-part's packet-header stream in [`walk_tiles`], the same role `PPT`
+/// plays for a single tile-part.
 ///
 /// A `PPM` that carries only `Zppm` (`Lppm` 3) is refused, as OpenJPEG's
 /// `opj_j2k_read_ppm` refuses it, so a `PPM` present gives at least one chunk

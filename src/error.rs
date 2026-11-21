@@ -113,8 +113,8 @@ pub enum Error {
     /// against `Psot`, as OpenJPEG reads them, so a segment that runs past
     /// `Psot` and has a bad field gives that field's [`Error::Marker`]. A
     /// later tile-part that restates `COD`, `COC`, `QCD` or `QCC` with
-    /// values other than the first tile-part's is out of place, so it is
-    /// this variant too.
+    /// values other than those in force for the tile is out of place, so it
+    /// is this variant too.
     ///
     /// A main header of more than 65,536 marker segments is this variant
     /// too, not [`Error::Limit`]: no valid main header comes near it, and no
