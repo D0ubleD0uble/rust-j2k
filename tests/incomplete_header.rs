@@ -128,6 +128,11 @@ fn lenient() -> DecodeOptions {
     DecodeOptions::default().with_strict(false)
 }
 
+/// Files whose header reads only because a tile-part `COD` brings a tile
+/// over a cap under the main header within the caps, so it does not read
+/// from the prefix through the first `SOT`.
+const RESCUED_BY_A_TILE_PART: &[&str] = &["header/own_reduction_after_lower_data_fault.j2k"];
+
 /// Every prefix of `bytes` that ends before the whole first `SOT` marker of
 /// the codestream which starts at `cs_at`, with that `SOT` at `cs_at + sot`,
 /// is `Incomplete`: from `read_header`, a strict decode and a partial one.
@@ -169,6 +174,17 @@ fn assert_cuts_are_incomplete(name: &str, bytes: &[u8], cs_at: usize, sot: usize
             (cut.width, cut.height, cut.components, cut.max_reduction),
             "{name}"
         ),
+        // A file whose header reads only because a tile-part `COD` brings a
+        // tile over a cap within it: through the first `SOT` that tile-part
+        // is gone, so the prefix gets the decode's error for the tile-parts.
+        (Ok(_), Err(cut)) if RESCUED_BY_A_TILE_PART.contains(&name) => {
+            assert!(!matches!(cut, Error::Incomplete(_)), "{name}");
+            assert_eq!(
+                shown(Err::<(), _>(cut)),
+                shown(decode(at_sot).map(|_| ())),
+                "{name}"
+            );
+        }
         (Ok(_), other) => panic!(
             "{name}: the header through SOT gave {:?}",
             other.map(|_| ())

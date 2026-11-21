@@ -655,6 +655,86 @@ its main header and fails to decode component 0.
 with `cargo +nightly fuzz run -O header tests/fixtures/header/ -- -runs=0`.
 It was made by the fuzzer, so it has no license restriction.
 
+`header/own_cod_lower_tile.j2k` (112 bytes, SHA-256
+`97c368959ec300dbc2a233adaea66a9ac6ae70b49277977baea17e340cf30078`) is the
+repro of #501, a `header` fuzz find from the batch review of `f709e18..4b25890`,
+committed as filed. It is an 8400 x 4096 gray codestream with `XOsiz` 3600
+and tiles of 4200 x 4096, so tile 0 is 600 wide. The main `COD` gives 4x4
+code-blocks and the maximal precincts, which puts tile 1 over the
+code-block cap; tile 0's tile-part `COD` gives it 1x1 precincts, over the
+precinct cap. Neither tile-part has data. `decode_with` refuses tile 0 for
+its precincts with `Raised(10)`, and `read_header_with` now does too (it
+refused tile 1 for its code-blocks with `Raised(2)`), with `strict` on and
+off. `opj_decompress` 2.5.0, which has no such caps, decodes it.
+`tests/tile_geometry_cap.rs` checks it. It was made by the fuzzer, so it
+has no license restriction.
+
+`header/lower_tile_data_long.j2k` (128 bytes, SHA-256
+`b8df2d69f3bedca7a0acbf46453aeebfd39d2ece02444878e3530fcefb1fda1f`) and
+`header/lower_tile_data_short.j2k` (126 bytes, SHA-256
+`92d9e10743542bcedfdc73ced11544991009080279c863d84a80858e4b3e9913`) are
+written by the first case of
+`what_only_decoding_finds_in_a_lower_tile_comes_first_in_the_decode` in
+`tests/tile_geometry_cap.rs` (#501): an 8400 x 8192 gray codestream with
+`YOsiz` 3584 and tiles of 4200 x 4096, so the first row of tiles is 512
+tall and within the caps, and tile 2 is over the code-block cap under the
+main header. Tile 0's tile-part has one byte after its packet in the first
+and no packet data in the second, with the bytes changed by hand. With
+`strict` on, `read_header_with` refuses tile 2 for its code-blocks while
+`decode_with` refuses the file for tile 0's data ("tile 0 has 1 byte(s)
+left after the last packet", "the data of tile 0 ends before the last
+packet"), which only decoding finds. The `header` target accepts that pair
+and must not crash on either. `opj_decompress` 2.5.0 decodes the first and
+fails to decode tile 0 of the second. They have no license restriction.
+
+`header/strict_missing_over_cap.j2k` (101 bytes, SHA-256
+`bbca3381eba2367830c220c7810f8d6672ed1006bc0d88b3e908b34dee4b73e3`) is an
+input from the review of #501, committed as found. It is a 2000 x 1000 gray
+codestream with `XOsiz` 992 and tiles of 1000 x 1000, so tile 0 is 8 wide,
+whose `COD` gives one level and 1x1 precincts at resolution 0, which puts
+tile 1 over the precinct cap. Tile 0's tile-part `COD` gives it no levels,
+and tile 1 has no tile-part. At resolution reduction 1 with `strict` on,
+`decode_with` refuses the file for the missing tile ("the codestream
+carries no tile-part for tile 1") before it counts any tile, and
+`read_header_with` does too; with `strict` off both give tile 0's
+reduction refusal. `opj_decompress` 2.5.0, which has no such caps,
+decodes it. `tests/tile_geometry_cap.rs` checks it. It has no license
+restriction.
+
+`header/later_missing_over_cap.j2k` (131 bytes, SHA-256
+`abb87f5f4fbbf392865dce5e5377e7dd0cbe15649af66fd5061b7ad2c0ab2993`) is an
+input from the review of #501, committed as found. It is a 3000 x 1000 gray
+codestream with `XOsiz` 992 and tiles of 1000 x 1000, so tile 0 is 8 wide,
+whose main `COD` gives one level and 1x1 precincts at resolution 0, which
+puts tiles 1 and 2 over the precinct cap. Tile 0's tile-part `COD` gives it no levels,
+tile 1's tile-part `COD` admits it, and tile 2 has no tile-part. At
+resolution reduction 1 with `strict` on, `decode_with` refuses the file for
+the missing tile ("the codestream carries no tile-part for tile 2") and
+`read_header_with` does too; with `strict` off both give tile 0's reduction
+refusal. `opj_decompress` 2.5.0 fails to read tile 1's `COD`.
+`tests/tile_geometry_cap.rs` checks it. It has no license restriction.
+
+`header/own_reduction_then_missing.j2k` (117 bytes, SHA-256
+`3e693058fe20389ec268ec92a1c282c5e6bc1b3d9b6931ec375a165277050bbb`) and
+`header/own_reduction_after_lower_data_fault.j2k` (117 bytes, SHA-256
+`ec27f69e8de7b42f43c36da4d3dc4d5dc4b6effbd2fd224d3bedab4f9ee9d773`) are
+inputs from the review of #501, committed as found. Each is a gray
+codestream with `XOsiz` 992 and tiles of 1000 x 1000, so tile 0 is 8 wide,
+whose main `COD` gives one level and 1x1 precincts at resolution 0, which
+puts the tiles 1000 wide over the precinct cap. Tile 0 has no tile-part
+`COD` and too little data for its packets; tile 1's tile-part `COD` gives
+it no levels. The first is 3000 wide and has no tile-part for tile 2: at
+resolution reduction 1 with `strict` on, `decode_with` refuses the file
+for the missing tile ("the codestream carries no tile-part for tile 2")
+and `read_header_with` does too, where it once gave tile 1's reduction
+refusal; with `strict` off both give that refusal. The second is 2000
+wide: at reduction 1 `read_header_with` gives tile 1's reduction refusal
+while `decode_with` first refuses tile 0's data ("the data of tile 0 ends
+before the last packet"), a difference the `read_header_with` docs list,
+and the `header` fuzz target accepts it. `opj_decompress` 2.5.0 fails to
+decode component 0 of both. `tests/tile_geometry_cap.rs` and
+`tests/read_header.rs` check them. They have no license restriction.
+
 ### Regenerating the corpus
 
 The oracle toolchain (`scripts/install-oracle-tools.sh`; eccodes + OpenJPEG) and

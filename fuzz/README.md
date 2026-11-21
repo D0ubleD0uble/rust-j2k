@@ -127,7 +127,14 @@ header is read under every set; a header that reads is compared with a full
 decode under one of the sets that read, picked by a hash of the whole input,
 since a decode costs far more than the header: a
 `read_header_with` error must be `decode_with`'s error too, and a successful
-decode must match the header field for field.
+decode must match the header field for field. The one exception is a tile
+the header refuses, over a cap or for a reduction its own header has too
+few levels for, where the decode first finds a fault or a work bound in a
+lower tile's data, which only decoding sees. The target accepts that pair
+only when the decode gives the same error with the header's refusal lifted
+(by the cap's retry, or at reduction 0), and does not give it when it
+decodes the refused tile alone. A fault in the tile-parts, which every decode reads, still has
+to match.
 A decode costs far more than the header, so once the header reads, inputs
 over 64 KiB or images over 2^16 samples are not decoded. For those inputs the
 target checks `read_header` alone: it does not compare a successful header

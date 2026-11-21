@@ -7,7 +7,8 @@
 //! channel's depth, sign and sub-sampling, and the JP2 metadata), and on every
 //! error found in a header. They differ only where `decode` meets a fault in
 //! the tile data, which `read_header` never reads; such a file must be listed
-//! in [`TILE_FAULTS`].
+//! in [`TILE_FAULTS`], or, where `read_header` refuses a later tile, in
+//! [`LOWER_TILE_FAULTS`].
 
 use std::path::{Path, PathBuf};
 
@@ -54,11 +55,17 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// segmentation symbol is wrong, which only the decode's block decoder
 /// reads. `partial/window_rows.j2k` declares 65535 tiles, carries a tile-part for one, and ends
 /// with no `EOC`, which only the decode reads.
+/// `header/own_reduction_after_lower_data_fault.j2k` holds too little data
+/// for tile 0's packets, which only the decode reads.
 ///
 /// The other expected difference has no committed file: a tile-part COD that
 /// gives a component another wavelet than the main header is refused by
 /// `decode` only.
 const TILE_FAULTS: &[(&str, &str)] = &[
+    (
+        "header/own_reduction_after_lower_data_fault.j2k",
+        "tile 0's data ends before its last packet",
+    ),
     (
         "incremental/segsym_tiles_flipped.j2k",
         "a wrong segmentation symbol in tile 0",
@@ -196,6 +203,21 @@ const TILE_FAULTS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Files where `read_header` refuses a tile, over a cap or under a reduction
+/// its own header cannot take, while `decode` first refuses the file for a
+/// fault in a lower tile's data, which `read_header` never reads, and why.
+const LOWER_TILE_FAULTS: &[(&str, &str)] = &[
+    (
+        "header/lower_tile_data_long.j2k",
+        "a byte after tile 0's last packet",
+    ),
+    ("header/lower_tile_data_short.j2k", "no data in tile 0"),
+    (
+        "header/own_reduction_after_lower_data_fault.j2k",
+        "tile 0's data ends before its last packet",
+    ),
+];
+
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -266,6 +288,7 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     let mut seen = [0usize; 4];
     let mut compared = [0usize; 2];
     let mut differing = Vec::new();
+    let mut lower_first = Vec::new();
     let mut names = Vec::new();
     for path in &all {
         let name = path
@@ -306,6 +329,13 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
                     );
                     compared[reduction as usize] += 1;
                 }
+                (Err(Error::Limit(_) | Error::InvalidOptions(_)), Err(Error::Codestream(_)))
+                    if LOWER_TILE_FAULTS.iter().any(|(listed, _)| *listed == name) =>
+                {
+                    if lower_first.last() != Some(&name) {
+                        lower_first.push(name.clone());
+                    }
+                }
                 (Err(h), Err(d)) => {
                     assert_eq!(format!("{h:?}"), format!("{d:?}"), "{name}: the same error")
                 }
@@ -335,6 +365,11 @@ fn read_header_agrees_with_decode_on_every_committed_file() {
     // Every listed tile fault really differs.
     let listed: Vec<String> = TILE_FAULTS.iter().map(|(n, _)| n.to_string()).collect();
     assert_eq!(differing, listed);
+    let listed: Vec<String> = LOWER_TILE_FAULTS
+        .iter()
+        .map(|(n, _)| n.to_string())
+        .collect();
+    assert_eq!(lower_first, listed);
     // Files whose `cdef` reorders the channels are in the sweep. Their
     // channels share one format, so the placement of the formats is pinned by
     // `read_header_places_palette_channels_by_their_definitions` in the crate.

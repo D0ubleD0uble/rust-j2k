@@ -415,32 +415,54 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// [`Error::Limit`] the decode gives, where the decode refuses it too. Only
 /// for a tile over a cap there does it read further: it follows the
 /// tile-parts by their `Psot`, reading their `SOT`s, once in all and no
-/// further than the last such tile, and reads the first tile-part header
-/// of each such tile within its `Psot`, no tile data, holding one tile's
+/// further than the last tile it counts, and reads the first tile-part header
+/// of each tile it counts within its `Psot`, no tile data, holding one tile's
 /// coding parameters at a time (but see the refusal of a tile with no
 /// tile-part below). A tile-part `COD` or `COC` that brings
 /// the tile within the caps admits it, as does
 /// [`strict`](DecodeOptions::strict) off when the tile has no tile-part,
-/// since the decode then leaves it out. With it on, such a tile gets the
-/// decode's error for the tile-parts, from the same parse: the first fault
-/// its parse finds, or the missing tile. A tile-part
-/// header the decode finds at fault is left to the decode, as is a
-/// tile-part `COD` that takes a tile over the caps. The count has a budget
+/// since the decode then leaves it out. With it on, the decode parses every
+/// tile-part before it counts any tile, whatever the selection, so where the
+/// read finds a tile with no tile-part (it looks up the tiles it would read
+/// up to a tile over a cap before it counts any lower tile), refuses a
+/// tile, or stops at its budget, it runs the same parse and gives its error
+/// where it finds one: the first fault in the tile-parts, or the missing
+/// tile. Before
+/// such a tile, it counts each lower tile it would read that the tile's own
+/// header could refuse, under that header, as the decode counts each tile
+/// in index order: each whose first tile-part carries a `COD` or `COC` and
+/// whose size does not rule out a tile-part header taking it over the caps,
+/// and under a reduction each with a `COD` or `COC` whatever its size, as
+/// one can give fewer levels than the reduction takes. So the tile it
+/// refuses is the lowest the decode refuses. A tile-part
+/// header the decode finds at fault is left to the decode (or, with
+/// `strict` on, to that parse), as is a
+/// tile-part `COD` that takes a tile over the caps with no tile over them
+/// under the main header after it. The count has a budget
 /// of 2^22 steps under the main header and as many under the tiles' own;
 /// the tiles past it are left to the decode too. For all of those it can
 /// return a header for a file the decode refuses. The time is one walk of
 /// the tile-parts at most plus the budget: 45 ms in release for a window of
 /// 1530 tiles over a cap of a 235 MB file of 65535 tiles in 16.7 million
 /// tile-parts, under a millisecond with no tile over a cap, and 63 ms for
-/// 1000 tiles of 4096 components, each with a tile-part `COD`. A refusal
-/// of a tile with no tile-part with `strict` on costs the decode's parse
+/// 1000 tiles of 4096 components, each with a tile-part `COD`. With
+/// `strict` on, a refusal or a stop at the budget costs the decode's parse
 /// of the tile-parts on top, as much time and heap as the decode spends
 /// before it refuses the file: 1.75 s and 281 MiB in release on that
 /// 235 MB file with the tile read left out, and 21 ms and 29 MiB on a
-/// 0.9 MB file of 65535 tiles in one tile-part each. On a file
-/// the decode refuses for a fault in its tile-parts, it may still give this
-/// [`Error::Limit`] instead of the decode's error where it refuses a tile
-/// it found a tile-part for.
+/// 0.9 MB file of 65535 tiles in one tile-part each. With `strict` off, on
+/// a file the decode refuses for a fault in its tile-parts, it may still
+/// give this
+/// [`Error::Limit`], or a reduction refusal
+/// ([`Error::InvalidOptions`]), instead of the decode's error where it
+/// refuses a tile it found a tile-part for. The decode can also refuse the file before it
+/// gets to that tile, for what only decoding finds, and then names another
+/// tile, kind or factor, or another error: a fault or a work bound in the
+/// packets or code-blocks of a lower tile (with `strict` on, data that ends
+/// early or runs on past the last packet), or, with `strict` off, the
+/// charge of a step for each
+/// tile-component of the tiles read that have no tile-part, past the
+/// [`packet_work_limit`](DecodeOptions::packet_work_limit).
 ///
 /// A fault in what it reads is the same [`Error`] that `decode_with(bytes,
 /// options)` returns for that input, since `decode_with` runs the same checks
@@ -458,7 +480,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// A fault in the tile
 /// data (a broken tile-part, a tile header that changes a component's
 /// wavelet, a reduction that a tile-part COD or COC with fewer levels cannot
-/// take) is only found by decoding. So is a POC sequence that leaves out
+/// take, unless in a tile counted as above) is only found by decoding. So is a POC sequence that leaves out
 /// packets of a tile, even one in the main header: whether it covers a tile
 /// depends on that tile's geometry. A reduction that the main header's own
 /// levels cannot take is [`Error::InvalidOptions`] here, as OpenJPEG has it.
