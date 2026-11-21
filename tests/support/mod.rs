@@ -22,6 +22,7 @@
 #![allow(dead_code)]
 
 pub mod ht;
+pub mod inconsistent;
 pub mod jp2;
 pub mod part4;
 pub mod pgx;
@@ -759,7 +760,9 @@ pub fn run_fixture(fixture: &Fixture) -> Outcome {
     // the panic still prints one informative line to stderr — rather than
     // swapping the process-global hook, which races with other tests running
     // in parallel and could swallow a genuine panic's message.
-    let decoded = panic::catch_unwind(panic::AssertUnwindSafe(|| rust_j2k::decode(&bytes)));
+    let decoded = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        inconsistent::checked(rust_j2k::decode(&bytes))
+    }));
 
     classify(decoded, expected)
 }
