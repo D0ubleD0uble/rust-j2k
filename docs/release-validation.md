@@ -109,7 +109,7 @@ target compares a decode with `strict` off to a strict decode. The
 `strict` off on the bytes fed so far. The `header` target compares
 `read_header_with` to `decode_with`.
 
-**Run:** [fuzz/README.md](../fuzz/README.md) lists the ten targets, how to
+**Run:** [fuzz/README.md](../fuzz/README.md) lists the thirteen targets, how to
 seed each one and the commands. A local run looks like this:
 
 ```sh
