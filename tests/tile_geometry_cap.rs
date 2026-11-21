@@ -17,8 +17,8 @@
 mod synth;
 
 use rust_j2k::{
-    DecodeOptions, Error, IncrementalDecoder, LimitDetail, LimitKind, Raise, Refined, Region,
-    SampleLimit, Waiting, WorkLimit, decode_with, read_header_with,
+    AmountUnit, DecodeOptions, Error, IncrementalDecoder, LimitDetail, LimitKind, Raise, Refined,
+    Region, SampleLimit, Waiting, WorkLimit, decode_with, read_header_with,
 };
 
 const FLOOR_BLOCKS: u64 = 1 << 20;
@@ -78,7 +78,7 @@ fn refused_at(limit: &LimitDetail) -> (u32, u64) {
 }
 
 /// The kind that refuses a tile over the code-block cap: `TileCodeBlocks`,
-/// or on a 32-bit target `AddressSpace` (current behavior, not a promise). There the sample limit tops out at
+/// or on a 32-bit target `AddressSpace`. There the sample limit tops out at
 /// 2^29 - 1 samples, so the cap never rises past its 2^20 floor, and the
 /// limit that would admit a tile over it is past what the target addresses.
 const OVER_BLOCKS: LimitKind = if cfg!(target_pointer_width = "64") {
@@ -94,21 +94,25 @@ const OVER_PRECINCTS: LimitKind = if cfg!(target_pointer_width = "64") {
     LimitKind::AddressSpace
 };
 
-/// That `limit` refuses a tile over a cap, as `kind`, with `retry` to retry
-/// with and `at` for `refused_at` (the tile and its amount), on a 64-bit
-/// target. On a 32-bit one it is `AddressSpace` with neither: nothing to
-/// retry with and no `refused_at`. That pins today's behavior, not a
-/// promise: a later release may set `refused_at` for that kind.
+/// That `limit` refuses a tile over a cap, as `kind` with `retry` to retry
+/// with, on a 64-bit target; `at` is the tile and the amount `refused_at`
+/// gives, in the unit `kind` counts. On a 32-bit target it is `AddressSpace`
+/// with nothing to retry with, and the same `refused_at`.
 fn assert_over_cap(limit: &LimitDetail, kind: LimitKind, retry: Option<Raise>, at: (u32, u64)) {
     if cfg!(target_pointer_width = "64") {
         assert_eq!(limit.kind(), kind, "{limit}");
         assert_eq!(limit.retry_with(), retry, "{limit}");
-        assert_eq!(refused_at(limit), at, "{limit}");
     } else {
         assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
         assert_eq!(limit.retry_with(), None, "{limit}");
-        assert_eq!(limit.refused_at(), None, "{limit}");
     }
+    assert_eq!(refused_at(limit), at, "{limit}");
+    let unit = match kind {
+        LimitKind::TileCodeBlocks => AmountUnit::CodeBlocks,
+        LimitKind::TilePrecincts => AmountUnit::Precincts,
+        other => panic!("{other:?} is not a tile cap kind"),
+    };
+    assert_eq!(limit.refused_at().map(|a| a.unit()), Some(unit), "{limit}");
 }
 
 /// That `bytes` decode under `options` to `width` x `height`, and that
@@ -217,6 +221,7 @@ fn under_at_most_the_code_block_cap_scales_from_n_with_no_retry() {
     assert_eq!(limit.kind(), LimitKind::TileCodeBlocks, "{limit}");
     assert_eq!(limit.retry_with(), None, "{limit}");
     assert_eq!(refused_at(&limit), (0, blocks), "{limit}");
+    assert_eq!(limit.refused_at().unwrap().unit(), AmountUnit::CodeBlocks);
     assert!(options.raised_for(&limit).is_none());
     assert_eq!(
         limit.message(),
@@ -1417,9 +1422,21 @@ fn a_tile_past_the_address_space_is_not_adjustable() {
             "image area "
         };
         assert!(limit.message().starts_with(named), "{limit}");
-        // This pins today's behavior, not a promise: a later release may
-        // set `refused_at` for this kind.
-        assert_eq!(limit.refused_at(), None, "{noun}: {limit}");
+        // The tile is data on a 64-bit target; on a 32-bit one the image
+        // area refuses first and names no tile.
+        match (limit.refused_at(), cfg!(target_pointer_width = "64")) {
+            (Some(at), true) => {
+                assert_eq!(at.tile(), 0, "{noun}: {limit}");
+                let unit = if noun == "precincts" {
+                    AmountUnit::Precincts
+                } else {
+                    AmountUnit::CodeBlocks
+                };
+                assert_eq!(at.unit(), unit, "{noun}: {limit}");
+            }
+            (None, false) => {}
+            (at, _) => panic!("{noun}: {at:?}: {limit}"),
+        }
     }
 }
 

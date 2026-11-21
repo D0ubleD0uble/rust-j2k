@@ -207,7 +207,7 @@ pub(crate) fn code_blocks(index: u32, work: u64, left: u64, spent: u64, default:
         ),
         "later tiles may need more",
     );
-    refusal.refused_at(index, work)
+    refusal.refused_at(index, work, crate::AmountUnit::SamplePasses)
 }
 
 #[cfg(test)]
@@ -250,7 +250,10 @@ mod tests {
             panic!();
         };
         let at = limit.refused_at().expect("the tile and its work");
-        assert_eq!((at.tile(), at.amount()), (7, 400));
+        assert_eq!(
+            (at.tile(), at.amount(), at.unit()),
+            (7, 400, crate::AmountUnit::SamplePasses)
+        );
         assert!(
             limit
                 .message()

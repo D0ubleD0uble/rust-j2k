@@ -8,13 +8,13 @@
 
 use rust_j2k::fuzz::RepeatWork;
 use rust_j2k::{
-    Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping, ChannelType,
-    ColorOutput, ColorSpace, ColorSpecification, Component, ComponentInfo, DecodeOptions,
-    DecodeReport, Error, ErrorDetail, FileType, Header, Image, ImageHeader, IncrementalDecoder,
-    IprBox, Jp2Metadata, LimitDetail, LimitKind, MappingKind, Palette, PaletteColumn, Raise, Ratio,
-    ReaderRequirements, Refined, RefusedAt, Region, ReportEntry, Res, Resolution, SampleLimit,
-    StandardFeature, TileGrid, UuidBox, UuidInfo, VendorFeature, Waiting, Window, WorkLimit,
-    XmlBox,
+    AmountUnit, Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping,
+    ChannelType, ColorOutput, ColorSpace, ColorSpecification, Component, ComponentInfo,
+    DecodeOptions, DecodeReport, Error, ErrorDetail, FileType, Header, Image, ImageHeader,
+    IncrementalDecoder, IprBox, Jp2Metadata, LimitDetail, LimitKind, MappingKind, Palette,
+    PaletteColumn, Raise, Ratio, ReaderRequirements, Refined, RefusedAt, Region, ReportEntry, Res,
+    Resolution, SampleLimit, StandardFeature, TileGrid, UuidBox, UuidInfo, VendorFeature, Waiting,
+    Window, WorkLimit, XmlBox,
 };
 
 // Used only in `const _` blocks, which Rust 1.87 does not count as a use.
@@ -32,6 +32,7 @@ const _: () = {
     holds::<LimitDetail>();
     holds::<LimitKind>();
     holds::<RefusedAt>();
+    holds::<AmountUnit>();
     holds::<DecodeOptions>();
     holds::<DecodeReport>();
     holds::<ReportEntry>();

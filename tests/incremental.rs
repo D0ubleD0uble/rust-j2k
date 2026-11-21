@@ -1482,6 +1482,7 @@ fn a_count_refused_where_decode_with_is_names_its_tile_and_work() {
     };
     let at = limit.refused_at().expect("the tile and its work");
     assert_eq!(at.tile(), 15, "{limit}");
+    assert_eq!(at.unit(), rust_j2k::AmountUnit::SamplePasses, "{limit}");
     assert_eq!(
         Some(at),
         expected.refused_at(),
@@ -1509,6 +1510,7 @@ fn the_t1bomb_row_seed_counts_past_the_whole_bound_where_decode_with_is_refused(
     };
     let at = expected.refused_at().expect("the tile and its work");
     assert_eq!(at.tile(), 2, "{expected}");
+    assert_eq!(at.unit(), rust_j2k::AmountUnit::SamplePasses, "{expected}");
     let mut decoder = incremental_with_code_block_work_spent(options.clone(), u64::MAX).unwrap();
     decoder.feed(&bytes);
     let Ok(Refined::Waiting(why)) = decoder.refine() else {
