@@ -266,17 +266,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   such as `MCC`, a reserved marker, or a tile `COC` that mixes the wavelets
   under the color transform). It returned `Ok` when that tile was the
   only one over a cap under the main header, while `decode_with` refuses
-  the file for the tile-parts. The same holds where the tile's precincts
-  and code-blocks under that header are at fault and the decode's parse
-  of the tile-parts finds a fault. With `strict` off, a fault the input
+  the file for the tile-parts. With `strict` off, a fault the input
   ends inside is read as a cut, as the decode reads it, so
   `IncrementalDecoder::header` gives the error once the decode would.
-  This holds for counts at fault in a tile-part not whole in the input
+  This holds for a fault in a tile-part not whole in the input
   (cut, or with a `Psot` of 0) too (#578, #560).
 - `IncrementalDecoder::header` keeps the walk for the decode's error for
   the tile-parts between calls. A call that refuses a tile, stops at the
-  count's budget, or meets a tile whose counts under its own header are at
-  fault walked every tile-part fed again, so calls after each feed took
+  count's budget, or meets a tile whose own header is at fault walked every tile-part fed again, so calls after each feed took
   time quadratic in the input: 21.5 s for calls after each 1 MiB of a
   235 MB file with tile 0 refused, now 170 ms; with tile 1's own header
   at fault as well, 18 s, now 1.3 ms, as the walk stops at the faulty

@@ -442,9 +442,8 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// and under a reduction each with a `COD` or `COC` whatever its size, as
 /// one can give fewer levels than the reduction takes. So the tile it
 /// refuses is the lowest the decode refuses. Where a tile-part header the
-/// read counts a tile under is at fault, or the tile's precincts and
-/// code-blocks under it are, the read gives the parse's error in the same
-/// way, if the parse finds one. With `strict` off it does not for a fault
+/// read counts a tile under is at fault, the read gives the parse's error
+/// in the same way, if the parse finds one. With `strict` off it does not for a fault
 /// the input ends inside, which the decode reads as the input cut short.
 /// Where the read refuses no tile, a fault the
 /// decode finds in a tile-part header the read does not read is left to

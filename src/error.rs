@@ -197,8 +197,9 @@ pub enum Error {
     /// component index past `SIZ`'s count, a `TLM` tile index past the
     /// grid, an `RGN` or a MIXED code-block style that `CAP` rules out,
     /// quantization steps too few for the decomposition levels, a color
-    /// transform over components that differ, and a `SIZ` whose image holds
-    /// no sample of a component. A segment whose length runs
+    /// transform over components that differ. A `SIZ` whose image holds no
+    /// sample of a component is `Marker` too, though `SIZ` alone decides
+    /// it. A segment whose length runs
     /// past the end of the input is [`Error::Codestream`] or
     /// [`Error::Incomplete`] instead, since the input may be cut short.
     Marker(ErrorDetail),
