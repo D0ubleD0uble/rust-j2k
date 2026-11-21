@@ -6,8 +6,11 @@
 //! tiles of 1024 x 1024 in a 255 x 257 grid, each over the precinct cap
 //! under the main header and brought within by its first tile-part's `COD`,
 //! with 255 tile-parts a tile, each tile's together. It is read through a
-//! window of the last 6 rows, 1530 tiles, so the walk runs to the end. The
-//! tests are ignored, as they build that file; run them in release with
+//! window of the last 6 rows, 1530 tiles, so the walk runs to the end.
+//! Another test reads it with tile 0 over the cap, and one more builds a
+//! file whose count runs out of its budget: there each call also walks the
+//! tile-parts for the decode's error for them. The tests are ignored, as
+//! they build large files; run them in release with
 //! `cargo test --release --test incremental_header_cost -- --ignored
 //! --nocapture`.
 
@@ -18,8 +21,9 @@ use std::time::{Duration, Instant};
 
 use rust_j2k::{DecodeOptions, IncrementalDecoder, Region, Window, read_header_with};
 
-/// The 235 MB file.
-fn many_tile_parts() -> Vec<u8> {
+/// The 235 MB file, with no `COD` in the first tile-part of tile `bare`,
+/// which is then over the cap.
+fn many_tile_parts(bare: Option<u16>) -> Vec<u8> {
     let (side, columns, rows, parts) = (1024, 255, 257, 255);
     let mut cod = synth::cod_body(1, 0, 4, 0);
     cod[0] = 1;
@@ -40,7 +44,8 @@ fn many_tile_parts() -> Vec<u8> {
     let rest = synth::tile_part(0, 1, parts, &[], &[]);
     bytes.reserve((columns * rows) as usize * (first.len() + 254 * rest.len()) + 2);
     for tile in 0..(columns * rows) as u16 {
-        bytes.extend(synth::tile_part(tile, 0, parts, &own, &[0]));
+        let header: &[u8] = if bare == Some(tile) { &[] } else { &own };
+        bytes.extend(synth::tile_part(tile, 0, parts, header, &[0]));
         for part in 1..parts {
             bytes.extend(synth::tile_part(tile, part, parts, &[], &[]));
         }
@@ -110,7 +115,7 @@ fn header_after_each_feed(
 #[test]
 #[ignore = "builds a 235 MB file; run in release"]
 fn header_after_each_feed_of_a_235_mb_file_costs_about_one_walk() {
-    let bytes = many_tile_parts();
+    let bytes = many_tile_parts(None);
     let window = Window::new(0, 1024 * 251, 1024 * 255, 1024 * 257);
     let options = DecodeOptions::default().with_region(Region::Window(window));
     for piece in [1 << 20, 1 << 18] {
@@ -138,4 +143,63 @@ fn header_after_each_feed_of_many_components_under_a_reduction() {
             bytes.len()
         );
     }
+}
+
+/// Each call refuses tile 0, read alone, and so walks the tile-parts fed
+/// for the decode's error for them first. The walk goes on from where the
+/// last call kept it: the calls at 1 MiB took 21.5 s with a walk from the
+/// start on each.
+#[test]
+#[ignore = "builds a 235 MB file; run in release"]
+fn header_after_each_feed_of_a_refused_tile_costs_about_one_walk() {
+    let bytes = many_tile_parts(Some(0));
+    let options = DecodeOptions::default().with_region(Region::Tile(0));
+    let (calls, spent) = header_after_each_feed(&bytes, &options, 1 << 20);
+    eprintln!(
+        "{} MB, tile 0 refused: {calls} calls in {spent:?}",
+        bytes.len() / 1_000_000
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(spent < Duration::from_millis(500), "{spent:?}");
+}
+
+/// 65535 tiles of 8 x 16 of 4096 components, 255 tile-parts each (233
+/// MB), the first 999 brought within the caps by their own `COD`. The
+/// count of their own headers runs out of its budget, so each call walks
+/// the tile-parts fed for the decode's error for them, and the header
+/// reads. The calls at 1 MiB took 6.9 s with a walk from the start on each.
+#[test]
+#[ignore = "builds a 233 MB file; run in release"]
+fn header_after_each_feed_past_the_budget_costs_about_one_walk() {
+    let tiles: u32 = 65535;
+    let parts = 255;
+    let mut cod = synth::cod_body(1, 0, 0, 0);
+    cod[0] = 1;
+    cod.push(0x00);
+    let siz = synth::siz_body([8 * tiles, 16, 0, 0, 8, 16, 0, 0], &vec![[7, 1, 1]; 4096]);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &cod),
+        synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])),
+    ]
+    .concat();
+    let own = synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0));
+    for tile in 0..tiles as u16 {
+        let header: &[u8] = if tile < 999 { &own } else { &[] };
+        bytes.extend(synth::tile_part(tile, 0, parts, header, &[]));
+        for part in 1..parts {
+            bytes.extend(synth::tile_part(tile, part, parts, &[], &[]));
+        }
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    let window = Window::new(0, 0, 8000, 16);
+    let options = DecodeOptions::default().with_region(Region::Window(window));
+    let (calls, spent) = header_after_each_feed(&bytes, &options, 1 << 20);
+    eprintln!(
+        "{} MB, past the budget: {calls} calls in {spent:?}",
+        bytes.len() / 1_000_000
+    );
+    #[cfg(not(debug_assertions))]
+    assert!(spent < Duration::from_millis(500), "{spent:?}");
 }

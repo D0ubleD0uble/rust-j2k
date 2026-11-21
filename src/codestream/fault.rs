@@ -24,10 +24,11 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use super::{
-    Cursor, Error, FaultSite, MAX_POC_VOLUMES, Overrides, ParsedHeader, Restated, Result,
-    TileHeader, both_packed_headers, check_poc_budget, check_restatement, check_tile_in_full,
-    count_is_one_short, decode_sot, fault_may_be_cut, marker, part_end, read_tile_part_header,
-    read_tile_part_header_at, read_u16, segment, sot_at, tile_overrides_are_valid,
+    Cursor, Error, FaultSite, MAX_POC_VOLUMES, MainHeader, Overrides, ParsedHeader, Restated,
+    Result, TileHeader, both_packed_headers, check_poc_budget, check_restatement,
+    check_tile_in_full, count_is_one_short, decode_sot, fault_may_be_cut, marker, part_end,
+    read_tile_part_header, read_tile_part_header_at, read_u16, segment, sot_at,
+    tile_overrides_are_valid,
 };
 
 impl ParsedHeader {
@@ -93,6 +94,16 @@ impl Firsts {
         }
     }
 
+    /// Widen the offsets for an input of `len` bytes, which may have grown
+    /// past 4 GiB since [`new`](Self::new).
+    fn fit(&mut self, len: usize) {
+        if let Firsts::Narrow(firsts) = self {
+            if u32::try_from(len).is_err() {
+                *self = Firsts::Wide(firsts.iter().map(|&at| at as usize).collect());
+            }
+        }
+    }
+
     /// Note that tile `index` of `tiles` has its first tile-part's header
     /// at `at`, an offset of the input.
     fn set(&mut self, index: usize, tiles: usize, at: usize) {
@@ -135,333 +146,507 @@ impl Firsts {
 /// starts once the first walk's record is let go, so the two are not held
 /// at once.
 pub(crate) fn tile_parts_fault(bytes: &[u8], parsed: &ParsedHeader, strict: bool) -> Option<Error> {
-    walk(bytes, parsed, strict, None)
-        .and_then(|(seen, _)| check_headers(bytes, parsed, strict, seen))
-        .err()
+    let mut walk = Walk::new(bytes, parsed);
+    match walk.run(bytes, parsed, strict, None, &mut None) {
+        Ok(_) => check_headers(bytes, parsed, strict, Record::Owned(walk.seen)).err(),
+        Err(error) => Some(error),
+    }
 }
 
-/// [`walk_tiles`](super::walk_tiles) without the tile records: each step it
-/// takes, and each error it gives, in the same order. With `keep`, it also
-/// gives that tile's header as the tile record would hold it, its `POC`
-/// volumes joined over its tile-parts.
-fn walk(
+/// The walk of [`tile_parts_fault_kept`], kept for its next call on an
+/// input that extends this one: where the walk stood after the last
+/// tile-part it read whose end, by a `Psot` other than 0, is followed by an
+/// `SOT` in the input. Every step before there read only bytes before
+/// there, which a longer input holds the same.
+pub(crate) struct KeptWalk {
+    /// The bytes of the input it was kept for.
+    len: usize,
+    walk: Walk,
+}
+
+/// [`tile_parts_fault`], going on from the walk `kept` holds, and keeping
+/// its walk there for a later call, with `strict` off. `kept` must have
+/// been filled by a call on the same main header, at the start of an input
+/// that `bytes` extend; a walk kept for another tile count or more bytes is
+/// dropped.
+///
+/// The calls on an input that grows walk each tile-part about once in all:
+/// each reads the tile-parts past where the last one was kept, and the one
+/// it was kept before. The checks of each tile at the end of the walk, a
+/// step a tile, run on each call, as does the walk again for a tile whose
+/// joined header is at fault, which is not kept. With `strict` on it walks
+/// from the start and leaves `kept` as it is: the `TNsot` look-ahead's
+/// answer then decides the walk's steps, and it reads the bytes past them.
+pub(crate) fn tile_parts_fault_kept(
     bytes: &[u8],
     parsed: &ParsedHeader,
     strict: bool,
-    keep: Option<usize>,
-) -> Result<(Vec<Seen>, Option<TileHeader>)> {
-    let main = &parsed.header;
-    let ppm = &parsed.ppm;
-    let tile_count = main.siz.num_tiles() as usize;
-    let mut ppm_seq = 0usize;
-    let mut seen = vec![Seen::default(); tile_count];
-    let mut firsts = Firsts::new(bytes.len());
-    let mut kept: Option<TileHeader> = None;
-    let mut count_checked = false;
-    let mut count_correction = 0u16;
-    let uniform = OnceCell::new();
-    let summary = OnceCell::new();
-    // For each tile flagged [`LONG`] a later tile-part of which restates a
-    // coding value: its first tile-part's coding, read again once, and what
-    // [`check_restatement`] has found so far, as the tile record holds them.
-    let mut restating: HashMap<usize, (Overrides, Option<Restated>)> = HashMap::new();
-    // Whether the walk ended where the input did, with `strict` off: where
-    // `walk_tiles` records `ReportEntry::MissingEoc`.
-    let mut ended_early = false;
-
-    let mut part_offset = parsed.sot_offset;
-    loop {
-        if !strict && bytes.len().saturating_sub(part_offset) < 12 {
-            ended_early = true;
-            break;
+    kept: &mut Option<KeptWalk>,
+) -> Option<Error> {
+    if strict {
+        return tile_parts_fault(bytes, parsed, strict);
+    }
+    let tiles = parsed.header.siz.num_tiles() as usize;
+    let mut walk = match kept.take() {
+        Some(kept) if kept.len <= bytes.len() && kept.walk.seen.len() == tiles => {
+            let mut walk = kept.walk;
+            walk.firsts.fit(bytes.len());
+            walk
         }
-        // The fixed `SOT` layout is read directly; anything else is read
-        // as `walk_tiles` reads it, for its error.
-        let (sot, mut cur) = match sot_at(bytes, part_offset) {
-            Some((sot, pos)) => (sot, Cursor::at(bytes, pos)),
-            None => {
-                let mut cur = Cursor::at(bytes, part_offset);
-                if cur.u16()? != marker::SOT {
-                    return Err(Error::codestream("tile-part does not start with `SOT`"));
-                }
-                let sot = decode_sot(segment(&mut cur)?)?;
-                (sot, cur)
-            }
-        };
+        _ => Walk::new(bytes, parsed),
+    };
+    let mut undo = None;
+    let fault = match walk.run(bytes, parsed, strict, None, &mut undo) {
+        Ok(_) => check_headers(bytes, parsed, strict, Record::Kept(&walk.seen)).err(),
+        Err(error) => Some(error),
+    };
+    if let Some(undo) = undo {
+        undo.restore(&mut walk);
+    }
+    *kept = Some(KeptWalk {
+        len: bytes.len(),
+        walk,
+    });
+    fault
+}
 
-        let index = usize::from(sot.tile_index);
-        // `walk_tiles` refuses a tile record past 65534 here, which the grid
-        // of at most 65535 tiles never reaches.
-        let tile = seen.get_mut(index).ok_or_else(|| {
-            Error::codestream(format!(
-                "tile-part names tile {index}, but the grid holds {tile_count} tiles"
-            ))
-        })?;
+/// The state of a walk of the tile-parts between two of its steps.
+struct Walk {
+    seen: Vec<Seen>,
+    firsts: Firsts,
+    /// For each tile flagged [`LONG`] a later tile-part of which restates a
+    /// coding value: its first tile-part's coding, read again once, and what
+    /// [`check_restatement`] has found so far, as the tile record holds them.
+    restating: HashMap<usize, (Overrides, Option<Restated>)>,
+    /// Whether the `TNsot` look-ahead ([`count_is_one_short`]) has been
+    /// taken: once, when a tile first has every tile-part it declares.
+    count_checked: bool,
+    /// With `strict` on, 1 where the look-ahead raised every tile's count.
+    count_correction: u16,
+    /// With `strict` off, where the look-ahead starts and for which tile,
+    /// once it is taken. Its answer only raises both counts in the error for
+    /// a tile that declares two, so it is looked for only there.
+    look_ahead: Option<(usize, u16)>,
+    /// The `PPM` chunks the tile-parts read so far take.
+    ppm_seq: usize,
+    /// Where the next tile-part starts.
+    part_offset: usize,
+}
 
-        if usize::from(sot.tile_part_index) != usize::from(tile.parts) {
-            return Err(Error::codestream(format!(
-                "tile {index} tile-part index is {}, but {} of its tile-parts have been read",
-                sot.tile_part_index, tile.parts,
-            )));
+/// What a step of [`Walk::run`] changed, to take back where the walk stops
+/// in that step, so that a call on a longer input reads that tile-part
+/// again. With `strict` off a step changes only these, and what it notes
+/// of a first tile-part's header, which reads the same again.
+struct Undo {
+    part_offset: usize,
+    index: usize,
+    tile: Seen,
+    count_checked: bool,
+    look_ahead: Option<(usize, u16)>,
+    ppm_seq: usize,
+}
+
+impl Undo {
+    fn restore(self, walk: &mut Walk) {
+        walk.part_offset = self.part_offset;
+        walk.seen[self.index] = self.tile;
+        walk.count_checked = self.count_checked;
+        walk.look_ahead = self.look_ahead;
+        walk.ppm_seq = self.ppm_seq;
+    }
+}
+
+impl Walk {
+    /// A walk from the first `SOT` of `bytes`.
+    fn new(bytes: &[u8], parsed: &ParsedHeader) -> Self {
+        Walk {
+            seen: vec![Seen::default(); parsed.header.siz.num_tiles() as usize],
+            firsts: Firsts::new(bytes.len()),
+            restating: HashMap::new(),
+            count_checked: false,
+            count_correction: 0,
+            look_ahead: None,
+            ppm_seq: 0,
+            part_offset: parsed.sot_offset,
         }
-        if sot.num_tile_parts != 0 {
-            let stated = u16::from(sot.num_tile_parts) + count_correction;
-            if strict && u16::from(sot.tile_part_index) >= stated {
-                return Err(Error::codestream(format!(
-                    "tile {index} tile-part {} of a declared {stated} tile-parts",
-                    sot.tile_part_index,
-                )));
-            }
-            match tile.declared {
-                0 => tile.declared = stated,
-                declared if declared != stated => {
-                    return Err(Error::codestream(format!(
-                        "tile {index} declares {stated} tile-parts in one `SOT` and {declared} in another",
-                    )));
-                }
-                _ => {}
-            }
-        }
+    }
 
-        let first_part = sot.tile_part_index == 0;
-        let header_at = cur.pos;
-        let mut site = FaultSite::default();
-        // A header of `SOD` alone, as most later tile-parts have, reads as
-        // nothing: no marker of its own, no `POC` volume and no packed
-        // header. It is stepped over rather than read.
-        let read = if read_u16(bytes, header_at) == Some(marker::SOD) {
-            cur.pos += 2;
-            Ok(None)
-        } else {
-            let end = part_end(bytes.len(), part_offset, sot.psot);
-            read_tile_part_header_at(&mut cur, end, main, first_part, &mut site).map(Some)
-        };
-        let read = match read {
-            Ok(read) => read,
-            Err(_) if !strict && fault_may_be_cut(bytes, part_offset, sot.psot, site) => {
+    /// [`walk_tiles`](super::walk_tiles) without the tile records, from
+    /// where the walk stands: each step it takes, and each error it gives,
+    /// in the same order. With `keep`, it also gives that tile's header as
+    /// the tile record would hold it, its `POC` volumes joined over its
+    /// tile-parts. `undo` is left holding what to take back of the step the
+    /// walk stopped in, or `None` if it stopped before one.
+    fn run(
+        &mut self,
+        bytes: &[u8],
+        parsed: &ParsedHeader,
+        strict: bool,
+        keep: Option<usize>,
+        undo: &mut Option<Undo>,
+    ) -> Result<Option<TileHeader>> {
+        let main = &parsed.header;
+        let ppm = &parsed.ppm;
+        let Walk {
+            seen,
+            firsts,
+            restating,
+            count_checked,
+            count_correction,
+            look_ahead,
+            ppm_seq,
+            part_offset,
+        } = self;
+        let tile_count = seen.len();
+        let mut kept: Option<TileHeader> = None;
+        let uniform = OnceCell::new();
+        let summary = OnceCell::new();
+        // Whether the walk ended where the input did, with `strict` off:
+        // where `walk_tiles` records `ReportEntry::MissingEoc`.
+        let mut ended_early = false;
+
+        loop {
+            *undo = None;
+            if !strict && bytes.len().saturating_sub(*part_offset) < 12 {
                 ended_early = true;
                 break;
             }
-            Err(error) => return Err(error),
-        };
-        let mut packed_headers = false;
-        if let Some((tile_header, packed)) = read {
-            packed_headers = packed.is_some();
-            if first_part {
-                let own = &tile_header.overrides;
-                if own.codes_or_quantizes() {
-                    tile.flags |= CODES;
-                    if !tile_overrides_are_valid(main, &summary, own) {
-                        tile.flags |= INVALID;
-                    }
-                    firsts.set(index, tile_count, header_at);
-                    if cur.pos - header_at > KEPT_OVER {
-                        tile.flags |= LONG;
-                    }
-                }
-                if !tile_header.poc.is_empty() {
-                    tile.flags |= POC_FIRST;
-                }
-                // `decode_poc` holds a header to `MAX_POC_VOLUMES`.
-                tile.poc = tile_header.poc.len() as u8;
-                if keep == Some(index) {
-                    kept = Some(tile_header);
-                }
-            } else {
-                if tile_header.overrides.codes_or_quantizes() {
-                    // The first tile-part's header read again: it read the
-                    // same when the walk passed it. What `check_restatement`
-                    // keeps between tile-parts only saves it comparing
-                    // again, so starting it afresh gives the same result.
-                    let first_again = || -> Result<Overrides> {
-                        #[cfg(test)]
-                        super::tests::FIRST_REREADS.with(|reads| reads.set(reads.get() + 1));
-                        // It read in full before, so no arm that `end`
-                        // decides is reached, and the input's end serves.
-                        let mut at = Cursor::at(bytes, firsts.get(index));
-                        Ok(read_tile_part_header(&mut at, bytes.len(), main, true)?
-                            .0
-                            .overrides)
-                    };
-                    if tile.flags & CODES == 0 {
-                        let own = Overrides::default();
-                        check_restatement(main, &uniform, &own, &mut None, &tile_header, index)?;
-                    } else if tile.flags & LONG == 0 {
-                        let own = first_again()?;
-                        check_restatement(main, &uniform, &own, &mut None, &tile_header, index)?;
-                    } else {
-                        let (own, restated) = match restating.entry(index) {
-                            Entry::Occupied(entry) => entry.into_mut(),
-                            Entry::Vacant(entry) => entry.insert((first_again()?, None)),
-                        };
-                        check_restatement(main, &uniform, own, restated, &tile_header, index)?;
-                    }
-                }
-                let volumes = usize::from(tile.poc) + tile_header.poc.len();
-                check_poc_budget(volumes)?;
-                tile.poc = volumes as u8;
-                if let Some(kept) = kept.as_mut().filter(|_| keep == Some(index)) {
-                    kept.poc.extend(tile_header.poc);
-                }
-            }
-        } else if first_part && keep == Some(index) {
-            kept = Some(TileHeader::default());
-        }
-        // A tile-part with no `POC` volume adds none to the tile's, which
-        // passed the budget, so the budget is not checked again.
-        if !ppm.is_empty() {
-            if packed_headers {
-                return Err(both_packed_headers());
-            }
-            if ppm_seq >= ppm.len() {
-                return Err(Error::codestream(
-                    "`PPM` carries fewer packet-header chunks than the codestream has tile-parts",
-                ));
-            }
-            ppm_seq += 1;
-        }
-        let data_start = cur.pos;
-
-        let data_end = if sot.psot == 0 {
-            match bytes.len().checked_sub(2).filter(|&end| end >= data_start) {
-                Some(end) => end,
-                None if !strict => data_start,
+            // The fixed `SOT` layout is read directly; anything else is read
+            // as `walk_tiles` reads it, for its error.
+            let (sot, mut cur) = match sot_at(bytes, *part_offset) {
+                Some((sot, pos)) => (sot, Cursor::at(bytes, pos)),
                 None => {
+                    let mut cur = Cursor::at(bytes, *part_offset);
+                    if cur.u16()? != marker::SOT {
+                        return Err(Error::codestream("tile-part does not start with `SOT`"));
+                    }
+                    let sot = decode_sot(segment(&mut cur)?)?;
+                    (sot, cur)
+                }
+            };
+
+            let index = usize::from(sot.tile_index);
+            // `walk_tiles` refuses a tile record past 65534 here, which the
+            // grid of at most 65535 tiles never reaches.
+            let tile = seen.get_mut(index).ok_or_else(|| {
+                Error::codestream(format!(
+                    "tile-part names tile {index}, but the grid holds {tile_count} tiles"
+                ))
+            })?;
+            *undo = Some(Undo {
+                part_offset: *part_offset,
+                index,
+                tile: *tile,
+                count_checked: *count_checked,
+                look_ahead: *look_ahead,
+                ppm_seq: *ppm_seq,
+            });
+
+            if usize::from(sot.tile_part_index) != usize::from(tile.parts) {
+                return Err(Error::codestream(format!(
+                    "tile {index} tile-part index is {}, but {} of its tile-parts have been read",
+                    sot.tile_part_index, tile.parts,
+                )));
+            }
+            if sot.num_tile_parts != 0 {
+                let stated = u16::from(sot.num_tile_parts) + *count_correction;
+                if strict && u16::from(sot.tile_part_index) >= stated {
                     return Err(Error::codestream(format!(
-                        "tile {} tile-part {} has `Psot` 0 and fewer than two bytes after its \
-                         header",
-                        sot.tile_index, sot.tile_part_index
+                        "tile {index} tile-part {} of a declared {stated} tile-parts",
+                        sot.tile_part_index,
                     )));
                 }
+                match tile.declared {
+                    0 => tile.declared = stated,
+                    declared if declared != stated => {
+                        // With `strict` off the look-ahead is taken here,
+                        // on the same bytes, and raises both counts or
+                        // neither.
+                        let raised = u16::from(
+                            look_ahead
+                                .is_some_and(|(from, tile)| count_is_one_short(bytes, from, tile)),
+                        );
+                        return Err(Error::codestream(format!(
+                            "tile {index} declares {} tile-parts in one `SOT` and {} in another",
+                            stated + raised,
+                            declared + raised,
+                        )));
+                    }
+                    _ => {}
+                }
             }
-        } else {
-            let end = match part_offset
-                .checked_add(sot.psot as usize)
-                .filter(|&end| end <= bytes.len())
-            {
-                Some(end) => end,
-                None if !strict => bytes.len(),
-                None => {
+
+            let first_part = sot.tile_part_index == 0;
+            let header_at = cur.pos;
+            let mut site = FaultSite::default();
+            // A header of `SOD` alone, as most later tile-parts have, reads as
+            // nothing: no marker of its own, no `POC` volume and no packed
+            // header. It is stepped over rather than read.
+            let read = if read_u16(bytes, header_at) == Some(marker::SOD) {
+                cur.pos += 2;
+                Ok(None)
+            } else {
+                let end = part_end(bytes.len(), *part_offset, sot.psot);
+                read_tile_part_header_at(&mut cur, end, main, first_part, &mut site).map(Some)
+            };
+            let read = match read {
+                Ok(read) => read,
+                Err(_) if !strict && fault_may_be_cut(bytes, *part_offset, sot.psot, site) => {
+                    ended_early = true;
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
+            let mut packed_headers = false;
+            if let Some((tile_header, packed)) = read {
+                packed_headers = packed.is_some();
+                if first_part {
+                    let own = &tile_header.overrides;
+                    if own.codes_or_quantizes() {
+                        tile.flags |= CODES;
+                        if !tile_overrides_are_valid(main, &summary, own) {
+                            tile.flags |= INVALID;
+                        }
+                        firsts.set(index, tile_count, header_at);
+                        if cur.pos - header_at > KEPT_OVER {
+                            tile.flags |= LONG;
+                        }
+                    }
+                    if !tile_header.poc.is_empty() {
+                        tile.flags |= POC_FIRST;
+                    }
+                    // `decode_poc` holds a header to `MAX_POC_VOLUMES`.
+                    tile.poc = tile_header.poc.len() as u8;
+                    if keep == Some(index) {
+                        kept = Some(tile_header);
+                    }
+                } else {
+                    if tile_header.overrides.codes_or_quantizes() {
+                        // The first tile-part's header read again: it read
+                        // the same when the walk passed it. What
+                        // `check_restatement` keeps between tile-parts only
+                        // saves it comparing again, so starting it afresh
+                        // gives the same result.
+                        let first_again = || -> Result<Overrides> {
+                            #[cfg(test)]
+                            super::tests::FIRST_REREADS.with(|reads| reads.set(reads.get() + 1));
+                            // It read in full before, so no arm that `end`
+                            // decides is reached, and the input's end serves.
+                            let mut at = Cursor::at(bytes, firsts.get(index));
+                            Ok(read_tile_part_header(&mut at, bytes.len(), main, true)?
+                                .0
+                                .overrides)
+                        };
+                        if tile.flags & CODES == 0 {
+                            let own = Overrides::default();
+                            check_restatement(
+                                main,
+                                &uniform,
+                                &own,
+                                &mut None,
+                                &tile_header,
+                                index,
+                            )?;
+                        } else if tile.flags & LONG == 0 {
+                            let own = first_again()?;
+                            check_restatement(
+                                main,
+                                &uniform,
+                                &own,
+                                &mut None,
+                                &tile_header,
+                                index,
+                            )?;
+                        } else {
+                            let (own, restated) = match restating.entry(index) {
+                                Entry::Occupied(entry) => entry.into_mut(),
+                                Entry::Vacant(entry) => entry.insert((first_again()?, None)),
+                            };
+                            check_restatement(main, &uniform, own, restated, &tile_header, index)?;
+                        }
+                    }
+                    let volumes = usize::from(tile.poc) + tile_header.poc.len();
+                    check_poc_budget(volumes)?;
+                    tile.poc = volumes as u8;
+                    if let Some(kept) = kept.as_mut().filter(|_| keep == Some(index)) {
+                        kept.poc.extend(tile_header.poc);
+                    }
+                }
+            } else if first_part && keep == Some(index) {
+                kept = Some(TileHeader::default());
+            }
+            // A tile-part with no `POC` volume adds none to the tile's, which
+            // passed the budget, so the budget is not checked again.
+            if !ppm.is_empty() {
+                if packed_headers {
+                    return Err(both_packed_headers());
+                }
+                if *ppm_seq >= ppm.len() {
+                    return Err(Error::codestream(
+                        "`PPM` carries fewer packet-header chunks than the codestream has tile-parts",
+                    ));
+                }
+                *ppm_seq += 1;
+            }
+            let data_start = cur.pos;
+
+            let data_end = if sot.psot == 0 {
+                match bytes.len().checked_sub(2).filter(|&end| end >= data_start) {
+                    Some(end) => end,
+                    None if !strict => data_start,
+                    None => {
+                        return Err(Error::codestream(format!(
+                            "tile {} tile-part {} has `Psot` 0 and fewer than two bytes after its \
+                             header",
+                            sot.tile_index, sot.tile_part_index
+                        )));
+                    }
+                }
+            } else {
+                let end = match part_offset
+                    .checked_add(sot.psot as usize)
+                    .filter(|&end| end <= bytes.len())
+                {
+                    Some(end) => end,
+                    None if !strict => bytes.len(),
+                    None => {
+                        return Err(Error::codestream(format!(
+                            "tile {} tile-part {} declares `Psot` {}, but only {} bytes are left in \
+                             the codestream",
+                            sot.tile_index,
+                            sot.tile_part_index,
+                            sot.psot,
+                            bytes.len() - *part_offset
+                        )));
+                    }
+                };
+                if end < data_start {
                     return Err(Error::codestream(format!(
-                        "tile {} tile-part {} declares `Psot` {}, but only {} bytes are left in \
-                         the codestream",
+                        "tile {} tile-part {} declares `Psot` {}, shorter than its {}-byte header",
                         sot.tile_index,
                         sot.tile_part_index,
                         sot.psot,
-                        bytes.len() - part_offset
+                        data_start - *part_offset
                     )));
                 }
+                end
             };
-            if end < data_start {
-                return Err(Error::codestream(format!(
-                    "tile {} tile-part {} declares `Psot` {}, shorter than its {}-byte header",
-                    sot.tile_index,
-                    sot.tile_part_index,
-                    sot.psot,
-                    data_start - part_offset
-                )));
-            }
-            end
-        };
-        let tile = &mut seen[index];
-        tile.parts += 1;
+            let tile = &mut seen[index];
+            tile.parts += 1;
 
-        if !count_checked && tile.declared == u16::from(sot.tile_part_index) + 1 {
-            count_checked = true;
-            if sot.psot != 0 && count_is_one_short(bytes, data_end, sot.tile_index) {
-                count_correction = 1;
-                for tile in &mut seen {
-                    if tile.declared != 0 {
-                        tile.declared += 1;
+            if !*count_checked && tile.declared == u16::from(sot.tile_part_index) + 1 {
+                *count_checked = true;
+                if sot.psot != 0 {
+                    if !strict {
+                        *look_ahead = Some((data_end, sot.tile_index));
+                    } else if count_is_one_short(bytes, data_end, sot.tile_index) {
+                        *count_correction = 1;
+                        for tile in seen.iter_mut() {
+                            if tile.declared != 0 {
+                                tile.declared += 1;
+                            }
+                        }
                     }
                 }
             }
-        }
 
-        if sot.psot == 0 {
-            break;
-        }
-        if data_end == bytes.len() && !strict {
-            ended_early = true;
-            break;
-        }
-        match read_u16(bytes, data_end) {
-            Some(marker::EOC) => break,
-            Some(marker::SOT) => part_offset = data_end,
-            Some(other) => {
-                return Err(Error::codestream(format!(
-                    "expected `SOT` or `EOC` after a tile-part, found {other:#06X}"
-                )));
+            if sot.psot == 0 {
+                break;
             }
-            None if !strict => {
+            if data_end == bytes.len() && !strict {
                 ended_early = true;
                 break;
             }
-            None => {
-                return Err(Error::codestream("missing `EOC` after the tile-part"));
+            match read_u16(bytes, data_end) {
+                Some(marker::EOC) => break,
+                // The step read nothing past this `SOT`'s code, so it
+                // stands in any longer input.
+                Some(marker::SOT) => *part_offset = data_end,
+                Some(other) => {
+                    return Err(Error::codestream(format!(
+                        "expected `SOT` or `EOC` after a tile-part, found {other:#06X}"
+                    )));
+                }
+                None if !strict => {
+                    ended_early = true;
+                    break;
+                }
+                None => {
+                    return Err(Error::codestream("missing `EOC` after the tile-part"));
+                }
             }
         }
-    }
 
-    if ppm_seq != ppm.len() && !(ended_early && ppm_seq < ppm.len()) {
-        return Err(Error::codestream(format!(
-            "`PPM` carries {} packet-header chunk(s) but the codestream has {ppm_seq} tile-part(s)",
-            ppm.len(),
-        )));
-    }
-    for (index, tile) in seen.iter().enumerate() {
-        if tile.parts == 0 {
-            if strict {
-                return Err(Error::codestream(format!(
-                    "the codestream carries no tile-part for tile {index}"
-                )));
-            }
-            continue;
-        }
-        if strict && tile.declared != 0 && tile.declared != tile.parts {
+        if *ppm_seq != ppm.len() && !(ended_early && *ppm_seq < ppm.len()) {
             return Err(Error::codestream(format!(
-                "tile {index} declares {} tile-parts but carries {}",
-                tile.declared, tile.parts
+                "`PPM` carries {} packet-header chunk(s) but the codestream has {} tile-part(s)",
+                ppm.len(),
+                ppm_seq,
             )));
         }
+        for (index, tile) in seen.iter().enumerate() {
+            if tile.parts == 0 {
+                if strict {
+                    return Err(Error::codestream(format!(
+                        "the codestream carries no tile-part for tile {index}"
+                    )));
+                }
+                continue;
+            }
+            if strict && tile.declared != 0 && tile.declared != tile.parts {
+                return Err(Error::codestream(format!(
+                    "tile {index} declares {} tile-parts but carries {}",
+                    tile.declared, tile.parts
+                )));
+            }
+        }
+        Ok(kept)
     }
-    Ok((seen, kept))
 }
 
-/// [`check_tile_headers`](super::check_tile_headers) over the tiles `seen`
+/// The record of the tiles a walk found, for [`check_headers`]: owned, to
+/// be let go before a walk for a tile's header, or kept for a later call.
+enum Record<'s> {
+    Owned(Vec<Seen>),
+    Kept(&'s [Seen]),
+}
+
+/// [`check_tile_headers`](super::check_tile_headers) over the tiles a walk
 /// found: each tile's markers were checked as its first tile-part was read,
 /// and its `POC` volumes are counted here. The first tile at fault is walked
 /// for again, to gather its header as the tile record holds it, and checked
 /// in full, so that the fault is reported in the full check's words. Like
 /// that check, it numbers a tile by its place among the tiles found.
-fn check_headers(bytes: &[u8], parsed: &ParsedHeader, strict: bool, seen: Vec<Seen>) -> Result<()> {
+fn check_headers(
+    bytes: &[u8],
+    parsed: &ParsedHeader,
+    strict: bool,
+    record: Record<'_>,
+) -> Result<()> {
     let main = &parsed.header;
-    let mut seen = Some(seen);
+    let mut record = Some(record);
     // The tiles found before `after`, by position, passed.
     let mut after = 0;
     loop {
-        let tiles = match seen.take() {
-            Some(tiles) => tiles,
-            None => walk(bytes, parsed, strict, None)?.0,
+        let found = match &record {
+            Some(Record::Owned(tiles)) => flagged(main, tiles, after),
+            Some(Record::Kept(tiles)) => flagged(main, tiles, after),
+            None => {
+                let mut walk = Walk::new(bytes, parsed);
+                walk.run(bytes, parsed, strict, None, &mut None)?;
+                flagged(main, &walk.seen, after)
+            }
         };
-        let found = tiles.iter().enumerate().filter(|(_, tile)| tile.parts != 0);
-        let flagged = found.enumerate().skip(after).find(|(_, (_, tile))| {
-            let poc = usize::from(tile.poc);
-            let volumes = if tile.flags & POC_FIRST != 0 {
-                poc
-            } else {
-                main.poc.len() + poc
-            };
-            tile.flags & INVALID != 0 || volumes > MAX_POC_VOLUMES
-        });
-        let Some((position, (index, _))) = flagged else {
+        let Some((position, index)) = found else {
             return Ok(());
         };
         // The walk for the tile's header holds its own record of each tile,
-        // so this one is let go first.
-        drop(tiles);
-        let header = walk(bytes, parsed, strict, Some(index))?
-            .1
+        // so an owned one is let go first.
+        if matches!(record, Some(Record::Owned(_))) {
+            record = None;
+        }
+        let header = Walk::new(bytes, parsed)
+            .run(bytes, parsed, strict, Some(index), &mut None)?
             .ok_or_else(|| Error::inconsistent(format!("tile {index} was not found again")))?;
         let full = check_tile_in_full(main, &header, position);
         debug_assert!(
@@ -469,8 +654,28 @@ fn check_headers(bytes: &[u8], parsed: &ParsedHeader, strict: bool, seen: Vec<Se
             "tile {index}: the quick check refused a valid tile"
         );
         full?;
-        // Not reached while the quick check is exact: the record is walked
-        // again to go on past the tile.
+        // Not reached while the quick check is exact: an owned record is
+        // walked again to go on past the tile.
         after = position + 1;
     }
+}
+
+/// The position among the tiles found, and the index, of the first tile
+/// found at or past position `after` whose first tile-part's markers
+/// failed or whose `POC` volumes are over the budget.
+fn flagged(main: &MainHeader, tiles: &[Seen], after: usize) -> Option<(usize, usize)> {
+    let found = tiles.iter().enumerate().filter(|(_, tile)| tile.parts != 0);
+    found
+        .enumerate()
+        .skip(after)
+        .find(|(_, (_, tile))| {
+            let poc = usize::from(tile.poc);
+            let volumes = if tile.flags & POC_FIRST != 0 {
+                poc
+            } else {
+                main.poc.len() + poc
+            };
+            tile.flags & INVALID != 0 || volumes > MAX_POC_VOLUMES
+        })
+        .map(|(position, (index, _))| (position, index))
 }

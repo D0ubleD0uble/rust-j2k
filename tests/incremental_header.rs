@@ -430,6 +430,150 @@ fn each_header_of_a_jp2_file_is_the_read_of_its_prefix() {
     );
 }
 
+/// [`rescued_main`] of `tiles` tiles, with `main` after its `QCD`, and the
+/// tile-parts `parts` in order, each `(tile, TPsot, TNsot, markers)`; a
+/// first tile-part has a byte of data.
+fn tile_parts(tiles: u32, main: &[u8], parts: &[(u16, u8, u8, Vec<u8>)]) -> Vec<u8> {
+    let mut bytes = rescued_main(tiles);
+    bytes.extend_from_slice(main);
+    for (tile, part, count, markers) in parts {
+        let data: &[u8] = if *part == 0 { &[0] } else { &[] };
+        bytes.extend(synth::tile_part(*tile, *part, *count, markers, data));
+    }
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
+}
+
+/// Where tile 0 is over the cap, each call refuses it, and gives the
+/// decode's error for the tile-parts first, from the walk for it that the
+/// last call kept. These files put in that walk's way what it keeps
+/// between calls, or what a longer input changes:
+/// - the `TPsot == TNsot` look-ahead, whose answer changes once tile 0's
+///   third tile-part comes in, and raises both counts in the error for tile
+///   5, which declares 2 tile-parts and then 1;
+/// - `PPM` chunks, which run out at the eleventh of 16 tile-parts, or not;
+/// - a first tile-part header over 1 KiB, whose coding is kept for the
+///   later tile-parts that restate it, and a short one, read again for
+///   each, with a later `COD` that differs;
+/// - bytes after a tile-part that are neither `SOT` nor `EOC`.
+#[test]
+fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
+    let rescue = synth::seg(0xFF52, &synth::cod_body(1, 1, 4, 0));
+    let other = synth::seg(0xFF52, &synth::cod_body(2, 1, 4, 0));
+    let own = |tile: u16| {
+        if tile == 0 {
+            Vec::new()
+        } else {
+            rescue.clone()
+        }
+    };
+    // Eight tiles of two tile-parts, tile 0's first.
+    let two_each = |count: &dyn Fn(u16, u8) -> u8, later: &dyn Fn(u16, u8) -> Vec<u8>| {
+        let mut parts = Vec::new();
+        for tile in 0..8u16 {
+            for part in 0..2u8 {
+                let markers = if part == 0 {
+                    own(tile)
+                } else {
+                    later(tile, part)
+                };
+                parts.push((tile, part, count(tile, part), markers));
+            }
+        }
+        parts
+    };
+    let nothing = |_: u16, _: u8| Vec::new();
+    let mut cases: Vec<(&str, Vec<u8>, &str)> = Vec::new();
+    for (name, mismatch) in [("look-ahead", true), ("look-ahead, no fault", false)] {
+        let mut parts = two_each(
+            &|tile, part| {
+                if mismatch && tile == 5 && part == 1 {
+                    1
+                } else {
+                    2
+                }
+            },
+            &nothing,
+        );
+        parts.push((0, 2, 2, Vec::new()));
+        let want = if mismatch {
+            "Err(Codestream(\"tile 5 declares 2 tile-parts in one `SOT` and 3 in another"
+        } else {
+            "Err(Limit("
+        };
+        cases.push((name, tile_parts(8, &[], &parts), want));
+    }
+    for (name, chunks, want) in [
+        ("PPM short", 10u32, "Err(Codestream(\"`PPM` carries fewer"),
+        ("PPM whole", 16, "Err(Limit("),
+    ] {
+        let mut ppm = vec![0u8];
+        for _ in 0..chunks {
+            ppm.extend([0, 0, 0, 1, 0]);
+        }
+        let parts = two_each(&|_, _| 2, &nothing);
+        cases.push((name, tile_parts(8, &synth::seg(0xFF60, &ppm), &parts), want));
+    }
+    let mut long = rescue.clone();
+    for _ in 0..300 {
+        long.extend([0xFF, 0x64, 0, 2]);
+    }
+    for (name, differs, want) in [
+        ("restated", false, "Err(Limit("),
+        (
+            "restated, then differs",
+            true,
+            "Err(Codestream(\"a later tile-part of tile 3 carries a `COD`",
+        ),
+    ] {
+        let mut parts = Vec::new();
+        for tile in 0..8u16 {
+            for part in 0..4u8 {
+                let markers = match (tile, part) {
+                    (2, 0) => long.clone(),
+                    (_, 0) => own(tile),
+                    (3, 3) if differs => other.clone(),
+                    (2 | 3, _) => rescue.clone(),
+                    _ => Vec::new(),
+                };
+                parts.push((tile, part, 4, markers));
+            }
+        }
+        cases.push((name, tile_parts(8, &[], &parts), want));
+    }
+    let mut junk = tile_parts(8, &[], &two_each(&|_, _| 2, &nothing));
+    let end = junk.len() - 2;
+    junk[end..].copy_from_slice(&[0x12, 0x34]);
+    cases.push((
+        "junk after a tile-part",
+        junk,
+        "Err(Codestream(\"expected `SOT` or `EOC` after a tile-part, found 0x1234",
+    ));
+
+    let options = DecodeOptions::default();
+    let lenient = options.clone().with_strict(false);
+    for (seed, (name, bytes, want)) in cases.iter().enumerate() {
+        let mut rng = Rng(100 + seed as u64);
+        for most in [1, 20] {
+            let seen = check(name, bytes, &options, |_| rng.up_to(most), &[]);
+            let last = seen.last().expect("a call");
+            assert!(last.starts_with(want), "{name}: {last}");
+            // The walk is kept over many calls that refuse tile 0.
+            let refusals = seen.iter().filter(|s| s.starts_with("Err(")).count();
+            assert!(refusals * 2 > seen.len(), "{name}: {seen:?}");
+            if *name == "look-ahead" {
+                // Before tile 0's third tile-part is in, the counts stand.
+                assert!(
+                    seen.iter()
+                        .any(|s| s.contains("declares 1 tile-parts in one"))
+                );
+            }
+        }
+        let decoded = format!("{:?}", rust_j2k::decode_with(bytes, &lenient).map(|_| ()));
+        assert!(decoded.starts_with(want), "{name}: the decode, {decoded}");
+    }
+}
+
 /// 100 tiles of 4096 components over the precinct cap under the main
 /// header, each but `refused` brought within by a tile-part `COD`, in index
 /// order (`tests/tile_geometry_cap.rs` has the same). The count of the

@@ -293,7 +293,7 @@ pub fn parse_tiles_with(
     Ok(codestream)
 }
 
-pub(crate) use fault::tile_parts_fault;
+pub(crate) use fault::{KeptWalk, tile_parts_fault, tile_parts_fault_kept};
 
 /// Check every tile's header once, here, so a malformed tile-part header is
 /// a parse error rather than a surprise partway through a decode. A header is
