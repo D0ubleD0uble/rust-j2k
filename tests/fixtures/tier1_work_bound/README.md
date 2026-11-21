@@ -67,3 +67,25 @@ Every 64x64 code-block runs about 46 passes for about 14 bytes, so it
 spends 13933 sample-passes per byte, 42.5% of the bound, the most seen
 from an encoder. It decodes here and in `opj_decompress` 2.5.0 to the
 flat 0 that was coded.
+
+## A work bound in a lower tile
+
+`lower_tile_t1bomb_over_cap.j2k` (1305 B, SHA-256 `1dd8c35d…bb47`) is written
+from scratch by `scripts/gen-lower-tile-work-fixture.py` (no encoder, no input
+image), from `t1bomb(1024, 6, 88)` above (#572). It is two 1024^2 tiles side
+by side. The main `COD` gives 1x1 precincts, which puts a 1024^2 tile over the
+2^18 precinct cap. Tile 0's tile-part has a `COD` of the maximal precincts,
+which brings it within the caps, and the bomb's packet; tile 1 has a tile-part
+with no `COD` and no data, so it has the main header's precincts.
+
+`read_header_with` reads no tile data, so it refuses tile 1 for its 2^20
+precincts (`Limit`, `TilePrecincts`). `decode_with` reaches tile 0 first and
+refuses it for its 9.2e7 sample-passes (`Limit`, `CodeBlockWork`); with the
+bound lifted it refuses tile 1 as the header does. `opj_decompress` 2.5.0
+decodes tile 0 and fails on tile 1 ("Failed to decode tile 2/2"). It is the
+work-bound case of the third same-error exception in `src/error.rs`; it is
+listed in `LOWER_TILE_FAULTS` in `tests/read_header.rs` and checked by
+`a_work_bound_in_a_lower_tile_comes_first_in_the_decode` in
+`tests/tile_geometry_cap.rs`. It sits here, not in `header/`, because
+`tests/incremental.rs` caps `header/` at its 16 shares and this file is a
+work-bound one (it is fed in halves there, as the other files here are).
