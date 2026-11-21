@@ -695,18 +695,18 @@ fn a_with_retry_ladder_ends_in_a_few_steps_at_the_unlimited_image() {
 /// climbed one factor per tile: `pocmulti_64tiles_4096_2` took 16 steps and
 /// 35.8 s from the defaults (release, `strict` off), `Raised(2)` to
 /// `Raised(17)`, every one a POC reach. Doubling takes 5 steps and 11 s,
-/// `Raised(2)` to `Raised(32)`. About 11 s on a release build, minutes on a
-/// debug one, so ignored: run with
-/// `cargo test --release --test work_limit -- --ignored`. The hint's
+/// `Raised(2)` to `Raised(32)`. That file is too slow for a debug build; the
+/// 16-tile file of the same shape (`scripts/gen-multipoc-fixture.py`) climbs
+/// 1 to 2 to 4 to 8 in about 3 s, and stepping by one would take more steps
+/// and fail the at-least-twice check in `follow_ladder`. The hint's
 /// arithmetic for the same shape is unit tested in `limit_hint`.
 #[test]
-#[ignore = "slow: about 11 s on a release build"]
 fn a_ladder_over_many_tiles_that_each_reach_the_bound_takes_log_steps() {
-    let name = "work_bound/pocmulti_64tiles_4096_2.j2k";
+    let name = "work_bound/pocmulti_16tiles_4096_2.j2k";
     let bytes = fixture(name);
     let start = DecodeOptions::default().with_strict(false);
-    let (_, steps) = follow_ladder(name, &bytes, start, 7);
-    assert_eq!(steps, 5, "{name}");
+    let (_, steps) = follow_ladder(name, &bytes, start, 5);
+    assert_eq!(steps, 3, "{name}");
 }
 
 /// `tile_precincts.j2k` (the `retry_ladder` target's repro for #506): two
