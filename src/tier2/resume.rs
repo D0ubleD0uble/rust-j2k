@@ -486,14 +486,14 @@ enum Advanced {
     Failed(Error, u64),
 }
 
-// [`TileWalk::bytes`] counts the walk's own size against the room the
-// walks may keep, so a change to it moves where an `IncrementalDecoder`
-// keeps or lets go of a walk, and so what a refine spends. A field added
-// here is a change to that behavior, not only to the struct: a new size
-// means measuring the spend again against main's, not only updating the
-// number.
-#[cfg(target_pointer_width = "64")]
-const _: () = assert!(std::mem::size_of::<TileWalk>() == 1200);
+/// What [`TileWalk::bytes`] counts for the walk's own struct. It is a
+/// constant, not `size_of::<TileWalk>()`, so that where an
+/// `IncrementalDecoder` keeps or lets go of a walk, and so what a refine
+/// spends, does not move with the compiler's choice of layout. It is the
+/// size of the struct on 64-bit targets; a unit test pins that. A change to
+/// this number is a change to that behavior: measure the spend again
+/// against main's before making one.
+const WALK_SELF_BYTES: usize = 1200;
 
 /// One tile's walk.
 struct TileWalk {
@@ -756,7 +756,7 @@ impl TileWalk {
             lists.capacity() * size_of::<Vec<T>>()
                 + lists.iter().map(Vec::capacity).sum::<usize>() * size_of::<T>()
         }
-        let mut bytes = size_of::<TileWalk>()
+        let mut bytes = WALK_SELF_BYTES
             + self.dropped.capacity() * size_of::<u64>()
             + self.styles.capacity()
             + nested(&self.geoms)
@@ -1224,5 +1224,19 @@ impl TileWalk {
             }
         }
         Ok((CodedData { components }, reach))
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+
+    /// The count of a walk's own struct matches the struct, so the walks
+    /// keep and drop where they did when the count was `size_of`. A layout
+    /// randomizing build changes the size, and so fails this on purpose.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn the_walk_self_count_is_the_size_of_the_struct() {
+        assert_eq!(std::mem::size_of::<TileWalk>(), WALK_SELF_BYTES);
     }
 }
