@@ -421,22 +421,23 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// tile-part below). A tile-part `COD` or `COC` that brings
 /// the tile within the caps admits it, as does
 /// [`strict`](DecodeOptions::strict) off when the tile has no tile-part,
-/// since the decode then leaves it out. With it on, the decode parses every
-/// tile-part before it counts any tile, whatever the selection, so where the
-/// read finds a tile with no tile-part (it looks up the tiles it would read
-/// up to a tile over a cap before it counts any lower tile), refuses a
-/// tile, or stops at its budget, it runs the same parse and gives its error
-/// where it finds one: the first fault in the tile-parts, or the missing
-/// tile. Before
+/// since the decode then leaves it out. The decode parses every tile-part
+/// before it counts any tile, whatever the selection, so where the read
+/// refuses a tile, stops at its budget, or, with `strict` on, finds a tile
+/// with no tile-part (it looks up the tiles it would read up to a tile over
+/// a cap before it counts any lower tile), it walks the tile-parts as that
+/// parse does, keeping no tile record, and gives the parse's error where it
+/// finds one: the first fault in the tile-parts or, with `strict` on, the
+/// missing tile. Before
 /// such a tile, it counts each lower tile it would read that the tile's own
 /// header could refuse, under that header, as the decode counts each tile
 /// in index order: each whose first tile-part carries a `COD` or `COC` and
 /// whose size does not rule out a tile-part header taking it over the caps,
 /// and under a reduction each with a `COD` or `COC` whatever its size, as
 /// one can give fewer levels than the reduction takes. So the tile it
-/// refuses is the lowest the decode refuses. A tile-part
-/// header the decode finds at fault is left to the decode (or, with
-/// `strict` on, to that parse), as is a
+/// refuses is the lowest the decode refuses. Where the read refuses no
+/// tile, a tile-part header the decode finds at fault is left to the
+/// decode, as is a
 /// tile-part `COD` that takes a tile over the caps with no tile over them
 /// under the main header after it. The count has a budget
 /// of 2^22 steps under the main header and as many under the tiles' own;
@@ -445,17 +446,13 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// the tile-parts at most plus the budget: 45 ms in release for a window of
 /// 1530 tiles over a cap of a 235 MB file of 65535 tiles in 16.7 million
 /// tile-parts, under a millisecond with no tile over a cap, and 63 ms for
-/// 1000 tiles of 4096 components, each with a tile-part `COD`. With
-/// `strict` on, a refusal or a stop at the budget costs the decode's parse
-/// of the tile-parts on top, as much time and heap as the decode spends
-/// before it refuses the file: 1.75 s and 281 MiB in release on that
-/// 235 MB file with the tile read left out, and 21 ms and 29 MiB on a
-/// 0.9 MB file of 65535 tiles in one tile-part each. With `strict` off, on
-/// a file the decode refuses for a fault in its tile-parts, it may still
-/// give this
-/// [`Error::Limit`], or a reduction refusal
-/// ([`Error::InvalidOptions`]), instead of the decode's error where it
-/// refuses a tile it found a tile-part for, as it does not run that parse.
+/// 1000 tiles of 4096 components, each with a tile-part `COD`. A refusal
+/// or a stop at the budget costs that walk of the tile-parts on top, with
+/// up to 10 bytes of heap a tile (14 on an input of 4 GiB or more), and,
+/// for each tile whose first tile-part header is over 1 KiB and has a
+/// coding value a later tile-part restates, the coding it gives, up to
+/// about 13 times the bytes of those headers: 240 ms and 640 KiB in
+/// release on that 235 MB file with the tile read left out.
 /// The decode can also refuse the file before it
 /// gets to that tile, for what only decoding finds, and then names another
 /// tile, kind or factor, or another error: a fault or a work bound in the

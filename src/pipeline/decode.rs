@@ -162,8 +162,10 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// it counts any. Such
 /// a tile with no tile over a cap after it is left to the decode, so a file
 /// with no tile over a cap under the main header is still read no further
-/// than the first `SOT`. With `strict` on, a refusal or a stop at a budget
-/// gives the decode's error for the tile-parts where its parse finds one.
+/// than the first `SOT`. A refusal or a stop at a budget gives the decode's
+/// error for the tile-parts where its parse would find one, with `strict`
+/// on or off ([`codestream::tile_parts_fault`], a walk that keeps no tile
+/// record).
 ///
 /// `kept` is what an earlier call on the start of the same input left, with
 /// where the codestream `bytes` starts in that input (see [`HeaderCache`]).
@@ -177,18 +179,14 @@ fn check_geometry(
     kept: Option<(&mut HeaderCache, usize)>,
 ) -> Result<()> {
     let counted = count_geometry(bytes, parsed, selection, reduction, cap, strict, kept);
-    if !strict {
-        return counted.map(|_| ());
-    }
-    // With `strict` on, the decode parses every tile-part before it counts
-    // any tile, whatever the selection, so where the count refuses a tile or
-    // stops at a budget, that parse's fault comes first.
+    // The decode parses every tile-part before it counts any tile, whatever
+    // the selection, so where the count refuses a tile or stops at a budget,
+    // that parse's fault comes first.
+    let fault = || codestream::tile_parts_fault(bytes, parsed, strict);
     match counted {
         Ok(true) => Ok(()),
-        Ok(false) => codestream::tile_parts_fault(bytes, parsed).map_or(Ok(()), Err),
-        Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => {
-            Err(codestream::tile_parts_fault(bytes, parsed).unwrap_or(error))
-        }
+        Ok(false) => fault().map_or(Ok(()), Err),
+        Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => Err(fault().unwrap_or(error)),
         Err(error) => Err(error),
     }
 }
@@ -745,14 +743,13 @@ impl<'a> Rescue<'a> {
     /// tile the walk found no tile-part for. The decode parses the tile-parts
     /// before it counts a tile, so it refuses the file for the first fault
     /// its parse finds (in any tile's tile-part headers, or the chain), or
-    /// for the missing tile, and never gets to the count. This is that
-    /// parse, reading the main header in place. The walk has already
-    /// followed the chain to its end, so the parse follows it no further;
-    /// it reads the tile-part headers, not the tile data, and keeps the
-    /// decode's tile records while it runs. `None` only if the parse finds
-    /// no fault, which the walk finding no tile-part rules out.
+    /// for the missing tile, and never gets to the count. This is the error
+    /// of that parse ([`codestream::tile_parts_fault`]), which reads the
+    /// main header in place, the tile-part headers and not the tile data,
+    /// and keeps no tile record. `None` only if the parse finds no fault,
+    /// which the walk finding no tile-part rules out.
     fn walk_fault(&self) -> Option<Error> {
-        codestream::tile_parts_fault(self.bytes, self.parsed)
+        codestream::tile_parts_fault(self.bytes, self.parsed, true)
     }
 }
 
@@ -1860,24 +1857,29 @@ pub(crate) mod tests {
 
     /// The walk goes only as far as the tile it counts: where tile 1 of 64
     /// is refused, it walks the 16 tile-parts of tile 0 and tile 1's first,
-    /// and reads tiles 0 and 1 by offset. With `strict` on the refusal then
-    /// runs the decode's parse of the tile-parts, which the decode runs
-    /// before it counts any tile, and which walks them all. A tile with no
-    /// tile-part takes the walk to the end of the tile-parts.
+    /// and reads tiles 0 and 1 by offset. The refusal then looks for the
+    /// error of the decode's parse of the tile-parts, which the decode runs
+    /// before it counts any tile ([`codestream::tile_parts_fault`]). That
+    /// walk reads the `SOT` of every tile-part, and once, when tile 0 has
+    /// all 16 of its tile-parts, looks ahead for a 17th (the `TPsot ==
+    /// TNsot` correction), which reads each `SOT` after it up to the `EOC`.
+    /// A tile with no tile-part takes the first walk to the end of the
+    /// tile-parts.
     #[test]
     fn a_refusal_at_an_early_tile_walks_little() {
+        // The `SOT`s the fault walk reads over `parts` tile-parts of 16 a
+        // tile.
+        let fault_walk = |parts: u64| parts + (parts - 16 + 1);
         let bytes = rescued_tiles(64, 16, &[1], &[]);
-        let lenient = DecodeOptions::default().with_strict(false);
-        let (reads, header) = sot_reads_of(&bytes, &lenient);
-        assert!(matches!(header, Err(Error::Limit(_))), "{header:?}");
-        assert_eq!(reads, 16 + 1 + 2);
-        let (reads, header) = sot_reads_of(&bytes, &DecodeOptions::default());
-        assert!(matches!(header, Err(Error::Limit(_))), "{header:?}");
-        assert_eq!(reads, 16 + 1 + 2 + (64 * 16 + 1));
+        for strict in [false, true] {
+            let options = DecodeOptions::default().with_strict(strict);
+            let (reads, header) = sot_reads_of(&bytes, &options);
+            assert!(matches!(header, Err(Error::Limit(_))), "{header:?}");
+            assert_eq!(reads, 16 + 1 + 2 + fault_walk(64 * 16));
+        }
         // Tile 1's tile-parts left out: with `strict` on the walk runs to
         // `EOC` to find it has none, and the file is refused with the
-        // decode's error, from the decode's parse of the tile-parts, which
-        // counts the first tile-parts again with a walk of its own.
+        // decode's error for the tile-parts.
         let missing = rescued_tiles(64, 16, &[], &[1]);
         let (reads, header) = sot_reads_of(&missing, &DecodeOptions::default());
         let decoded = crate::decode_with(&missing, &DecodeOptions::default());
@@ -1886,9 +1888,12 @@ pub(crate) mod tests {
             format!("{:?}", header.err()),
             format!("{:?}", decoded.err())
         );
-        assert_eq!(reads, 63 * 16 + 1 + 1 + (63 * 16 + 1));
+        assert_eq!(reads, 63 * 16 + 1 + 1 + fault_walk(63 * 16));
         // With it off the tile is left out and the rest are read by offset.
-        assert_eq!(sot_reads(&missing, &lenient), 63 * 16 + 1 + 63);
+        assert_eq!(
+            sot_reads(&missing, &DecodeOptions::default().with_strict(false)),
+            63 * 16 + 1 + 63
+        );
     }
 
     /// `IncrementalDecoder::header` goes on from what its last call found,

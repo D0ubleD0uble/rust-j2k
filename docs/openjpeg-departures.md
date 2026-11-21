@@ -1456,8 +1456,7 @@ report the same one. The exceptions are:
   (`resource-bounds.md`). Past 64 MiB the wrapper can admit what the bare
   codestream refuses, or name a smaller factor to retry with.
 - A `Limit` or `InvalidOptions` the header read gives for a tile, where the
-  decode first refuses the file for an earlier fault: in a tile-part (with
-  `strict` off), or in a lower tile's data.
+  decode first refuses the file for a fault in a lower tile's data.
 
 Separately, `read_header_with` can return `Ok` for a fault only decoding
 finds. A JP2 file's box faults have no

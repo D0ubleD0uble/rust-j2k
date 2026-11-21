@@ -13,6 +13,7 @@
 //! codestream be traversed past a feature we cannot decode, and is what makes
 //! the reserved segment-less markers and unknown segments handleable at all.
 
+mod fault;
 pub mod markers;
 
 use std::borrow::Cow;
@@ -292,16 +293,7 @@ pub fn parse_tiles_with(
     Ok(codestream)
 }
 
-/// The error [`parse_tiles_with`] gives with `strict` on for the
-/// tile-parts after `parsed`'s main header, or `None` if it gives none. It
-/// reads `parsed` in place, so a caller that keeps it copies nothing, and
-/// keeps the tile records only until it returns.
-pub(crate) fn tile_parts_fault(bytes: &[u8], parsed: &ParsedHeader) -> Option<Error> {
-    let mut entries = Vec::new();
-    walk_parsed(bytes, parsed, true, &mut entries)
-        .and_then(|tiles| check_tile_headers(&parsed.header, &tiles))
-        .err()
-}
+pub(crate) use fault::tile_parts_fault;
 
 /// Check every tile's header once, here, so a malformed tile-part header is
 /// a parse error rather than a surprise partway through a decode. A header is
@@ -424,10 +416,18 @@ fn tile_header_is_valid(
     summary: &OnceCell<ComponentSummary>,
     tile: &TileHeader,
 ) -> bool {
-    if resolved_poc_len(main, tile) > MAX_POC_VOLUMES {
-        return false;
-    }
-    let own = &tile.overrides;
+    resolved_poc_len(main, tile) <= MAX_POC_VOLUMES
+        && tile_overrides_are_valid(main, summary, &tile.overrides)
+}
+
+/// [`tile_header_is_valid`] for a tile whose first tile-part carries `own`,
+/// leaving out its `POC` volumes, the one part of the check that its later
+/// tile-parts can change.
+fn tile_overrides_are_valid(
+    main: &MainHeader,
+    summary: &OnceCell<ComponentSummary>,
+    own: &Overrides,
+) -> bool {
     if !own.codes_or_quantizes() {
         // RGN and POC change no invariant checked here.
         return true;
@@ -1204,7 +1204,14 @@ fn walk_tiles<'a>(
             // progression can be split across the tile's parts (A.6.6). Each
             // part's list is capped, so the accumulation across parts must be
             // re-checked.
-            check_restatement(main, &uniform, tile, &tile_header, index)?;
+            check_restatement(
+                main,
+                &uniform,
+                &tile.header.overrides,
+                &mut tile.restated,
+                &tile_header,
+                index,
+            )?;
             check_poc_budget(tile.header.poc.len() + tile_header.poc.len())?;
             tile.header.poc.extend(tile_header.poc);
         }
@@ -1458,13 +1465,10 @@ fn walk_tiles<'a>(
 fn count_is_one_short(bytes: &[u8], from: usize, tile: u16) -> bool {
     let mut at = from;
     loop {
-        if read_u16(bytes, at) != Some(marker::SOT) {
-            return false;
-        }
-        // A malformed SOT ends the look-ahead; the walk reaches the same SOT
-        // and refuses it there.
-        let mut cur = Cursor::at(bytes, at + 2);
-        let Ok(sot) = segment(&mut cur).and_then(decode_sot) else {
+        // Anything but a whole `SOT` of the layout `decode_sot` admits ends
+        // the look-ahead; the walk reaches the same bytes and refuses them
+        // there.
+        let Some((sot, _)) = sot_at(bytes, at) else {
             return false;
         };
         if sot.tile_index == tile {
@@ -1533,7 +1537,8 @@ struct Restated {
 fn check_restatement(
     main: &MainHeader,
     uniform: &OnceCell<Uniform>,
-    tile: &mut TileParts<'_>,
+    own: &Overrides,
+    restated: &mut Option<Restated>,
     later: &TileHeader,
     index: usize,
 ) -> Result<()> {
@@ -1541,8 +1546,7 @@ fn check_restatement(
     if !later.codes_or_quantizes() {
         return Ok(());
     }
-    let own = &tile.header.overrides;
-    let restated = tile.restated.get_or_insert_with(|| Restated {
+    let restated = restated.get_or_insert_with(|| Restated {
         coc: own
             .coc
             .iter()
