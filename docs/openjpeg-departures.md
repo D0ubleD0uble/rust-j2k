@@ -533,7 +533,7 @@ OpenJPEG fills the gap with invented values. Four checks on HT cleanup
 segments and one on HT refinement segments are of the same kind ([HT cleanup
 segments](#ht-cleanup-segments), [HT refinement
 segments](#ht-refinement-segments)). A color transform over mixed wavelets is
-the last kind: OpenJPEG decodes it to a wrong image with no warning ([A color
+One check is of a third kind: OpenJPEG decodes it to a wrong image with no warning ([A color
 transform over mixed wavelets](#a-color-transform-over-mixed-wavelets)).
 The entries below give each one.
 
@@ -1397,7 +1397,7 @@ the same bytes as without it. This decoder
 refuses the file, as it does every Part 2 marker (`DCO`, `VMS`, `DFS`, `ADS`,
 `MCT`, `MCC`, `MCO`, `CBD`, `ATK`; 0xFF70 to 0xFF79), in either header. The
 message names the marker. OpenJPEG defines only `MCT`, `MCC`, `MCO` and `CBD`
-in `j2k.h`. It refuses those four, and skips the other six (`DCO`, `VMS`,
+in `j2k.h`. It reads those four (`j2k.c:1426-1431`), and skips the other six (`DCO`, `VMS`,
 `DFS`, `ADS`, `NLT`, `ATK`) with "[WARNING] Unknown marker"
 ([below](#an-unknown-marker-in-the-main-header)).
 
@@ -1432,8 +1432,9 @@ This decoder returns `Unsupported`: "unrecognized marker 0xFF7F in the main
 header".
 
 The Part 2 markers OpenJPEG does not define (`DCO`, `VMS`, `DFS`, `ADS`,
-`NLT`, `ATK`) get the same outcome from OpenJPEG, and `Unsupported` here, with
-the marker named (codes: ITU-T T.801, Table A.19) ([The `NLT` marker](#the-nlt-marker)).
+`NLT`, `ATK`; codes in ITU-T T.801, Table A.19) get the same outcome from
+OpenJPEG, and `Unsupported` here, with the marker named ([The `NLT`
+marker](#the-nlt-marker)).
 
 ## A tile size that overflows OpenJPEG's tile count
 
