@@ -2217,13 +2217,16 @@ pub(crate) mod tests {
             let header = decoder.header();
             kept += codestream::tests::SOT_READS.with(std::cell::Cell::get);
             calls += 1;
-            refusals += u64::from(matches!(header, Err(Error::Limit(_))));
             let alone = match read_header(decoder.bytes(), &lenient) {
                 Ok(header) => Ok(Some(header)),
                 Err(Error::Incomplete(_)) => Ok(None),
                 Err(error) => Err(error),
             };
-            assert_eq!(format!("{header:?}"), format!("{alone:?}"));
+            let held = held_on_32_bits(&header, &alone, decoder.bytes().len() < bytes.len());
+            refusals += u64::from(held || matches!(header, Err(Error::Limit(_))));
+            if !held {
+                assert_eq!(format!("{header:?}"), format!("{alone:?}"));
+            }
         }
         let parts = 64 * 16;
         eprintln!("{kept} reads in {calls} calls, {refusals} refusals");
@@ -2285,12 +2288,37 @@ pub(crate) mod tests {
                 Err(Error::Incomplete(_)) => Ok(None),
                 Err(error) => Err(error),
             };
-            assert_eq!(format!("{header:?}"), format!("{alone:?}"));
+            if !held_on_32_bits(&header, &alone, decoder.bytes().len() < bytes.len()) {
+                assert_eq!(format!("{header:?}"), format!("{alone:?}"));
+            }
         }
         let parts = 64 * 16;
         eprintln!("{kept} reads in {calls} calls, {faults} at fault");
         assert!(faults * 10 > calls * 9, "{faults} of {calls}");
         assert!(kept <= parts + 2 * calls, "{kept} reads in {calls} calls");
+    }
+
+    /// Whether `header`, an incremental decoder's, holds back the tile
+    /// refusal `alone`, the header read's, on bytes that have not reached the
+    /// `EOC` (`open`). On a 32-bit target a tile over the default cap is past
+    /// the address space, which more bytes do not lift, so the header holds
+    /// it until the `EOC` is in. On a 64-bit target the refusal is one more
+    /// bytes lift, which the header gives.
+    fn held_on_32_bits(
+        header: &Result<Option<Header>>,
+        alone: &Result<Option<Header>>,
+        open: bool,
+    ) -> bool {
+        let held = matches!(
+            (header, alone),
+            (Ok(Some(_)), Err(Error::Limit(limit))) if !incremental::lifts_with_bytes(limit)
+        );
+        assert!(
+            !held || cfg!(target_pointer_width = "32"),
+            "held on 64 bits: {alone:?}"
+        );
+        assert!(!held || open, "held at the EOC: {alone:?}");
+        held
     }
 
     /// A gray codestream of `tiles` tiles in a row, whose main header and

@@ -733,9 +733,9 @@ impl Refined {
 /// Why [`IncrementalDecoder::refine`] gave no image.
 ///
 /// Each of these may clear as more bytes come in, so none is an error. A
-/// [`TileError`](Self::TileError) clears to an image only where a later
-/// tile-part's `POC` changes which packets the decode reads; otherwise more
-/// bytes can only replace it with an earlier fault. Once the input has
+/// [`TileError`](Self::TileError) may give way to an earlier fault, and an
+/// image can still follow it, for example where a later tile-part's `POC`
+/// changes which packets the decode reads. Once the input has
 /// ended, [`finish`](IncrementalDecoder::finish) decodes
 /// all of it and reports a limit that still refuses it. To decode the bytes
 /// fed now, decode them on their own, as
@@ -927,11 +927,11 @@ pub enum Waiting {
     /// decode checks first, so neither closes: `refine` waits until
     /// [`finish`](IncrementalDecoder::finish) reports the error.
     ///
-    /// An image follows a `TileError` only where a later tile-part's `POC`
-    /// changes which packets the decode reads, so that it no longer reads
-    /// the one that failed; otherwise more bytes can only replace the error
-    /// with one that comes earlier in the input. A caller that stops here
-    /// gives up on such a file.
+    /// More bytes can replace the error with one that comes earlier in the
+    /// input, and an image can still follow, for example where a later
+    /// tile-part's `POC` changes which packets the decode reads, so that it
+    /// no longer reads the one that failed. A caller that stops here gives
+    /// up on such a file.
     /// [`header`](IncrementalDecoder::header) holds a tile refusal back
     /// while `refine` waits on it.
     #[non_exhaustive]
