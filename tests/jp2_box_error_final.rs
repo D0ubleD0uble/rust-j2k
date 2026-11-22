@@ -399,8 +399,9 @@ type FinalShape = (&'static str, Vec<u8>, DecodeOptions, usize);
 ///   `cmap` or `cdef`, a `cmap` with no `pclr`): settled by its 8-byte
 ///   header;
 /// - a `jp2h` of length 0 after the codestream whose whole child is at
-///   fault so, and one before the codestream whose whole `ihdr` is at
-///   fault, or a child whose length is 4 or 0: settled by that child (its
+///   fault (a `cmap` with no `pclr`, a `colr` too short), and one before
+///   the codestream whose whole `ihdr` is at fault, or whose child has a
+///   length of 4 or 0 or an `XLBox` of 8: settled by that child (its
 ///   header, for a length), with a `colr` after it;
 /// - a refusal of the sRGB step where OpenJPEG reads no box after the
 ///   codestream: settled by the `Psot` of 0 of its last tile-part, by the
@@ -521,6 +522,21 @@ fn final_shapes() -> Vec<FinalShape> {
             default(),
             gray().len(),
         ),
+        (
+            "a jp2h of length 0 with a child whose XLBox is 8",
+            open_jp2h(&[&[0, 0, 0, 1][..], b"xxxx", &8u64.to_be_bytes()].concat()),
+            default(),
+            gray().len(),
+        ),
+        (
+            "a jp2h of length 0 after the codestream with a colr too short",
+            after(&[&open_box(
+                b"jp2h",
+                &[synth::ihdr_for(&one), synth::bx(b"colr", &[1, 0]), gray()].concat(),
+            )]),
+            default(),
+            gray().len(),
+        ),
     ]
 }
 
@@ -579,12 +595,14 @@ final_at_once! {
     an_srgb_refusal_before_an_xlbox_of_2_32_is_final: 10,
     a_child_of_length_4_in_a_jp2h_of_length_0_is_final: 11,
     a_child_of_length_0_in_a_jp2h_of_length_0_is_final: 12,
+    a_child_with_xlbox_8_in_a_jp2h_of_length_0_is_final: 13,
+    a_whole_colr_too_short_in_a_jp2h_of_length_0_after_the_codestream_is_final: 14,
 }
 
 /// The checks of [`final_at_once!`] on shape `index` of [`final_shapes`].
 fn check_final(index: usize) {
     let shapes = final_shapes();
-    assert_eq!(shapes.len(), 13, "a shape with no test");
+    assert_eq!(shapes.len(), 15, "a shape with no test");
     let (name, bytes, options, after) = shapes.into_iter().nth(index).expect("a shape");
     let settled = bytes.len() - after;
     let lenient = options.clone().with_strict(false);
