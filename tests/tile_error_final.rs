@@ -6,7 +6,7 @@
 //! refuses, and before a damaged packet header. On a prefix that ends before
 //! that tile-part, `decode_with` gives the tile's error; on a longer one,
 //! the fault. So an [`IncrementalDecoder`] waits on such an error, as
-//! [`Waiting::TileError`], and its `header` holds a tile refusal back, until
+//! [`Waiting::Held`], and its `header` holds a tile refusal back, until
 //! the bytes fed reach the `EOC`. A JP2 file never closes, as boxes after
 //! the codestream are checked first. Fed in any two pieces or a byte at a
 //! time, each goes from the main header cut short, to images or waits, to
@@ -265,7 +265,7 @@ impl Track {
             // Not a step: the refine did not decode.
             Ok(Refined::Waiting(Waiting::MoreBytes { .. })) => return,
             Ok(Refined::Waiting(Waiting::HeaderIncomplete { .. })) => Phase::Incomplete,
-            Ok(Refined::Waiting(Waiting::TileError { error, .. })) => {
+            Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
                 // The error it waits on is the one-shot decode's, on bytes
                 // that have not closed.
                 assert!(!held::closes(&fed), "{context}: wait on {error:?}");
@@ -292,11 +292,6 @@ impl Track {
 /// or, where the file does not close, may wait on it; `finish` gives what
 /// `decode_with` gives under `options`.
 fn check_streams(bytes: &[u8], options: &DecodeOptions, name: &str) {
-    check_streams_to(bytes, bytes.len(), options, name);
-}
-
-/// [`check_streams`], with the bytes from `at_once` on fed in one piece.
-fn check_streams_to(bytes: &[u8], at_once: usize, options: &DecodeOptions, name: &str) {
     let lenient = options.clone().with_strict(false);
     let whole = error_of(&decode_with(bytes, &lenient));
     assert!(whole.is_some(), "{name}: the whole file is refused");
@@ -305,7 +300,7 @@ fn check_streams_to(bytes: &[u8], at_once: usize, options: &DecodeOptions, name:
         phase.as_ref() == Some(&failed) || (!held::closes(bytes) && phase == &Some(Phase::Ok))
     };
     let finished = error_of(&decode_with(bytes, options));
-    for split in 1..at_once.min(bytes.len() - 1) + 1 {
+    for split in 1..bytes.len() {
         let context = format!("{name}, split at {split}");
         let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
         let mut track = Track::default();
@@ -324,12 +319,10 @@ fn check_streams_to(bytes: &[u8], at_once: usize, options: &DecodeOptions, name:
     let context = format!("{name}, a byte at a time");
     let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
     let mut track = Track::default();
-    for byte in &bytes[..at_once] {
+    for byte in bytes {
         decoder.feed(std::slice::from_ref(byte));
         track.check(&mut decoder, &context);
     }
-    decoder.feed(&bytes[at_once..]);
-    track.check(&mut decoder, &context);
     assert_eq!(error_of(&decoder.finish()), finished, "{context}: finish");
 }
 
@@ -490,10 +483,7 @@ fn an_error_in_a_tile_is_final_at_the_eoc() {
         let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
         decoder.feed(cut);
         assert!(
-            matches!(
-                decoder.refine(),
-                Ok(Refined::Waiting(Waiting::TileError { .. }))
-            ),
+            matches!(decoder.refine(), Ok(Refined::Waiting(Waiting::Held { .. }))),
             "{name}"
         );
         assert!(decoder.header().is_ok(), "{name}");
@@ -501,10 +491,7 @@ fn an_error_in_a_tile_is_final_at_the_eoc() {
         let mut strict = IncrementalDecoder::new(options.with_strict(true)).expect("valid options");
         strict.feed(cut);
         assert!(
-            matches!(
-                strict.refine(),
-                Ok(Refined::Waiting(Waiting::TileError { .. }))
-            ),
+            matches!(strict.refine(), Ok(Refined::Waiting(Waiting::Held { .. }))),
             "{name}"
         );
         assert!(
@@ -558,16 +545,15 @@ fn a_jp2_file_never_closes() {
             } else {
                 assert!(whole.starts_with(gives), "{name}: {whole}");
             }
-            // A box after the codestream that the input ends inside is
-            // refused as cut short, not waited for, so each such box is
-            // fed whole.
-            check_streams_to(&bytes, in_jp2(&codestream, &[]).len(), &lenient, &name);
+            // A box after the codestream that the input ends inside waits
+            // too, so the stream can be cut anywhere.
+            check_streams(&bytes, &lenient, &name);
             // Fed whole, the refine gives the box's fault, or waits on the
             // tile's error.
             let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
             decoder.feed(&bytes);
             match decoder.refine() {
-                Ok(Refined::Waiting(Waiting::TileError { error, .. })) if gives.is_empty() => {
+                Ok(Refined::Waiting(Waiting::Held { error, .. })) if gives.is_empty() => {
                     assert_eq!(format!("{error:?}"), whole, "{name}");
                     assert!(decoder.header().is_ok(), "{name}");
                 }
@@ -582,10 +568,7 @@ fn a_jp2_file_never_closes() {
             let mut open = IncrementalDecoder::new(lenient.clone()).expect("valid options");
             open.feed(&cut);
             assert!(
-                matches!(
-                    open.refine(),
-                    Ok(Refined::Waiting(Waiting::TileError { .. }))
-                ),
+                matches!(open.refine(), Ok(Refined::Waiting(Waiting::Held { .. }))),
                 "{name}"
             );
         }
@@ -672,7 +655,7 @@ fn a_poc_in_a_later_tile_part_can_clear_an_error_in_a_tile() {
         let refined = decoder.refine();
         let one_shot = decode_with(&bytes[..end], &lenient);
         match refined {
-            Ok(Refined::Waiting(Waiting::TileError { error, .. })) => {
+            Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
                 let error = format!("{error:?}");
                 assert!(error.contains("Lblock"), "{end}: {error}");
                 assert!(end < poc_in, "{end}: waits with the POC in");

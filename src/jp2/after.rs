@@ -30,8 +30,8 @@
 //!
 //! Nothing read here is applied to the image.
 
-use super::Jp2File;
 use super::boxes::{Boxes, Jp2Box};
+use super::{BoxFault, Jp2File};
 use super::{channels, color, palette};
 use crate::codestream::markers::marker::{EOC, SOC, SOT};
 use crate::{Error, Result};
@@ -227,43 +227,56 @@ fn context(error: Error) -> Error {
 /// whether the palette and channel definitions were skipped, which decides
 /// what OpenJPEG still holds. The walk's length fault, if any, comes after
 /// every box it walked.
-pub(crate) fn check(file: &Jp2File<'_>, raw_channels: bool) -> Result<()> {
+///
+/// A fault is open ([`BoxFault::open`]) where the input ends inside the box
+/// at fault: the walk's fault of a box that runs past the end, or a fault in
+/// the last box when it has length 0. The boxes before it are whole and read
+/// the same whatever follows, so every other fault is final.
+pub(crate) fn check(file: &Jp2File<'_>, raw_channels: bool) -> core::result::Result<(), BoxFault> {
     if !file.after_read {
         return Ok(());
     }
     let mut state = State::after_decode(file, raw_channels);
-    for item in &file.after_codestream {
-        match &item.kind {
-            b"jP  " => {
-                return Err(fault(
-                    "the file has a signature box, which must be the first box",
-                ));
-            }
-            b"ftyp" => {
-                return Err(fault(
-                    "the file has an `ftyp` box, which must be the second box",
-                ));
-            }
-            b"ihdr" => {}
-            b"jp2h" => {
-                let mut has_ihdr = false;
-                for child in Boxes::children(item.payload, "a `jp2h` box after the codestream") {
-                    let child = child?;
-                    if &child.kind == b"ihdr" {
-                        has_ihdr = true;
-                    } else {
-                        state.read(&child)?;
-                    }
-                }
-                if !has_ihdr {
-                    return Err(fault("a `jp2h` box has no `ihdr` box"));
-                }
-            }
-            _ => state.read(item)?,
-        }
+    let last = file.after_codestream.len().checked_sub(1);
+    for (index, item) in file.after_codestream.iter().enumerate() {
+        let open = file.after_open && file.after_fault.is_none() && Some(index) == last;
+        check_box(&mut state, item).map_err(|error| BoxFault { error, open })?;
     }
     match &file.after_fault {
-        Some(error) => Err(error.clone()),
+        Some(error) => Err(BoxFault {
+            error: error.clone(),
+            open: file.after_open,
+        }),
         None => Ok(()),
+    }
+}
+
+/// Read one top-level box after the codestream.
+fn check_box(state: &mut State, item: &Jp2Box<'_>) -> Result<()> {
+    match &item.kind {
+        b"jP  " => Err(fault(
+            "the file has a signature box, which must be the first box",
+        )),
+        b"ftyp" => Err(fault(
+            "the file has an `ftyp` box, which must be the second box",
+        )),
+        b"ihdr" => Ok(()),
+        b"jp2h" => {
+            let mut has_ihdr = false;
+            for child in Boxes::children(item.payload, "a `jp2h` box after the codestream") {
+                let child = child?;
+                if &child.kind == b"ihdr" {
+                    has_ihdr = true;
+                } else {
+                    state.read(&child)?;
+                }
+            }
+            if has_ihdr {
+                Ok(())
+            } else {
+                Err(fault("a `jp2h` box has no `ihdr` box"))
+            }
+        }
+        _ => state.read(item),
     }
 }

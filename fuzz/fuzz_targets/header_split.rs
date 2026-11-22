@@ -10,6 +10,12 @@
 //! other targets never call `header()`, and the committed differential test
 //! (`tests/incremental_header.rs`) uses the default limits only.
 //!
+//! The exception is an error more bytes can replace, which `header()` holds
+//! back while the input has not closed (`tests/support/held.rs`; a JP2 file
+//! never closes): it gives the header where that read gives the error, or,
+//! in a JP2 file whose box of length 0 before the codestream is at fault,
+//! `None`.
+//!
 //! Layout: 12 control bytes, then the file.
 //!
 //! - Byte 0, mod 3: the resolution reduction.
@@ -35,12 +41,14 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../../tests/support/held.rs"]
+mod held;
 #[path = "../../tests/support/inconsistent.rs"]
 mod inconsistent;
 use inconsistent::checked;
 use rust_j2k::{
-    read_header_with, ColorOutput, DecodeOptions, Error, IncrementalDecoder, Region, SampleLimit,
-    Window,
+    read_header_with, ColorOutput, DecodeOptions, Error, Header, IncrementalDecoder, Region,
+    SampleLimit, Window,
 };
 
 /// splitmix64: the same stream on every platform, from a seed in the input.
@@ -91,6 +99,180 @@ fn oracle(prefix: &[u8], options: &DecodeOptions) -> String {
             Err(error) => Err(error),
         }
     )
+}
+
+fn u16_at(bytes: &[u8], at: usize) -> Option<usize> {
+    let b = bytes.get(at..at.checked_add(2)?)?;
+    Some(usize::from(u16::from_be_bytes([b[0], b[1]])))
+}
+
+fn u32_at(bytes: &[u8], at: usize) -> Option<usize> {
+    let b = bytes.get(at..at.checked_add(4)?)?;
+    usize::try_from(u32::from_be_bytes([b[0], b[1], b[2], b[3]])).ok()
+}
+
+/// A `colr` box after the codestream too short for OpenJPEG's reader: a
+/// fault the decode checks before the sRGB step and the tile-parts.
+const SHORT_COLR: [u8; 10] = [0, 0, 0, 10, b'c', b'o', b'l', b'r', 1, 0];
+
+/// Where the codestream starts in the JP2 file `bytes`: the payload of the
+/// first top-level `jp2c` box, past the signature.
+fn codestream_start(bytes: &[u8]) -> Option<usize> {
+    let mut at = 12usize;
+    loop {
+        let lbox = u32_at(bytes, at)?;
+        let kind = bytes.get(at + 4..at + 8)?;
+        let (length, header) = match lbox {
+            0 => (bytes.len() - at, 8),
+            1 => (u32_at(bytes, at + 12)?, 16),
+            n => (n, 8),
+        };
+        if kind == b"jp2c" {
+            return Some(at + header);
+        }
+        if length < header {
+            return None;
+        }
+        at = at.checked_add(length)?;
+    }
+}
+
+/// Where the top-level boxes of the JP2 file `bytes` end, before any
+/// `jp2c`, in a box of length 0, which runs to the end of the input: the
+/// offset of that box. `header()` gives `None` on every fault there, as
+/// more bytes grow the box, though a fault of a part of it held whole is
+/// final; that wait is allowed, not required, where the boxes before it
+/// leave `read_header_with` incomplete ([`check`]).
+fn open_box_at(bytes: &[u8]) -> Option<usize> {
+    let mut at = 12usize;
+    while let (Some(lbox), Some(kind)) = (u32_at(bytes, at), bytes.get(at + 4..at + 8)) {
+        if kind == b"jp2c" {
+            return None;
+        }
+        let length = match lbox {
+            0 => return Some(at),
+            1 => match u32_at(bytes, at + 12) {
+                Some(length) if length >= 16 => length,
+                _ => return None,
+            },
+            n if n >= 8 => n,
+            _ => return None,
+        };
+        at = at.checked_add(length)?;
+    }
+    None
+}
+
+/// Whether `prefix` ends inside a box of length 0 before the codestream
+/// ([`open_box_at`]), and the boxes before it, read alone, leave
+/// `read_header_with` incomplete: a fault there is not in an earlier box.
+fn open_box_waits(prefix: &[u8], lenient: &DecodeOptions) -> bool {
+    open_box_at(prefix).is_some_and(|at| {
+        matches!(
+            checked(read_header_with(&prefix[..at], lenient)),
+            Err(Error::Incomplete(_))
+        )
+    })
+}
+
+/// `prefix`, a JP2 file cut inside or just after its codestream's
+/// tile-parts, with zeros to the end of the tile-part the input ends
+/// inside, an `EOC`, then [`SHORT_COLR`]: an input on which the decode
+/// meets a box fault before the sRGB step and every tile.
+fn completed(prefix: &[u8]) -> Option<Vec<u8>> {
+    let start = codestream_start(prefix)?;
+    let codestream = &prefix[start..];
+    if !codestream.starts_with(&[0xFF, 0x4F]) {
+        return None;
+    }
+    let mut at = 2usize;
+    while u16_at(codestream, at)? != 0xFF90 {
+        let length = u16_at(codestream, at + 2)?;
+        if length < 2 {
+            return None;
+        }
+        at += 2 + length;
+    }
+    let end = loop {
+        match u16_at(codestream, at) {
+            None if at >= codestream.len() => break at,
+            Some(0xFF90) => {}
+            Some(0xFFD9) => {
+                return Some([prefix, &SHORT_COLR[..]].concat());
+            }
+            _ => return None,
+        }
+        let psot = u32_at(codestream, at + 6)?;
+        if psot < 14 {
+            return None;
+        }
+        at = at.checked_add(psot)?;
+    };
+    let mut bytes = prefix.to_vec();
+    bytes.resize(start + end, 0);
+    bytes.extend([0xFF, 0xD9]);
+    bytes.extend(SHORT_COLR);
+    Some(bytes)
+}
+
+/// Whether more bytes can change what `read_header_with` gives on the JP2
+/// prefix `prefix`: some suffix tried here gives another answer. A fault of
+/// a box held whole, and of the boxes before it, passes none.
+fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
+    let lenient = options.clone().with_strict(false);
+    let answer = |bytes: &[u8]| format!("{:?}", checked(read_header_with(bytes, &lenient)));
+    let base = answer(prefix);
+    let mut longer = vec![
+        [prefix, &[0; 64][..]].concat(),
+        [prefix, &vec![0; 8192][..]].concat(),
+        [prefix, &SHORT_COLR[..]].concat(),
+    ];
+    longer.extend(completed(prefix));
+    longer.iter().any(|bytes| answer(bytes) != base)
+}
+
+/// Check `got`, what `header()` gave on `prefix` under `options`, against
+/// the [`oracle`], allowing an error held back where more bytes can replace
+/// it: in a codestream, while its tile-parts have not closed; in a JP2
+/// file, where a suffix changes what `read_header_with` gives, or, for a
+/// refusal of the sRGB step, as the header with the channels as coded,
+/// or, inside a box of length 0 before the codestream, as `None`
+/// ([`open_box_waits`]).
+fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOptions, at: &str) {
+    let want = oracle(prefix, options);
+    if format!("{got:?}") == want {
+        return;
+    }
+    let lenient = options.clone().with_strict(false);
+    let refused = matches!(
+        read_header_with(prefix, &lenient),
+        Err(error) if !matches!(error, Error::Incomplete(_))
+    );
+    let codestream = prefix.starts_with(&[0xFF, 0x4F]);
+    let as_coded = || {
+        matches!(options.color(), ColorOutput::Srgb)
+            && matches!(got, Ok(Some(_)))
+            && format!("{got:?}")
+                == format!(
+                    "{:?}",
+                    checked(read_header_with(
+                        prefix,
+                        &lenient.clone().with_color(ColorOutput::AsCoded)
+                    ))
+                    .map(Some)
+                )
+    };
+    let held = refused
+        && if codestream {
+            !held::closes(prefix)
+        } else {
+            replaceable(prefix, options) || as_coded()
+        };
+    match got {
+        Ok(Some(_)) if held => {}
+        Ok(None) if (held || refused && open_box_waits(prefix, &lenient)) && !codestream => {}
+        _ => panic!("{at}: {got:?}, where read_header_with gives {want}"),
+    }
 }
 
 fuzz_target!(|input: &[u8]| {
@@ -147,13 +329,31 @@ fuzz_target!(|input: &[u8]| {
                 _ => checked(decoder.set_max_quality_layers(Some(1 + u16::from(arg % 3)))),
             };
         }
-        let want = oracle(&data[..fed], decoder.options());
-        let got = format!("{:?}", checked(decoder.header()));
-        assert_eq!(got, want, "at {fed} of {}", data.len());
+        let got = checked(decoder.header());
+        check(
+            &got,
+            &data[..fed],
+            decoder.options(),
+            &format!("at {fed} of {}", data.len()),
+        );
+        // An error is final: more bytes do not change it, so it is what
+        // `read_header_with` gives on the whole input.
+        if let Err(error) = &got {
+            let whole = checked(read_header_with(
+                data,
+                &decoder.options().clone().with_strict(false),
+            ));
+            assert_eq!(
+                format!("{:?}", Err::<Header, _>(error)),
+                format!("{:?}", whole.as_ref()),
+                "at {fed} of {}: an error the whole input does not give",
+                data.len()
+            );
+        }
         if r % 5 == 0 {
             assert_eq!(
                 format!("{:?}", checked(decoder.header())),
-                want,
+                format!("{got:?}"),
                 "again at {fed}"
             );
         }

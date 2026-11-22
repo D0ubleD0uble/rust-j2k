@@ -1,5 +1,5 @@
 //! A tile refusal an incremental decoder holds does not buy the refused
-//! work: while `refine` waits on it (`Waiting::TileError`) and `header`
+//! work: while `refine` waits on it (`Waiting::Held`) and `header`
 //! holds it back, neither builds the refused tile's geometry or decodes it.
 //!
 //! The file is one tile of 1000 x 1000 whose own `COD` gives no levels and
@@ -75,7 +75,7 @@ fn a_held_tile_refusal_does_not_build_the_refused_tile() {
         assert!(matches!(header, Ok(Some(_))), "{header:?}");
         let (refined, refine) = peak(|| decoder.refine());
         match refine {
-            Ok(Refined::Waiting(Waiting::TileError { .. })) => waits += 1,
+            Ok(Refined::Waiting(Waiting::Held { .. })) => waits += 1,
             Ok(Refined::Waiting(Waiting::MoreBytes { .. })) => {}
             other => panic!("{other:?}"),
         }
