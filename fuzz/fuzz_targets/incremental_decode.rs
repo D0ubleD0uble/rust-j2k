@@ -398,13 +398,21 @@ fuzz_target!(|input: &[u8]| {
             }
         }
     }
-    // A refine's error is final: the whole input gives it too. In a JP2
-    // file it is checked once the bytes fed held the `jp2c` box's header:
-    // before that the decode may still take the input for a codestream, and
-    // the walk of the boxes before the codestream gives an error that more
-    // boxes can replace, which is not what this target checks.
-    let settled = data.starts_with(&[0xFF, 0x4F])
-        || jp2c_end(data).is_some_and(|end| end <= failed_at);
+    // A refine's error is final: the whole input gives it too. Input is a
+    // JP2 file when it does not open with `SOC` and bytes 4 to 8 are `jP  `
+    // (or, under 8 bytes, it starts the signature box); a prefix too short
+    // to tell waits. Anything else is a codestream, checked at every
+    // prefix. In a JP2 file the error is checked where it came within the
+    // 12-byte signature box, and once the bytes fed held the `jp2c` box's
+    // header: between them the walk of the boxes before the codestream gives
+    // an error that more boxes can replace, which is not what this target
+    // checks.
+    let jp2 = !data.starts_with(&[0xFF, 0x4F])
+        && match data.get(4..8) {
+            Some(kind) => kind == &JP2_SIGNATURE[4..],
+            None => !data.is_empty() && JP2_SIGNATURE.starts_with(data),
+        };
+    let settled = !jp2 || failed_at < 12 || jp2c_end(data).is_some_and(|end| end <= failed_at);
     if let (Some(error), true) = (&failed, settled) {
         let whole = keyed(checked(decode_with(data, &lenient)).map(|_| ()));
         assert_eq!(whole, Err(error.clone()), "a refine failed for good");
