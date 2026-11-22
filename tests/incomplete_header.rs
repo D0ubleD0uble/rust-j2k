@@ -357,9 +357,6 @@ fn incomplete_before_the_main_header_says_where_the_input_ends() {
     }
 }
 
-/// The JP2 signature box (I.5.1).
-const SIGNATURE: [u8; 12] = [0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
-
 /// `jp2_signed16.jp2`: the signature at 0, `ftyp` at 12 (20 bytes), `jp2h`
 /// at 32 (45 bytes, holding `ihdr` at 40 and `colr` at 62) and `jp2c` at 77,
 /// its codestream from 85.
