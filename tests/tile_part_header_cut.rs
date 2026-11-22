@@ -100,8 +100,8 @@ fn a_fault_in_a_whole_psot_zero_header_is_refused() {
 }
 
 /// The decode with `strict` off is `Ok`, and its report names the lost
-/// tile-part, tile 8 part 2, as `TruncatedTilePart` with `declared` 0 (its
-/// `Psot`), says tile 8 has two of its three tile-parts, and gives
+/// tile-part, tile 8 part 2, as `TruncatedTilePart` cut in its header with
+/// `declared` `None` (its `Psot` is 0), says tile 8 has two of its three tile-parts, and gives
 /// `MissingEoc` only when the input does not end in `FF D9`.
 fn assert_read_as_cut(name: &str, bytes: &[u8]) {
     rust_j2k::fuzz::tile_parts_walks_agree(bytes);
@@ -112,8 +112,14 @@ fn assert_read_as_cut(name: &str, bytes: &[u8]) {
     assert!(
         entries.iter().any(|entry| matches!(
             entry,
-            ReportEntry::TruncatedTilePart { tile: 8, tile_part: 2, declared: 0, present, .. }
-                if *present == (bytes.len() - at) as u64
+            ReportEntry::TruncatedTilePart {
+                tile: 8,
+                tile_part: 2,
+                declared: None,
+                present,
+                header_cut: true,
+                ..
+            } if *present == (bytes.len() - at) as u64
         )),
         "{name}: {entries:?}"
     );
@@ -237,27 +243,129 @@ fn a_fault_in_a_whole_header_of_a_cut_tile_part_is_refused() {
 }
 
 /// A cut tile-part whose header the input ends inside still decodes, and
-/// the report names it as `TruncatedTilePart`.
+/// the report names it as `TruncatedTilePart` cut in its header, with its
+/// `Psot` as `declared`.
 #[test]
 fn a_cut_tile_part_whose_header_the_input_ends_inside_is_a_cut() {
     let com: Vec<u8> = [&[0xFF, 0x64, 0, 16][..], &[0; 14]].concat();
-    let (bytes, at, _) = sixth_part_with(&com);
+    let (bytes, at, end) = sixth_part_with(&com);
+    let psot = (end - at) as u64;
     for keep in [0, 1, 2, 3, 6, com.len(), com.len() + 1] {
         let cut = &bytes[..at + 12 + keep];
         rust_j2k::fuzz::tile_parts_walks_agree(cut);
         let image = decode_with(cut, &options(false)).unwrap_or_else(|e| panic!("{keep}: {e}"));
+        let present = (cut.len() - at) as u64;
+        let named = image
+            .report
+            .entries
+            .iter()
+            .find(|entry| matches!(entry, ReportEntry::TruncatedTilePart { .. }))
+            .unwrap_or_else(|| panic!("{keep}: {:?}", image.report.entries));
         assert!(
-            image.report.entries.iter().any(|entry| matches!(
-                entry,
+            matches!(
+                named,
                 ReportEntry::TruncatedTilePart {
                     tile: 1,
                     tile_part: 2,
+                    declared: Some(declared),
+                    present: found,
+                    header_cut: true,
                     ..
-                }
-            )),
-            "{keep}: {:?}",
-            image.report.entries
+                } if *declared == psot && *found == present
+            ),
+            "{keep}: {named:?}"
         );
+        assert_eq!(
+            named.to_string(),
+            format!(
+                "tile 1 tile-part 2 is cut short in its header: {present} of its {psot} bytes are there"
+            ),
+            "{keep}"
+        );
+    }
+}
+
+/// Every prefix of the file from its first `SOT` on, and of the file with
+/// `Psot` 0 in its last tile-part from that tile-part's `SOT` on, decodes
+/// with `strict` off. Each `TruncatedTilePart` in the reports names the
+/// tile-part the prefix ends inside, holds what the prefix holds of it,
+/// has `present < declared` whenever `declared` is `Some`, and is cut in
+/// its header exactly when the prefix ends before that tile-part's `SOD`
+/// is whole. Every tile-part header of the file is its `SOD` alone.
+#[test]
+fn every_truncated_tile_part_is_what_the_prefix_holds() {
+    let base = std::fs::read("tests/fixtures/tiles_multipart_lossless.j2k").unwrap();
+    let (zero, last) = last_part_with(&[]);
+    for (name, bytes, from) in [("file", &base, sots(&base)[0] + 2), ("Psot 0", &zero, last)] {
+        let parts = sots(bytes);
+        let mut kinds = [false; 3];
+        for length in from..bytes.len() {
+            let prefix = &bytes[..length];
+            let image = decode_with(prefix, &options(false))
+                .unwrap_or_else(|e| panic!("{name}, {length}: {e}"));
+            for entry in &image.report.entries {
+                let ReportEntry::TruncatedTilePart {
+                    tile,
+                    tile_part,
+                    declared,
+                    present,
+                    header_cut,
+                    ..
+                } = entry
+                else {
+                    continue;
+                };
+                let at = *parts.iter().rfind(|&&at| at < length).unwrap();
+                assert_eq!(bytes[at + 12..at + 14], [0xFF, 0x93], "{name}, {length}");
+                let what = format!("{name}, {length}: {entry:?}");
+                assert_eq!(
+                    *tile,
+                    u32::from(u16::from_be_bytes([bytes[at + 4], bytes[at + 5]])),
+                    "{what}"
+                );
+                assert_eq!(*tile_part, bytes[at + 10], "{what}");
+                assert_eq!(*present, (length - at) as u64, "{what}");
+                assert_eq!(*header_cut, length < at + 14, "{what}");
+                let psot = u32::from_be_bytes(bytes[at + 6..at + 10].try_into().unwrap());
+                match declared {
+                    Some(declared) => {
+                        assert_eq!(*declared, u64::from(psot), "{what}");
+                        assert!(present < declared, "{what}");
+                    }
+                    None => {
+                        assert_eq!(psot, 0, "{what}");
+                        assert!(*header_cut, "{what}");
+                    }
+                }
+                let shown = format!("tile {tile} tile-part {tile_part} is cut short");
+                let shown = match (declared, header_cut) {
+                    (None, _) => format!(
+                        "{shown} in its header: {present} bytes of it are there, and its \
+                         `Psot` is 0"
+                    ),
+                    (Some(declared), true) => {
+                        format!(
+                            "{shown} in its header: {present} of its {declared} bytes are there"
+                        )
+                    }
+                    (Some(declared), false) => {
+                        format!("{shown}: {present} of its {declared} bytes are there")
+                    }
+                };
+                assert_eq!(entry.to_string(), shown, "{what}");
+                kinds[match (declared, header_cut) {
+                    (None, _) => 0,
+                    (Some(_), true) => 1,
+                    (Some(_), false) => 2,
+                }] = true;
+            }
+        }
+        let expected = if name == "file" {
+            [false, true, true]
+        } else {
+            [true, false, false]
+        };
+        assert_eq!(kinds, expected, "{name}");
     }
 }
 
