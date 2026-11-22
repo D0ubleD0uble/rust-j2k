@@ -33,7 +33,8 @@
 //! tile-parts with a walk of its own that keeps no tile record. Each input up
 //! to `MAX_DECODED_INPUT` bytes is also run through
 //! `rust_j2k::fuzz::tile_parts_walks_agree`, which checks that walk against
-//! the decode's parse directly, with `strict` on and off.
+//! the decode's parse directly, with `strict` on and off, on the input and
+//! on prefixes of it.
 //!
 //! A full decode costs far more than the header, so when the header reads and
 //! the input or the image is large, the decode is skipped and only
