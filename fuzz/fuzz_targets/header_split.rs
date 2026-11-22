@@ -101,22 +101,136 @@ fn oracle(prefix: &[u8], options: &DecodeOptions) -> String {
     )
 }
 
+fn u16_at(bytes: &[u8], at: usize) -> Option<usize> {
+    let b = bytes.get(at..at.checked_add(2)?)?;
+    Some(usize::from(u16::from_be_bytes([b[0], b[1]])))
+}
+
+fn u32_at(bytes: &[u8], at: usize) -> Option<usize> {
+    let b = bytes.get(at..at.checked_add(4)?)?;
+    usize::try_from(u32::from_be_bytes([b[0], b[1], b[2], b[3]])).ok()
+}
+
+/// A `colr` box after the codestream too short for OpenJPEG's reader: a
+/// fault the decode checks before the sRGB step and the tile-parts.
+const SHORT_COLR: [u8; 10] = [0, 0, 0, 10, b'c', b'o', b'l', b'r', 1, 0];
+
+/// Where the codestream starts in the JP2 file `bytes`: the payload of the
+/// first top-level `jp2c` box, past the signature.
+fn codestream_start(bytes: &[u8]) -> Option<usize> {
+    let mut at = 12usize;
+    loop {
+        let lbox = u32_at(bytes, at)?;
+        let kind = bytes.get(at + 4..at + 8)?;
+        let (length, header) = match lbox {
+            0 => (bytes.len() - at, 8),
+            1 => (u32_at(bytes, at + 12)?, 16),
+            n => (n, 8),
+        };
+        if kind == b"jp2c" {
+            return Some(at + header);
+        }
+        if length < header {
+            return None;
+        }
+        at = at.checked_add(length)?;
+    }
+}
+
+/// `prefix`, a JP2 file cut inside or just after its codestream's
+/// tile-parts, with zeros to the end of the tile-part the input ends
+/// inside, an `EOC`, then [`SHORT_COLR`]: an input on which the decode
+/// meets a box fault before the sRGB step and every tile.
+fn completed(prefix: &[u8]) -> Option<Vec<u8>> {
+    let start = codestream_start(prefix)?;
+    let codestream = &prefix[start..];
+    if !codestream.starts_with(&[0xFF, 0x4F]) {
+        return None;
+    }
+    let mut at = 2usize;
+    while u16_at(codestream, at)? != 0xFF90 {
+        let length = u16_at(codestream, at + 2)?;
+        if length < 2 {
+            return None;
+        }
+        at += 2 + length;
+    }
+    let end = loop {
+        match u16_at(codestream, at) {
+            None if at >= codestream.len() => break at,
+            Some(0xFF90) => {}
+            Some(0xFFD9) => {
+                return Some([prefix, &SHORT_COLR[..]].concat());
+            }
+            _ => return None,
+        }
+        let psot = u32_at(codestream, at + 6)?;
+        if psot < 14 {
+            return None;
+        }
+        at = at.checked_add(psot)?;
+    };
+    let mut bytes = prefix.to_vec();
+    bytes.resize(start + end, 0);
+    bytes.extend([0xFF, 0xD9]);
+    bytes.extend(SHORT_COLR);
+    Some(bytes)
+}
+
+/// Whether more bytes can change what `read_header_with` gives on the JP2
+/// prefix `prefix`: some suffix tried here gives another answer. A fault of
+/// a box held whole, and of the boxes before it, passes none.
+fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
+    let lenient = options.clone().with_strict(false);
+    let answer = |bytes: &[u8]| format!("{:?}", checked(read_header_with(bytes, &lenient)));
+    let base = answer(prefix);
+    let mut longer = vec![
+        [prefix, &[0; 64][..]].concat(),
+        [prefix, &vec![0; 8192][..]].concat(),
+        [prefix, &SHORT_COLR[..]].concat(),
+    ];
+    longer.extend(completed(prefix));
+    longer.iter().any(|bytes| answer(bytes) != base)
+}
+
 /// Check `got`, what `header()` gave on `prefix` under `options`, against
-/// the [`oracle`], allowing an error held back on an input that has not
-/// closed.
+/// the [`oracle`], allowing an error held back where more bytes can replace
+/// it: in a codestream, while its tile-parts have not closed; in a JP2
+/// file, where a suffix changes what `read_header_with` gives, or, for a
+/// refusal of the sRGB step, as the header with the channels as coded.
 fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOptions, at: &str) {
     let want = oracle(prefix, options);
     if format!("{got:?}") == want {
         return;
     }
+    let lenient = options.clone().with_strict(false);
     let refused = matches!(
-        read_header_with(prefix, &options.clone().with_strict(false)),
+        read_header_with(prefix, &lenient),
         Err(error) if !matches!(error, Error::Incomplete(_))
     );
-    let held = refused && !held::closes(prefix);
+    let codestream = prefix.starts_with(&[0xFF, 0x4F]);
+    let as_coded = || {
+        matches!(options.color(), ColorOutput::Srgb)
+            && matches!(got, Ok(Some(_)))
+            && format!("{got:?}")
+                == format!(
+                    "{:?}",
+                    checked(read_header_with(
+                        prefix,
+                        &lenient.clone().with_color(ColorOutput::AsCoded)
+                    ))
+                    .map(Some)
+                )
+    };
+    let held = refused
+        && if codestream {
+            !held::closes(prefix)
+        } else {
+            replaceable(prefix, options) || as_coded()
+        };
     match got {
         Ok(Some(_)) if held => {}
-        Ok(None) if held && !prefix.starts_with(&[0xFF, 0x4F]) => {}
+        Ok(None) if held && !codestream => {}
         _ => panic!("{at}: {got:?}, where read_header_with gives {want}"),
     }
 }
@@ -182,6 +296,20 @@ fuzz_target!(|input: &[u8]| {
             decoder.options(),
             &format!("at {fed} of {}", data.len()),
         );
+        // An error is final: more bytes do not change it, so it is what
+        // `read_header_with` gives on the whole input.
+        if let Err(error) = &got {
+            let whole = checked(read_header_with(
+                data,
+                &decoder.options().clone().with_strict(false),
+            ));
+            assert_eq!(
+                format!("{:?}", Err::<Header, _>(error)),
+                format!("{:?}", whole.as_ref()),
+                "at {fed} of {}: an error the whole input does not give",
+                data.len()
+            );
+        }
         if r % 5 == 0 {
             assert_eq!(
                 format!("{:?}", checked(decoder.header())),
