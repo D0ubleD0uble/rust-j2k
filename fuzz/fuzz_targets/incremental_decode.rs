@@ -24,8 +24,11 @@
 //! only after work was spent, and where the one-shot decode passes the
 //! code-block bound, or is refused by it at the tile and for the work the
 //! wait's `refused_at` gives: a refine cut short by what was spent does not
-//! decode the tiles it counts, and waits there. The probe below is checked
-//! by the same rule. After an
+//! decode the tiles it counts, and waits there. `TileRefused` comes only
+//! where the one-shot decode refuses a tile in a way more bytes do not lift
+//! and the bytes fed do not close the tile-parts with an `EOC`, as a later
+//! tile-part's fault would come first. The probe below is checked by the
+//! same rule. After an
 //! error, every later refine gives it again, and `finish` is the decode of
 //! all the bytes under the decoder's options.
 //!
@@ -73,6 +76,8 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../../tests/support/held.rs"]
+mod held;
 #[path = "../../tests/support/inconsistent.rs"]
 mod inconsistent;
 use inconsistent::checked;
@@ -141,7 +146,8 @@ fuzz_target!(|input: &[u8]| {
     }
     // A ceiling the bytes do not raise: a refusal by the sample limit, or by
     // the code-blocks or precincts it allows a tile, is the one-shot decode's
-    // sticky error, not a wait. It is sized from the samples the file
+    // sticky error, not a wait, but for a tile refused before the tile-parts
+    // close (`held` below). It is sized from the samples the file
     // declares: all of them for three draws in four, else half. The first
     // are admitted by the header's check, unless the decoder counts more
     // than the header declares, so the refines go on to decode; the others
@@ -247,13 +253,15 @@ fuzz_target!(|input: &[u8]| {
         if due {
             let one_shot = checked(decode_with(&data[..fed], &lenient));
             let shape = one_shot.as_ref().map(|_| ()).map_err(Error::clone);
+            // A tile refusal on tile-parts that have not closed is a wait.
+            let held = matches!(&shape, Err(error) if held::held(error, &data[..fed]));
             let repeat_work = incremental_repeat_work(&decoder);
             if let Some(why) = &waiting {
                 assert!(
                     !(ceiling && matches!(why, Waiting::SampleLimit { .. })),
                     "{fed} bytes: waits on a ceiling: {why:?}"
                 );
-                check_waiting(why, &shape, repeat_work.refused.is_some(), spent, fed);
+                check_waiting(why, &shape, held, repeat_work.refused.is_some(), spent, fed);
             }
             let expected = keyed(match one_shot {
                 Ok(image) => Ok(Some(image)),
@@ -277,6 +285,7 @@ fuzz_target!(|input: &[u8]| {
                 {
                     Ok(None)
                 }
+                Err(_) if held => Ok(None),
                 Err(error) => Err(error),
             });
             // The work this try spends, and what it gives with nothing spent:
@@ -349,7 +358,7 @@ fuzz_target!(|input: &[u8]| {
                 // cut, so its reason is checked too.
                 if let Ok(Refined::Waiting(why)) = &probe_refine {
                     let repeats = incremental_repeat_work(&probe).refused.is_some();
-                    check_waiting(why, &shape, repeats, spent, fed);
+                    check_waiting(why, &shape, held, repeats, spent, fed);
                 }
                 let probed = keyed(probe_refine.map(Refined::image));
                 cut.check(&probe, spent, &probed, "probe");
@@ -395,11 +404,14 @@ fuzz_target!(|input: &[u8]| {
 
 /// Check `why`, the reason a due refine of `fed` bytes waited, against
 /// `one_shot`, the decode of those bytes on their own (its error, or `()`
-/// for an image); `repeats`, whether the bound on the walks done again
-/// refused the refine; and `spent`, the code-block work spent before it.
+/// for an image); `held`, whether that error is a tile refusal on
+/// tile-parts that have not closed; `repeats`, whether the bound on the
+/// walks done again refused the refine; and `spent`, the code-block work
+/// spent before it.
 fn check_waiting(
     why: &Waiting,
     one_shot: &Result<(), Error>,
+    held: bool,
     repeats: bool,
     spent: u64,
     fed: usize,
@@ -413,6 +425,11 @@ fn check_waiting(
     }
     match (why, one_shot) {
         (Waiting::HeaderIncomplete { .. }, Err(Error::Incomplete(_))) => {}
+        // A tile refusal more bytes do not lift, held while a later
+        // tile-part may bring a fault that comes first.
+        (Waiting::TileRefused { error, .. }, Err(expected)) if held => {
+            assert_eq!(format!("{error:?}"), format!("{expected:?}"), "{fed} bytes");
+        }
         // The sample limit, and the code-blocks and precincts it allows a
         // tile, grow with the bytes.
         (Waiting::SampleLimit { limit, .. }, Err(Error::Limit(expected)))

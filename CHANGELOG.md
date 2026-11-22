@@ -104,9 +104,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every component the codestream codes, a palette's expanded channels and
   sRGB output). `read_header_with` refuses the sample count as the decode
   would, and the tile caps where the main header shows them. A refusal under
-  it gives no retry, and in an `IncrementalDecoder` it is an error, not a
-  wait, except a later tile's cap refusal met while a refine counts the
-  code-block work, which ends the count as `BoundSpent`.
+  it gives no retry, and in an `IncrementalDecoder` a refusal of the image
+  is an error, not a wait. A tile's cap refusal waits as `TileRefused`
+  until the tile-parts close, and one met while a refine counts the
+  code-block work ends the count as `BoundSpent`.
   `AtMost(0)` is `InvalidOptions`. It
   replaces counting the samples by hand from the header (#475).
 - For a refusal by the code-block work bound or by a tile's cap on
@@ -272,6 +273,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   such as `0xFF12`, was refused as an unrecognized marker, and is now
   refused as `Error::Codestream` for the `SOD` after it. A whole file whose
   main header reaches `SOT` gives the same error as before (#606).
+- With `strict` off, `IncrementalDecoder` no longer takes a tile refusal as
+  final while a later tile-part can still replace it. `decode_with` parses
+  every tile-part before it counts any tile, so a later tile-part's fault,
+  such as a `COD` that differs from the first tile-part's, comes before a
+  tile refused by the reduction (`InvalidOptions`) or by a tile cap under
+  `AtMost` or past the address space (`Limit`). `refine` returned the
+  refusal for good on a prefix, and then no longer matched `decode_with`
+  or `finish` on more bytes. It now waits on such a refusal with the new
+  `Waiting::TileRefused`, and `header` holds it back, until the bytes fed
+  reach the `EOC` after the last tile-part. A file whose last tile-part has
+  `Psot` 0 never closes, so `refine` waits and `finish` reports the error.
+  The refine that waits does not build the refused tile. `decode_with`,
+  `read_header_with` and `finish` are unchanged (#605).
 - A tile-part header is read no further than its `Psot`, where the
   tile-part ends inside the input. With `strict` off, input cut inside a
   header that runs past its `Psot` was refused as "truncated marker

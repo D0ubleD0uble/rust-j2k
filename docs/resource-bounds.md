@@ -289,11 +289,13 @@ set around a decode besides the ceiling (the input size, a timeout, memory for e
 A refusal under `AtMost(n)` has kind `Samples` (or `TileCodeBlocks` or
 `TilePrecincts`, for a tile's geometry) and names the ceiling and the count.
 It gives no retry (`retry_with` is `None`, so `raised_for` is `None`): the
-caller set the ceiling. In an `IncrementalDecoder` it is an error, not a
-wait, as more bytes do not raise it, unless the refusal comes from a later
-tile while a refine counts the code-block work: that ends the count as
-`Waiting::BoundSpent` (see [Incremental
-decoding](incremental-decoding.md)). `AtMost(0)`, and `AtMost` on
+caller set the ceiling. In an `IncrementalDecoder` a refusal of the image
+is an error, not a wait, as more bytes do not raise it. A tile's refusal
+waits as `Waiting::TileRefused` until the bytes fed reach the `EOC`, as a
+later tile-part's fault comes before it in the decode; the refine that
+waits does not build the tile. A refusal from a later tile while a refine
+counts the code-block work ends the count as `Waiting::BoundSpent` (see
+[Incremental decoding](incremental-decoding.md)). `AtMost(0)`, and `AtMost` on
 `packet_work_limit` or `code_block_work_limit`, is `InvalidOptions`.
 
 ### Figures for a decode service

@@ -145,7 +145,7 @@ use crate::{
 /// on the same bytes, such as a marker segment with an invalid field, or an
 /// [`Error::Limit`] that does not depend on how many bytes there are: an image
 /// too large for the target to address, too many `POC` volumes or too many
-/// bit-planes, or a refusal by a sample limit of
+/// bit-planes, or a refusal of the image by a sample limit of
 /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost). More bytes do not
 /// undo these, so once `refine` returns an error, every later
 /// `refine` returns the same error without decoding, until a change of
@@ -157,7 +157,11 @@ use crate::{
 /// precincts and code-blocks a tile may hold), the packet or
 /// code-block work bound or the charge for missing tiles, which more bytes
 /// raise, and a refusal by the bound on the walks of tiles not kept, which the
-/// refines spend together. A caller
+/// refines spend together. A tile refused in a way more bytes do not lift,
+/// by the reduction or a tile cap, waits too
+/// ([`Waiting::TileRefused`]) until the bytes fed close the tile-parts with
+/// an `EOC`, as a later tile-part may hold a fault `decode_with` gives
+/// first. A caller
 /// who raises the packet work limit to the factor a refusal names, as
 /// [`DecodeOptions::raised_for`] does, and feeds the file to a new decoder,
 /// accepts up to about ten times the packet work the file needs over its
@@ -319,12 +323,13 @@ impl IncrementalDecoder {
     /// once more bytes come in; [`refine`](Self::refine) waits
     /// on it instead ([`Waiting::SampleLimit`]). Under a ceiling of
     /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost) it does not grow,
-    /// so the refusal here is final, and `refine` returns it as an error
-    /// too, except that a later tile's
-    /// cap refusal met while a refine counts the code-block work ends the
-    /// count as [`Waiting::BoundSpent`] (see [`Waiting`]). A server that
-    /// streams files in can refuse a sample count as soon as its main header
-    /// has come in.
+    /// so a refusal of the image's samples here is final, and `refine`
+    /// returns it as an error too. A server that streams files in can refuse
+    /// a sample count as soon as its main header has come in. A tile refused
+    /// by a cap under it, or by the reduction, is held back: this returns
+    /// the header while the bytes fed do not close the tile-parts with an
+    /// `EOC`, as `refine` waits on it ([`Waiting::TileRefused`]), and the
+    /// refusal once they do, unless a later tile-part's fault comes first.
     ///
     /// Each call parses the main header again (its `PPM` data included), so
     /// a call costs the main header plus the tile-parts fed since. For the
@@ -790,9 +795,10 @@ pub enum Waiting {
     /// what the target can address ([`LimitKind::AddressSpace`]) is lifted
     /// by no limit, so neither is a wait: `refine` returns it as an error,
     /// and every later `refine` returns it again, whatever is fed, until a
-    /// change of options. The exception is a later tile's cap refusal met
-    /// while a refine counts the code-block work: that ends the count as
-    /// [`BoundSpent`](Self::BoundSpent).
+    /// change of options. A tile's refusal of either sort waits as
+    /// [`TileRefused`](Self::TileRefused) until the tile-parts close, and a
+    /// later tile's cap refusal met while a refine counts the code-block
+    /// work ends the count as [`BoundSpent`](Self::BoundSpent).
     #[non_exhaustive]
     SampleLimit {
         /// The refusal, as an error would carry it.
