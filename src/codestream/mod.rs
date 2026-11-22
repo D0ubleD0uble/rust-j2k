@@ -1539,7 +1539,7 @@ fn walk_tiles<'a>(
 /// plus `correction`, which is 1 once the `TPsot == TNsot` correction is on
 /// (see [`count_is_one_short`]). When the correction applies the text says
 /// so, as `ReportEntry::TilePartCountMismatch` does.
-pub(super) fn stated_count(held: u16, correction: u16) -> String {
+fn stated_count(held: u16, correction: u16) -> String {
     let stated = held - correction;
     if correction == 0 {
         format!("{stated} tile-parts")
@@ -1561,12 +1561,7 @@ fn count_mismatch_message(index: usize, held: u16, correction: u16, carried: usi
 /// The error for a tile whose `SOT`s state two counts, `later` and `earlier`.
 /// `corrected` adds that the correction holds the tile to one more of each,
 /// which the text may say only when the whole input is in hand (`strict` on).
-pub(super) fn two_counts_message(
-    index: usize,
-    later: u16,
-    earlier: u16,
-    corrected: bool,
-) -> String {
+fn two_counts_message(index: usize, later: u16, earlier: u16, corrected: bool) -> String {
     let mut text =
         format!("tile {index} declares {later} tile-parts in one `SOT` and {earlier} in another");
     if corrected {

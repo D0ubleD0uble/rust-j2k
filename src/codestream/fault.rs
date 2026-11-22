@@ -353,13 +353,16 @@ impl Walk {
                 match tile.declared {
                     0 => tile.declared = stated,
                     declared if declared != stated => {
-                        // With `strict` off the counts are the ones the
-                        // two `SOT`s state, as `walk_tiles` gives them.
+                        // The stated counts, with the held ones added when
+                        // the correction is on, as `walk_tiles` gives them.
+                        // The look-ahead runs only with `strict` on, so
+                        // with it off the correction is never on here, and
+                        // `walk_tiles` leaves it out with `strict` off.
                         return Err(Error::codestream(two_counts_message(
                             index,
                             stated - *count_correction,
                             declared - *count_correction,
-                            *count_correction != 0,
+                            strict && *count_correction != 0,
                         )));
                     }
                     _ => {}

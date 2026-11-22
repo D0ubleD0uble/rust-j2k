@@ -126,3 +126,24 @@ fn two_counts_without_the_correction_give_the_stated_ones() {
         "{error}"
     );
 }
+
+/// With `strict` off the two-counts error gives the stated counts alone, on
+/// a file where the look-ahead would raise the counts if it ran: tile 0's
+/// first part states 1 and its second has `TPsot == TNsot`, then a part
+/// states 3. Both tile-part walks give the same error, with `strict` on
+/// (which adds the raised counts) and off.
+#[test]
+fn two_counts_strict_off_leave_the_correction_out() {
+    let bytes = file(&[(0, 0, 1), (0, 1, 1), (0, 2, 3)]);
+    rust_j2k::fuzz::tile_parts_walks_agree(&bytes);
+    let error = decode_with(&bytes, &options(false)).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .ends_with("tile 0 declares 3 tile-parts in one `SOT` and 1 in another"),
+        "{error}"
+    );
+    assert!(strict_error(&bytes).ends_with(
+        "tile 0 declares 3 tile-parts in one `SOT` and 1 in another, 4 and 2 with the `TPsot == TNsot` correction"
+    ));
+}
