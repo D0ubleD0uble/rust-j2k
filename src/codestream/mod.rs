@@ -663,6 +663,26 @@ pub(crate) fn first_part_at<'b, 'm>(
     Some(FirstPart::new(bytes, &parsed.header, offset, &sot, pos))
 }
 
+/// Refuse the `SOT` marker segment at `offset` once the input holds its
+/// `Lsot`, if that is not 10: [`decode_sot`] refuses any other length,
+/// whatever the bytes after it hold, so more input cannot change the error.
+/// This gives the error it gives for the whole segment: a length below 2,
+/// a body too short for the fields, or bytes left after them.
+fn check_sot_length(bytes: &[u8], offset: usize) -> Result<()> {
+    if read_u16(bytes, offset) != Some(marker::SOT) {
+        return Ok(());
+    }
+    match offset.checked_add(2).and_then(|at| read_u16(bytes, at)) {
+        None | Some(10) => Ok(()),
+        Some(0 | 1) => Err(Error::marker("marker segment length below 2")),
+        Some(2..=9) => Err(Error::marker("truncated marker segment")),
+        Some(lsot) => Err(Error::marker(format!(
+            "`SOT` segment has {} unexpected trailing byte(s)",
+            lsot - 10
+        ))),
+    }
+}
+
 /// The `SOT` marker segment at `offset` of `bytes`, and where it ends, or
 /// `None` if none is there or it is at fault. It reads the fixed layout
 /// [`decode_sot`] admits, `Lsot` 10, directly: the walk reads a `SOT` for
@@ -1171,6 +1191,7 @@ fn walk_tiles<'a>(
     let mut closed = false;
     let mut part_offset = sot_offset;
     loop {
+        check_sot_length(bytes, part_offset)?;
         // Not strict: input that ends inside the `SOT` marker segment ends the
         // codestream there. `SOT` is always 12 bytes (Lsot = 10).
         if !strict && bytes.len().saturating_sub(part_offset) < 12 {

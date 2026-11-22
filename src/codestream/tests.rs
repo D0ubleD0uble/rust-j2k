@@ -5166,6 +5166,47 @@ fn the_ht_corpus_decodes_its_cap_and_cpf_and_parses() {
     assert!(decoded.is_empty(), "files with no log: {decoded:?}");
 }
 
+/// `check_sot_length` gives, for every `Lsot` other than 10, the error the
+/// marker-segment reader gives for the whole segment, whatever it holds,
+/// on every prefix that holds `Lsot`, and no error for `Lsot` 10 or a cut
+/// before `Lsot`.
+#[test]
+fn check_sot_length_gives_the_whole_segments_error() {
+    let reference = |bytes: &[u8]| {
+        let mut cur = Cursor::at(bytes, 2);
+        segment(&mut cur)
+            .and_then(decode_sot)
+            .err()
+            .map(|e| format!("{e:?}"))
+    };
+    let with = |lsot: u16, fill: u8| {
+        let mut out = vec![0xFF, 0x90];
+        out.extend_from_slice(&lsot.to_be_bytes());
+        out.resize(2 + usize::from(lsot.max(2)), fill);
+        out
+    };
+    for lsot in (0..=300).chain([1000, 65534, 65535]) {
+        for fill in [0x00, 0xFF] {
+            let whole = with(lsot, fill);
+            let expected = reference(&whole);
+            assert_eq!(expected.is_none(), lsot == 10, "Lsot {lsot}");
+            for cut in [4, 5, 11, 12, 13, whole.len()] {
+                let bytes = &whole[..cut.min(whole.len())];
+                assert_eq!(
+                    check_sot_length(bytes, 0).err().map(|e| format!("{e:?}")),
+                    expected,
+                    "Lsot {lsot}, {cut} bytes"
+                );
+            }
+            for cut in 0..4 {
+                assert!(check_sot_length(&whole[..cut], 0).is_ok(), "Lsot {lsot}");
+            }
+        }
+    }
+    // Not a `SOT`: left to the walk.
+    assert!(check_sot_length(&[0xFF, 0x91, 0, 11], 0).is_ok());
+}
+
 /// The `SOT` that `sot_at` reads directly, or `None`, exactly where the
 /// marker-segment reader would give it: `segment` and `decode_sot` admit
 /// only `Lsot` 10 and a whole segment.
