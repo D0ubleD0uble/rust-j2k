@@ -110,9 +110,11 @@ pub enum Error {
     /// marker.
     ///
     /// A tile-part header is read no further than its `Psot`, so a segment
-    /// that runs past `Psot` is this variant, whatever its fields hold; a
-    /// bad field in a segment within `Psot` is [`Error::Marker`], unless the
-    /// header runs past its `Psot`, which is refused first. A later
+    /// that runs past `Psot` is this variant, whatever its fields hold. The
+    /// header is read in order, so a bad field in a segment before that one
+    /// is still [`Error::Marker`]. A check made once the header is read (the
+    /// quantization steps against the levels, say) gives way to the `Psot`
+    /// refusal. A later
     /// tile-part that restates `COD`, `COC`, `QCD` or `QCC` with
     /// values other than those in force for the tile is out of place, so it
     /// is this variant too.

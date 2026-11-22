@@ -403,3 +403,42 @@ fn a_psot_inside_the_sot_is_refused_as_shorter_than_it() {
         }
     }
 }
+
+/// A tile-part of tile 1 whose header is `bad`, a segment with a faulty
+/// field that lies within `Psot`, then a `COM` that runs past it.
+fn bad_then_overrun(bad: &[u8]) -> Vec<u8> {
+    let mut bytes = small();
+    bytes.extend(tile_part(0, 0, 1, &[], &[0; 4]));
+    bytes.extend(sot(1, (12 + bad.len() + 10) as u32, 0, 1));
+    bytes.extend(bad);
+    bytes.extend(comment());
+    bytes.extend([0xFF, 0x93, 0, 0, 0, 0, 0xFF, 0xD9]);
+    bytes
+}
+
+/// The header is read in order, so a faulty field in a segment before the
+/// one that runs past `Psot` keeps its own `Marker` error, with `strict` on
+/// and off. Only a check made once the header is read gives way to the
+/// `Psot` refusal.
+#[test]
+fn a_bad_field_before_the_overrun_keeps_its_marker_error() {
+    // A `QCC` for component 5 where `Csiz` is 1, and a `COD` with
+    // progression order 9.
+    let mut qcc_body = vec![5];
+    qcc_body.extend(qcd_none_body(2, &[8]));
+    let mut cod = cod_body(1, 0, 4, 0);
+    cod[1] = 9;
+    for (name, bad, message) in [
+        ("QCC", seg(0xFF5D, &qcc_body), "`QCC` targets component 5"),
+        ("COD", seg(0xFF52, &cod), "reserved progression order 9"),
+    ] {
+        let bytes = bad_then_overrun(&bad);
+        for strict in [false, true] {
+            let error = decode_with(&bytes, &options(strict)).unwrap_err();
+            let Error::Marker(detail) = &error else {
+                panic!("{name}, {strict}: {error:?}");
+            };
+            assert!(detail.to_string().contains(message), "{name}: {detail}");
+        }
+    }
+}
