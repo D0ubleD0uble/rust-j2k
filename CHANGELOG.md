@@ -62,6 +62,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   inside the tile-part's header, and the entry's text says so ("is cut
   short in its header"). Match `declared: Some(declared)` where you
   matched `declared` (#614).
+- `ReportEntry::TilePartCountMismatch::declared` is the count the tile's
+  `SOT`s state. It was that count plus one where OpenJPEG's `TPsot ==
+  TNsot` correction applies, a count no `SOT` states. A new `corrected`
+  field says the correction applies, so the tile is held to `declared + 1`
+  parts, and the entry's text gives both counts ("tile 1 declares 2
+  tile-part(s), 3 with the `TPsot == TNsot` correction, and 2 were found")
+  (#618).
 
 ### Added
 
@@ -117,7 +124,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or `Precincts`), so `amount()` no longer depends on the limit's `kind()`.
   A tile over a cap that is refused as `AddressSpace` now carries
   `refused_at` too, as every tile cap refusal does on a 32-bit target, where
-  it was `None` (#613).
+  it was `None`. Its amount and unit are the count that is past the address
+  space (#613, #625).
 
 ### Changed
 

@@ -380,6 +380,7 @@ fn a_tile_part_count_mismatch_alone_leaves_the_decode_complete() {
                 tile: 0,
                 declared: 2,
                 found: 1,
+                corrected: false,
                 ..
             }]
         ),

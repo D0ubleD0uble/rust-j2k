@@ -645,7 +645,7 @@ impl RefusedAt {
     /// What [`amount`](Self::amount) counts. It does not depend on the
     /// limit's [`kind`](LimitDetail::kind): an
     /// [`AddressSpace`](LimitKind::AddressSpace) refusal of a tile counts
-    /// code-blocks or precincts.
+    /// code-blocks or precincts, whichever count is past the address space.
     pub fn unit(&self) -> AmountUnit {
         self.unit
     }

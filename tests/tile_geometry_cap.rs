@@ -451,6 +451,55 @@ fn a_tile_whose_code_blocks_no_limit_admits_is_refused_at_once() {
             (LimitKind::AddressSpace, None),
         ]
     );
+    // The refusal names the code-blocks that are past the address space, not
+    // the precincts that were refused first.
+    let options = DecodeOptions::default().with_sample_limit(SampleLimit::Raised(1 << 28));
+    let limit = match read_header_with(&bytes, &options) {
+        Err(Error::Limit(limit)) => limit,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
+    let at = limit.refused_at().expect("the tile and its amount");
+    assert_eq!(
+        (at.tile(), at.amount(), at.unit()),
+        (0, 1 << 53, AmountUnit::CodeBlocks),
+        "{limit}"
+    );
+}
+
+/// A tile whose precincts are past the address space is refused as
+/// `AddressSpace` with its precincts: a 2^26 x 2^25 tile in 1x1 precincts
+/// holds 2^51 of them, each needing 2^11 samples of the limit.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn a_tile_whose_precincts_no_limit_admits_gives_the_precincts() {
+    let bytes = synth::empty_tiles(
+        [1 << 26, 1 << 25, 0, 0, 1 << 26, 1 << 25, 0, 0],
+        0,
+        0,
+        &[0],
+        &[0],
+        0,
+    );
+    let (ladder, admitted) = header_ladder(&bytes);
+    assert!(!admitted);
+    assert_eq!(
+        ladder.last(),
+        Some(&(LimitKind::AddressSpace, None)),
+        "{ladder:?}"
+    );
+    let options = DecodeOptions::default().with_sample_limit(SampleLimit::Raised(1 << 28));
+    let limit = match read_header_with(&bytes, &options) {
+        Err(Error::Limit(limit)) => limit,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(limit.kind(), LimitKind::AddressSpace, "{limit}");
+    let at = limit.refused_at().expect("the tile and its amount");
+    assert_eq!(
+        (at.tile(), at.amount(), at.unit()),
+        (0, 1 << 51, AmountUnit::Precincts),
+        "{limit}"
+    );
 }
 
 /// A tile whose code-blocks need more than `Raised(u32::MAX)` allows, but

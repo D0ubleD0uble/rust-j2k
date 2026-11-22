@@ -217,18 +217,30 @@ pub enum ReportEntry {
         /// `SOD` marker is whole. Always `true` when `declared` is `None`.
         header_cut: bool,
     },
-    /// The tile's `SOT` markers declare a number of tile-parts (`TNsot`, after
-    /// OpenJPEG's `TPsot == TNsot` correction when that applies) other than
-    /// the number found. The tile decodes from the parts found; any packets
-    /// they lack are reported as [`MissingPackets`](Self::MissingPackets).
+    /// The tile's parts found differ from the count it is held to: the count
+    /// its `SOT` markers state (`TNsot`), or one more when `corrected` is set.
+    /// The tile decodes from the parts found; any packets they lack are
+    /// reported as [`MissingPackets`](Self::MissingPackets).
+    ///
+    /// With [`IncrementalDecoder::refine`](crate::IncrementalDecoder::refine),
+    /// the entry describes the bytes so far, so it can appear and go away as
+    /// more arrive; `declared` does not change, and `corrected` is not taken
+    /// back.
     #[non_exhaustive]
     TilePartCountMismatch {
         /// The tile.
         tile: u32,
-        /// The count the markers declare.
+        /// The count the tile's `SOT` markers state.
         declared: u16,
         /// The tile-parts found.
         found: u16,
+        /// Whether OpenJPEG's `TPsot == TNsot` correction applies, so the
+        /// tile is held to `declared + 1` parts. The correction is made once
+        /// for the whole codestream: it raises every tile's count when the
+        /// next part of the first tile to have all its declared parts has
+        /// `TPsot` equal to its `TNsot`, so it can apply to a tile whose own
+        /// count is right.
+        corrected: bool,
     },
     /// Bytes of this tile were not read: every packet the tile's progression
     /// holds was read, and bytes were left after the last one.
@@ -305,10 +317,15 @@ impl fmt::Display for ReportEntry {
                 tile,
                 declared,
                 found,
-            } => write!(
-                f,
-                "tile {tile} declares {declared} tile-part(s) and {found} were found"
-            ),
+                corrected,
+            } => {
+                write!(f, "tile {tile} declares {declared} tile-part(s)")?;
+                if *corrected {
+                    let raised = u32::from(*declared) + 1;
+                    write!(f, ", {raised} with the `TPsot == TNsot` correction,")?;
+                }
+                write!(f, " and {found} were found")
+            }
             ReportEntry::LeftoverBytes {
                 tile,
                 tile_part,
