@@ -258,6 +258,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- With `strict` off, input that ends inside a `SOT` marker segment longer
+  than 12 bytes (`Lsot` over 10) ends the codestream there, with
+  `MissingEoc` in the report, as input that ends in its first 12 bytes
+  does. It was refused as `Error::Codestream` ("truncated marker
+  segment"), which more bytes turn into the `Error::Marker` for the
+  segment's trailing bytes, so `IncrementalDecoder::refine` could stop on
+  an error the whole file does not give. With `strict` on such input is
+  still refused as truncated. In a JP2 file, a `SOT` segment that runs
+  past its tile-part's `Psot` is now read from the whole `jp2c` box, as
+  in a raw codestream, and gives the same error; it was read from the
+  codestream cut at that `Psot` and refused as truncated. OpenJPEG 2.5
+  refuses any `SOT` whose `Lsot` is not 10 (#646).
 - Input under 8 bytes that does not open with `SOC` is `Error::Incomplete`
   while its bytes from 4 on may still give the JP2 signature box's type
   (`jP  `), as such input is read as a JP2 file whatever its first 4
