@@ -165,7 +165,8 @@ use crate::{
 /// decodes a tile, so a later tile-part's fault comes first. In a codestream
 /// it waits until the bytes fed close the tile-parts with an `EOC`; a JP2
 /// file never closes, as boxes can follow the codestream, so there only
-/// `finish` reports it. A caller
+/// `finish` reports it, and a fault of the tile-parts waits the same way.
+/// A caller
 /// who raises the packet work limit to the factor a refusal names, as
 /// [`DecodeOptions::raised_for`] does, and feeds the file to a new decoder,
 /// accepts up to about ten times the packet work the file needs over its
@@ -731,10 +732,11 @@ impl Refined {
 
 /// Why [`IncrementalDecoder::refine`] gave no image.
 ///
-/// Each of these but [`TileError`](Self::TileError) may clear as more bytes
-/// come in, so none is an error. A `TileError` is an error no image follows:
-/// more bytes can only replace it with an earlier fault, so a caller that
-/// has no use for which error it is may stop on it. Once the input has ended, [`finish`](IncrementalDecoder::finish) decodes
+/// Each of these may clear as more bytes come in, so none is an error. A
+/// [`TileError`](Self::TileError) clears to an image only where a later
+/// tile-part's `POC` changes which packets the decode reads; otherwise more
+/// bytes can only replace it with an earlier fault. Once the input has
+/// ended, [`finish`](IncrementalDecoder::finish) decodes
 /// all of it and reports a limit that still refuses it. To decode the bytes
 /// fed now, decode them on their own, as
 /// [`options`](IncrementalDecoder::options) shows:
@@ -912,7 +914,10 @@ pub enum Waiting {
     /// ([`Error::InvalidOptions`]) or by a tile cap more bytes do not lift
     /// ([`Error::Limit`], under [`AtMost`](crate::SampleLimit::AtMost) or past
     /// the address space), or an error in its packets or code-blocks, such
-    /// as a damaged packet header or too many bit-planes.
+    /// as a damaged packet header or too many bit-planes. In a JP2 file it
+    /// can also be a fault of the tile-parts themselves, such as a `COC` for
+    /// a component the image does not have: every error from the tile-parts
+    /// on waits there.
     ///
     /// A codestream closes once the bytes fed reach the `EOC` after its
     /// last tile-part. Then `refine` returns the error `decode_with` gives,
@@ -922,9 +927,11 @@ pub enum Waiting {
     /// decode checks first, so neither closes: `refine` waits until
     /// [`finish`](IncrementalDecoder::finish) reports the error.
     ///
-    /// No image follows a `TileError`: more bytes can only replace the
-    /// error with one that comes earlier in the input. A caller that only
-    /// needs to know the file fails may stop here.
+    /// An image follows a `TileError` only where a later tile-part's `POC`
+    /// changes which packets the decode reads, so that it no longer reads
+    /// the one that failed; otherwise more bytes can only replace the error
+    /// with one that comes earlier in the input. A caller that stops here
+    /// gives up on such a file.
     /// [`header`](IncrementalDecoder::header) holds a tile refusal back
     /// while `refine` waits on it.
     #[non_exhaustive]

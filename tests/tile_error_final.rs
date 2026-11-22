@@ -29,6 +29,10 @@
 //! - one 4x4 tile whose packet header has an Lblock indicator longer than
 //!   any Lblock, and one whose code-block needs 32 bit-planes, each with a
 //!   later `COD` that differs.
+//!
+//! A later tile-part's `POC` can also clear the error, so that the whole
+//! file decodes: [`a_poc_in_a_later_tile_part_can_clear_an_error_in_a_tile`]
+//! pins that.
 
 #[path = "support/held.rs"]
 mod held;
@@ -628,5 +632,117 @@ fn an_error_before_the_tiles_is_final_at_once() {
             error_of(&read_header_with(&bytes, &lenient)),
             "{name}"
         );
+    }
+}
+
+/// One 4 x 4 tile of one level, LRCP, whose first tile-part holds an empty
+/// resolution-0 packet and then a resolution-1 packet with the Lblock
+/// damage of [`lblock_packet`]. Its second tile-part holds only a `POC`
+/// that reads resolution 0 alone. The end of the first tile-part, and the
+/// file.
+fn poc_in_a_later_tile_part() -> (usize, Vec<u8>) {
+    let mut bytes = main_header([4, 4, 0, 0, 4, 4, 0, 0], &cod_one_level(), 4);
+    let mut packets = vec![0x00];
+    packets.extend(lblock_packet());
+    bytes.extend(synth::tile_part(0, 0, 2, &[], &packets));
+    let cut = bytes.len();
+    let poc = synth::seg(0xFF5F, &[0, 0, 0, 1, 1, 1, 0]);
+    bytes.extend(synth::tile_part(0, 1, 2, &poc, &[]));
+    bytes.extend(EOC);
+    (cut, bytes)
+}
+
+/// A `POC` that comes only in a later tile-part changes which packets the
+/// decode reads, so it can clear an error in a tile. Each prefix, fed at
+/// once, decodes to an image until the damaged packet header is in, then
+/// waits on its error through the prefix that ends before the `POC`, and
+/// decodes again once the tile-part that holds the `POC` is in, the whole
+/// file too. `finish`, with `strict` on, gives what `decode_with` gives.
+#[test]
+fn a_poc_in_a_later_tile_part_can_clear_an_error_in_a_tile() {
+    let (cut, bytes) = poc_in_a_later_tile_part();
+    let options = DecodeOptions::default();
+    let lenient = options.clone().with_strict(false);
+    let mut held_at = None;
+    // Where the tile-part with the `POC` ends, before the `EOC`.
+    let poc_in = bytes.len() - EOC.len();
+    for end in 1..=bytes.len() {
+        let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
+        decoder.feed(&bytes[..end]);
+        let refined = decoder.refine();
+        let one_shot = decode_with(&bytes[..end], &lenient);
+        match refined {
+            Ok(Refined::Waiting(Waiting::TileError { error, .. })) => {
+                let error = format!("{error:?}");
+                assert!(error.contains("Lblock"), "{end}: {error}");
+                assert!(end < poc_in, "{end}: waits with the POC in");
+                assert_eq!(error_of(&one_shot), Some(error), "{end}");
+                held_at.get_or_insert(end);
+            }
+            Ok(Refined::Image(image)) => {
+                assert!(
+                    held_at.is_none() || end >= poc_in,
+                    "an image at {end}, after the error at {held_at:?}"
+                );
+                assert_eq!(Some(image), one_shot.ok(), "{end}");
+            }
+            Ok(Refined::Waiting(_)) => {
+                assert!(held_at.is_none(), "{end}: a wait after the error")
+            }
+            other => panic!("{end}: {other:?}"),
+        }
+        if end == cut {
+            assert!(held_at.is_some(), "no wait on the error at {cut}");
+        }
+    }
+    let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
+    decoder.feed(&bytes);
+    let finished = error_of(&decoder.finish()).expect("an error");
+    assert!(finished.contains("`POC` volumes"), "{finished}");
+    assert_eq!(Some(finished), error_of(&decode_with(&bytes, &options)));
+}
+
+/// The seeds of the `incremental_decode` fuzz target built from the shapes
+/// here, each with its six control bytes where the options are not the
+/// defaults (`20`, a reduction of 1). A seed that starts with `SOC` or the
+/// JP2 signature is read with all-zero control bytes.
+fn seeds() -> Vec<(&'static str, Vec<u8>)> {
+    let with_control = |control: u8, file: Vec<u8>| [vec![control, 0, 0, 0, 0, 0], file].concat();
+    vec![
+        (
+            "tile_error_reduction_then_cod.seed",
+            with_control(0x20, reduction_one_tile(&cod_one_level())),
+        ),
+        (
+            "tile_error_lblock_then_coc.seed",
+            packet_one_tile(8, &lblock_packet(), &coc_past_the_components()),
+        ),
+        (
+            "tile_error_lblock_then_cod.seed",
+            packet_one_tile(8, &lblock_packet(), &cod_one_level()),
+        ),
+        (
+            "tile_error_lblock_jp2_then_colr.seed",
+            in_jp2(
+                &packet_one_tile(8, &lblock_packet(), &[]),
+                &[synth::bx(b"colr", &[1, 0])],
+            ),
+        ),
+    ]
+}
+
+/// The committed seeds under `tests/fixtures/incremental` are the ones
+/// [`seeds`] builds. `J2K_BLESS_TILE_ERROR_SEEDS=1` writes them.
+#[test]
+fn the_committed_seeds_are_the_shapes() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/incremental");
+    let bless = std::env::var_os("J2K_BLESS_TILE_ERROR_SEEDS").is_some();
+    for (name, bytes) in seeds() {
+        let path = dir.join(name);
+        if bless {
+            std::fs::write(&path, &bytes).expect("write the seed");
+        }
+        let committed = std::fs::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(committed, bytes, "{name}");
     }
 }

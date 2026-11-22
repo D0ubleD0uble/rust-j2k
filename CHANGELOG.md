@@ -292,8 +292,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `EOC` after the last tile-part. A JP2 file never closes, as the decode
   checks the boxes after the codestream before its tile-parts, and a file
   whose last tile-part has `Psot` 0 never closes either: for these `refine`
-  waits and `finish` reports the error. No image follows a `TileError`, so
-  a caller may stop on it. A caller that stopped on such an error from
+  waits and `finish` reports the error. In a JP2 file a fault of the
+  tile-parts waits the same way. An image follows a `TileError` only where
+  a later tile-part's `POC` changes which packets are read. A caller that
+  stopped on such an error from
   `refine` now sees a wait: a tile cap refusal under `AtMost`, for one,
   comes at the `EOC` in a codestream and from `finish` in a JP2 file. The
   refine that waits does not build the refused tile. Errors of the image and
