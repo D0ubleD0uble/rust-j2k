@@ -20,12 +20,12 @@ does again on each refine.
   | --- | --- |
   | `MoreBytes { until, .. }` | It did not decode: the bytes fed have not doubled since the last try, or none are fed. `until` is a total of bytes fed, not the bytes still to come: a refine decodes once that many are fed, if not before. |
   | `HeaderIncomplete { .. }` | `decode_with` gives `Error::Incomplete`: the main header is cut short. |
-  | `SampleLimit { limit, .. }` | The default or a `Raised` sample limit refused the image, or a tile of more code-blocks or precincts than it allows a tile, with a `retry_with`. A refusal with none (under `AtMost`, or past the address space) is an error, not a wait, except a tile's before the tile-parts close (`TileRefused`). In either case, a later tile's cap refusal met while a refine counts the code-block work ends the count as `BoundSpent` instead. |
+  | `SampleLimit { limit, .. }` | The default or a `Raised` sample limit refused the image, or a tile of more code-blocks or precincts than it allows a tile, with a `retry_with`. A refusal with none (under `AtMost`, or past the address space) is an error, not a wait, except a tile's before the input closes (`TileError`). In either case, a later tile's cap refusal met while a refine counts the code-block work ends the count as `BoundSpent` instead. |
   | `WorkLimit { limit, .. }` | The bytes fed cost more than the packet or code-block work bound allows; a decode of them on its own is refused too, with the same detail. |
   | `BoundSpent { limit, .. }` | The earlier refines spent the code-block bound the refines share, so the refine stopped decoding at a tile, the cut, whose work fits the whole bound. Decode the bytes fed now or start a new decoder. That decode can be refused for work or fail: where the whole bound refuses a later tile, the detail's `refused_at` gives it and its work, and that decode is refused there or fails first in a tile the refine did not decode. |
   | `MissingTiles { limit, .. }` | The charge for missing tiles passed the packet bound. |
   | `RepeatLimit { .. }` | The bound on the walks of tiles not kept is spent (see [Work and memory](#work-and-memory)). |
-  | `TileRefused { error, .. }` | `decode_with` refuses a tile with an error more bytes do not lift: a reduction past the levels the tile's own header gives it (`InvalidOptions`), or a tile cap under `AtMost` or past the address space (`Limit`). The bytes fed do not reach the `EOC` yet, and a later tile-part's fault comes before the refusal in `decode_with`. See [When a tile refusal is final](#when-a-tile-refusal-is-final). |
+  | `TileError { error }` | `decode_with` parses every tile-part, then fails in a tile with `error`: a reduction past the tile's own levels, a tile cap under `AtMost`, a damaged packet header, too many bit-planes. The input has not closed, and a later tile-part's fault would come before the error in `decode_with`. No image follows it. See [When an error in a tile is final](#when-an-error-in-a-tile-is-final). |
 
   More bytes can complete the header, the bounds grow with the bytes, and
   the missing tiles shrink, so each of these is a wait, and such a limit is
@@ -56,9 +56,9 @@ does again on each refine.
   `header` returns it too, and it sticks however many bytes come after, until
   a change of options. A server that streams files in can refuse one as soon
   as its main header has come in. A tile's refusal under it waits until the
-  tile-parts close (see [When a tile refusal is
-  final](#when-a-tile-refusal-is-final)), and so does the later-tile case in
-  the table above.
+  input closes (see [When an error in a tile is
+  final](#when-an-error-in-a-tile-is-final)), and so does the later-tile case
+  in the table above.
   Any other error, including a limit that does not
   depend on the bytes (an image or a tile too large for the target to
   address, too many `POC` volumes, too many bit-planes), is the one
@@ -117,32 +117,43 @@ the MIXED HT files, under a reduction and a layer cap. The fuzz target
 `incremental_decode` feeds its input in pieces a hash of it picks and checks
 each refine that decodes against the same oracle.
 
-## When a tile refusal is final
+## When an error in a tile is final
 
-With `strict` off, `decode_with` parses every tile-part before it counts
-any tile, so a fault in any tile-part comes before a tile refused by the
-reduction or a tile cap. A prefix that ends before a faulty tile-part gives
-the refusal, and a longer one the fault: a later tile-part of the tile that
-restates its `COD` with other values, or a `COC` for a component the image
-does not have. So such a refusal is final only once the tile-parts close:
-the chain of `SOT`s steps by nonzero `Psot`s to an `EOC` in the bytes fed.
-Past that, more bytes change no tile-part.
+With `strict` off, `decode_with` parses every tile-part before it decodes
+any tile, so a fault in any tile-part comes before an error in a tile: a
+reduction past the tile's levels, a tile cap, a damaged packet header, too
+many bit-planes. A prefix that ends before a faulty tile-part gives the
+error in the tile, and a longer one the fault: a later tile-part of the
+tile that restates its `COD` with other values, or a `COC` for a component
+the image does not have. So such an error is final only once the input
+closes. A codestream closes when the chain of `SOT`s steps by nonzero
+`Psot`s to an `EOC` in the bytes fed; past that, more bytes change no
+tile-part. A JP2 file never closes: the decode checks the boxes after the
+codestream before it parses the tile-parts, so a damaged box that follows
+the codestream comes before every error of the tiles. A last tile-part whose
+`Psot` is 0 runs to the end of the input, which may still grow, so such a
+codestream never closes either.
 
-Until then `refine` waits on the refusal as `Waiting::TileRefused`, which
-carries the error `decode_with` gives on the bytes fed, and `header` holds it
-back and gives the header. Once the bytes fed close the tile-parts, the next
-refine that decodes returns the error `decode_with` gives then, the refusal
-or the fault, and `header` gives what `read_header_with` gives. A last
-tile-part whose `Psot` is 0 runs to the end of the input, which may still
-grow, so such a file never closes: `refine` waits and `finish` reports the
-error. The rule covers the refusals that would otherwise be final:
-`InvalidOptions` for the reduction, and a tile cap under `AtMost` or past
-the address space. A refusal under the default or a `Raised` limit waits
-anyway, as `Waiting::SampleLimit`, and a refusal of the image (its samples,
-or a reduction past the main header's levels) depends on no tile-part, so
-it stays final at once. `finish`, `decode_with` and `read_header_with` are
-not changed, nor is anything with `strict` on, as `refine` and `header`
-always read with it off.
+Until the input closes, `refine` waits on the error as `Waiting::TileError`,
+which carries the error `decode_with` gives on the bytes fed, and `header`
+holds it back and gives the header. Once a codestream closes, the next
+refine that decodes returns the error `decode_with` gives then, the error
+in the tile or the fault, and `header` gives what `read_header_with` gives.
+Where the input never closes, `refine` waits and `finish` reports the error.
+More bytes can only replace the error with one that comes earlier in the
+input, never with an image, so a caller that only needs to know the file
+fails may stop on a `TileError`. A caller that stopped on such an error from
+`refine` now waits for it: a tile cap refusal under `AtMost`, for one, comes
+at the `EOC` in a codestream and from `finish` in a JP2 file.
+
+The rule covers every error the decode meets once it has parsed the
+tile-parts. A refusal under the default or a `Raised` limit waits anyway,
+as `Waiting::SampleLimit`. An error of the image (its samples, or a
+reduction past the main header's levels), of the main header, or of a
+tile-part depends on no later tile-part, so it stays final at once.
+`finish`, `decode_with` and `read_header_with` are not changed, nor is
+anything with `strict` on, as `refine` and `header` always read with it
+off.
 
 A refine that waits decodes no more than the one-shot decode of its bytes
 does: that decode stops at the refused tile before it builds the tile's
@@ -150,9 +161,10 @@ geometry. `tests/tile_refusal_held_alloc.rs` feeds a tile of 10^6
 precincts, over the cap of `AtMost(2^24)`, with no `EOC`: the calls that
 hold the refusal peak at about 67 KB of heap, where a decode under a
 ceiling that admits the tile builds about 264 MB (2026-11-22).
-`tests/tile_refusal_final.rs` feeds files of both shapes in every two
-pieces and a byte at a time, and checks that `refine` and `header` each go
-from the main header cut short to images or waits to one error, the
+`tests/tile_error_final.rs` feeds files of each shape, as codestreams and
+as JP2 files with and without a damaged box after the codestream, in every
+two pieces and a byte at a time, and checks that `refine` and `header` each
+go from the main header cut short to images or waits to one error, the
 one-shot call's.
 
 OpenJPEG takes the first error in the order of the codestream. Under
