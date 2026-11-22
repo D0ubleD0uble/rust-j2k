@@ -120,6 +120,7 @@ fn read_header_from(
             jp2: Some(prefix.metadata),
         });
     }
+    check_format_known(bytes)?;
     let parsed = codestream::parse_header(bytes)?;
     let siz = &parsed.header.siz;
     // The selection's refusals come after the checks before it, as the decode
@@ -1020,6 +1021,7 @@ pub(crate) fn decode_metered(
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
         return decode_jp2(bytes, options, ledger);
     }
+    check_format_known(bytes)?;
     // The header checks come before the tile walk, as `read_header_with` has it.
     let parsed = codestream::parse_header(bytes)?;
     let selection = window::select(&parsed.header.siz, options);
@@ -1057,6 +1059,30 @@ fn held_unless<T>(
         ledger.hold(closed);
     }
     decoded
+}
+
+/// Refuse with [`Error::Incomplete`] input that is not read as a JP2 file
+/// and already differs from `SOC`, but is too short to say it is not a JP2
+/// file. Input that carries the signature box's type in bytes 4 to 8 is read
+/// as a JP2 file whatever its first four bytes ([`jp2::looks_like_jp2`]), so
+/// input under 8 bytes whose bytes from 4 on start that type may yet be one.
+/// Were it taken for a codestream with no `SOC`, more bytes could turn that
+/// error into a fault of the signature box. Input that `SOC` still starts
+/// (empty, or `FF`) is left to the codestream parser, which waits on it too.
+fn check_format_known(bytes: &[u8]) -> Result<()> {
+    let kind = &jp2::SIGNATURE[4..8];
+    let not_soc = bytes
+        .iter()
+        .zip([0xFF, 0x4F])
+        .any(|(&byte, soc)| byte != soc);
+    let may_be_jp2 =
+        not_soc && bytes.len() < 8 && kind.starts_with(bytes.get(4..).unwrap_or_default());
+    if may_be_jp2 {
+        return Err(Error::incomplete(
+            "the input ends before its first 8 bytes, which tell a codestream from a JP2 file",
+        ));
+    }
+    Ok(())
 }
 
 /// Options that contradict each other, whatever the input.

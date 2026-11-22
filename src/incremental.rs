@@ -584,11 +584,12 @@ impl IncrementalDecoder {
     /// [`refine`](Self::refine) waits on, is truncated now:
     /// [`Error::FileFormat`] when it ends inside the boxes of a JP2 file
     /// before its codestream, and [`Error::Codestream`] when it ends inside
-    /// the codestream's main header. A JP2 file whose `pclr`, `cmap` or
-    /// `cdef` boxes are malformed is refused for that with
-    /// [`Error::FileFormat`] once its `jp2c` box header is in, by `refine`,
-    /// [`header`](Self::header) and `finish` alike, even when the main header
-    /// is cut.
+    /// the codestream's main header, or, where the bytes do not start the
+    /// signature box, too soon to tell a codestream from a JP2 file. A JP2
+    /// file whose `pclr`, `cmap` or `cdef` boxes are malformed is refused for
+    /// that with [`Error::FileFormat`] once its `jp2c` box header is in, by
+    /// `refine`, [`header`](Self::header) and `finish` alike, even when the
+    /// main header is cut.
     ///
     /// This is a decode of its own, also after a `refine` has returned an
     /// error: under strict options it may refuse the bytes for an earlier

@@ -857,14 +857,15 @@ fn reject_matrix_maps_every_malformed_box_shape_to_its_typed_error() {
     }
 }
 
-/// Input with neither magic is still the codestream parser's to reject.
+/// Input with neither magic is still the codestream parser's to reject,
+/// once it holds a byte from 4 on that is not the signature box's type.
 #[test]
 fn input_with_neither_magic_is_a_codestream_error() {
     for bytes in [
         &b"not a codestream"[..],
         b"\x00\x00\x00\x0cjQ",
-        b"\x01",
-        b"\xFF\x4E",
+        b"\x01\x00\x00\x00\x00",
+        b"\xFF\x4E\x00\x00\x00",
     ] {
         assert!(
             matches!(decode(bytes), Err(Error::Codestream(_))),

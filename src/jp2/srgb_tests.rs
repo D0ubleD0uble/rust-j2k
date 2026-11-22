@@ -960,7 +960,7 @@ fn srgb_output_from_a_raw_codestream_is_unsupported() {
         is_unsupported,
         "raw codestream of 3 components",
     );
-    assert!(matches!(decode_srgb(b"junk"), Err(Error::Codestream(_))));
+    assert!(matches!(decode_srgb(b"junk!"), Err(Error::Codestream(_))));
 }
 
 /// A file declared gray on three components is refused only where
