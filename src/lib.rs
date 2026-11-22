@@ -255,9 +255,9 @@ mod readme_examples {}
 /// are `jP  ` (the signature box's type) is a JP2 file, and anything else goes
 /// to the codestream parser, which rejects it for its missing `SOC`. Input
 /// too short to tell, under 8 bytes whose bytes from 4 on may still be
-/// `jP  `, is [`Error::Incomplete`]. A JP2 file
-/// decodes its codestream (the first `jp2c` box) and reports the file's header
-/// on [`Image::jp2`], which is `None` for a raw codestream.
+/// `jP  `, is [`Error::Incomplete`]. A JP2 file decodes its codestream (the
+/// first `jp2c` box) and reports the file's header on [`Image::jp2`], which
+/// is `None` for a raw codestream.
 ///
 /// A JP2 file with a palette (`pclr` and `cmap`) decodes to the palette's
 /// channels, one per palette column, so it can have more components than its
