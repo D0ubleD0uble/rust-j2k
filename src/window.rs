@@ -389,11 +389,13 @@ mod tests {
                 tile: 2,
                 declared: 2,
                 found: 1,
+                corrected: false,
             },
             ReportEntry::TilePartCountMismatch {
                 tile: 3,
                 declared: 2,
                 found: 1,
+                corrected: true,
             },
             ReportEntry::MissingEoc,
         ];
@@ -406,6 +408,7 @@ mod tests {
                     tile: 3,
                     declared: 2,
                     found: 1,
+                    corrected: true,
                 },
                 ReportEntry::MissingEoc,
             ]
