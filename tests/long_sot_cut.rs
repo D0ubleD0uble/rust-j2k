@@ -177,16 +177,19 @@ fn a_refine_error_is_the_whole_files_with_a_long_later_sot() {
     check_prefixes("later", &long_later());
 }
 
+/// In a JP2 file the decoder holds a fault of the tile-parts until
+/// `finish`, so `refine` was never hit; the one-shot calls on a prefix are.
 #[test]
-fn a_jp2_file_with_a_long_sot_is_unaffected() {
+fn a_jp2_file_with_a_long_sot_reads_as_a_raw_codestream() {
     check_prefixes("first, in JP2", &in_jp2(&long_first()));
     check_prefixes("later, in JP2", &in_jp2(&long_later()));
 }
 
 /// The whole files give the `Marker` error with `strict` on and off, raw or
-/// in a JP2 file. A prefix that ends inside the long `SOT`, past its first
-/// 12 bytes, reads as the input cut short with `strict` off, and is refused
-/// as truncated with `strict` on, as it was.
+/// in a JP2 file, and so does a prefix that holds the long `SOT`. A prefix
+/// that ends inside it, past its first 12 bytes, reads as the input cut
+/// short with `strict` off, and is refused as truncated with `strict` on,
+/// as it was.
 #[test]
 fn a_cut_inside_a_long_sot_ends_the_codestream() {
     for (name, bytes, sot) in [("first", long_first(), 65), ("later", long_later(), 80)] {
@@ -202,6 +205,9 @@ fn a_cut_inside_a_long_sot_ends_the_codestream() {
                     Some(TRAILING),
                     "{context}, strict {strict}"
                 );
+                // All 13 bytes of the `SOT`: it is judged.
+                let held = error_of(&decode_with(&file[..at + 13], &options));
+                assert_eq!(held, whole, "{context}, strict {strict}");
                 // 12 bytes of the 13-byte `SOT`.
                 let cut = &file[..at + 12];
                 let decoded = decode_with(cut, &options);
