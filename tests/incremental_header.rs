@@ -76,9 +76,24 @@ fn check(
     name: &str,
     bytes: &[u8],
     options: &DecodeOptions,
-    mut pieces: impl FnMut(usize) -> usize,
+    pieces: impl FnMut(usize) -> usize,
     changes: &[(usize, Change)],
 ) -> Vec<String> {
+    check_refused(name, bytes, options, pieces, changes)
+        .into_iter()
+        .map(|(got, _)| got)
+        .collect()
+}
+
+/// [`check`], with whether `read_header_with` refuses the bytes of each
+/// call, which `header` may hold back.
+fn check_refused(
+    name: &str,
+    bytes: &[u8],
+    options: &DecodeOptions,
+    mut pieces: impl FnMut(usize) -> usize,
+    changes: &[(usize, Change)],
+) -> Vec<(String, bool)> {
     let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
     let mut changes = changes.to_vec();
     changes.sort_by_key(|(at, _)| *at);
@@ -98,6 +113,7 @@ fn check(
         }
         let got = shown(decoder.header());
         let want = oracle(&bytes[..fed], decoder.options());
+        let refused = want.starts_with(HELD) || want.starts_with("Err(");
         if let Some(error) = want.strip_prefix(HELD).map(str::trim_start) {
             // The error, or the header where it is held back.
             assert!(
@@ -110,7 +126,7 @@ fn check(
         }
         // A second call on the same bytes gives the same again.
         assert_eq!(shown(decoder.header()), got, "{name}: {fed} again");
-        seen.push(got);
+        seen.push((got, refused));
     }
     seen
 }
@@ -426,7 +442,14 @@ fn each_header_of_a_jp2_file_is_the_read_of_its_prefix() {
     );
     let whole = in_jp2(&codestream, &[]);
     let seen = check_tiled("jp2", &whole, 21);
-    assert!(seen.last().is_some_and(|s| s.starts_with("Err(Limit(")));
+    // The read refuses a tile, which `header` holds back: a JP2 file never
+    // closes, as a box after the codestream can be at fault.
+    assert!(seen.last().is_some_and(|s| s.starts_with("Ok(Some(")));
+    let lenient = DecodeOptions::default().with_strict(false);
+    assert!(matches!(
+        read_header_with(&whole, &lenient),
+        Err(Error::Limit(_))
+    ));
     let cdef = synth::cdef(&[(0, 0, 1)]);
     let two_cdefs = in_jp2(&codestream, &[cdef.clone(), cdef]);
     let seen = check_tiled("jp2 of two cdefs", &two_cdefs, 22);
@@ -685,13 +708,14 @@ fn each_header_with_the_fault_walk_kept_is_the_read_of_its_prefix() {
     for (seed, (name, bytes, want)) in cases.iter().enumerate() {
         let mut rng = Rng(100 + seed as u64);
         for most in [1, 20] {
-            let seen = check(name, bytes, &options, |_| rng.up_to(most), &[]);
+            let refused = check_refused(name, bytes, &options, |_| rng.up_to(most), &[]);
+            let seen: Vec<String> = refused.iter().map(|(got, _)| got.clone()).collect();
             let last = seen.last().expect("a call");
             assert!(last.starts_with(want), "{name}: {last}");
-            // The walk is kept over many calls that refuse a tile, of
-            // those with the main header whole.
+            // The walk is kept over many calls that refuse a tile or hold
+            // the refusal back, of those with the main header whole.
             let read = seen.iter().filter(|s| *s != "Ok(None)").count();
-            let refusals = seen.iter().filter(|s| s.starts_with("Err(")).count();
+            let refusals = refused.iter().filter(|(_, refused)| *refused).count();
             assert!(refusals * 2 > read, "{name}: {seen:?}");
             if *name == "look-ahead" {
                 // Before tile 0's third tile-part is in, the counts stand.

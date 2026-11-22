@@ -341,13 +341,15 @@ impl IncrementalDecoder {
     /// returns it as an error too, except a refusal of the sRGB step in a
     /// JP2 file, which waits. A server that streams files in can refuse
     /// a sample count as soon as its main header has come in. A tile refused
-    /// by a cap under it, or by the reduction, is held back: this returns
-    /// the header while the bytes fed do not close the tile-parts with an
-    /// `EOC`, as `refine` waits on it ([`Waiting::Held`]), and the
-    /// refusal once they do, unless a later tile-part's fault comes first.
+    /// by a tile cap, under any sample limit, or by the reduction, is held
+    /// back: this returns the header while the bytes fed do not close the
+    /// tile-parts with an `EOC`, as `refine` waits on it
+    /// ([`Waiting::Held`], or [`Waiting::SampleLimit`] for a refusal more
+    /// bytes lift), and the refusal once they do, unless a later
+    /// tile-part's fault comes first.
     /// In a JP2 file, which never closes, this holds back every error of
-    /// the tile-parts and the tiles but a refusal more bytes lift, and
-    /// [`finish`](Self::finish) reports it. It holds back the errors
+    /// the tile-parts and the tiles, and [`finish`](Self::finish) reports
+    /// it. It holds back the errors
     /// `refine` waits on in a JP2 file's boxes too: a fault in a box after
     /// the codestream that the bytes fed end inside, and a refusal of the
     /// sRGB step, for which it gives the header with the channels as coded.
@@ -1059,18 +1061,6 @@ pub(crate) fn lifts_with_bytes(limit: &LimitDetail) -> bool {
         limit.retry_with(),
         Some(Raise::Raised(_) | Raise::Unlimited)
     )
-}
-
-/// Whether `error`, given for a tile, is a refusal that more bytes do not
-/// lift: [`Error::InvalidOptions`], or an [`Error::Limit`] with no room
-/// left ([`lifts_with_bytes`]). Such a refusal is final once the tile-parts
-/// close; before that a later tile-part may hold a fault that comes first.
-pub(crate) fn is_final(error: &Error) -> bool {
-    match error {
-        Error::InvalidOptions(_) => true,
-        Error::Limit(limit) => !lifts_with_bytes(limit),
-        _ => false,
-    }
 }
 
 /// Which work bound refused a decode under a [`Ledger`].

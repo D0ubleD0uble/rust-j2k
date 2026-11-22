@@ -729,3 +729,123 @@ fn the_committed_seeds_are_the_shapes() {
         assert_eq!(committed, bytes, "{name}");
     }
 }
+
+/// The two tiles of [`reduction_row`], with a tile-part for tile 1 alone:
+/// tile 1, of 500,000 precincts under the main header, is over the precinct
+/// cap the default sample limit gives these bytes, a refusal more bytes
+/// lift. Its one tile-part, then `later`.
+fn default_cap_row(later: &[u8]) -> Vec<u8> {
+    let mut cod = synth::cod_body(1, 1, 0, 0);
+    cod[0] = 1;
+    cod.extend([0x00, 0x11]);
+    let mut bytes = main_header(
+        [2000, 1000, 992, 0, 1000, 1000, 0, 0],
+        &synth::seg(0xFF52, &cod),
+        4,
+    );
+    bytes.extend(synth::tile_part(1, 0, 1, &[], &[]));
+    bytes.extend(later);
+    bytes
+}
+
+/// A tile refused by a cap more bytes lift is held back by `header` until
+/// the tile-parts close, as a refusal they do not lift is: a later fault
+/// replaces it in the one-shot calls. Here the fault is two zero bytes
+/// where an `SOT` or the `EOC` belongs (the 86-byte input of issue #649).
+/// `refine` waits on the refusal as [`Waiting::SampleLimit`].
+#[test]
+fn a_tile_cap_refusal_more_bytes_lift_waits_for_a_later_fault() {
+    let bytes = default_cap_row(&[0, 0]);
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        hex,
+        "ff4fff5100290000000007d0000003e8000003e000000000000003e8000003e8000000000000000000\
+         01070101ff52000e010000010001000000010011ff5c00074040404040ff90000a00010000000e0001\
+         ff930000"
+    );
+    let lenient = DecodeOptions::default().with_strict(false);
+    let whole = error_of(&read_header_with(&bytes, &lenient)).expect("an error");
+    assert!(whole.starts_with("Codestream"), "{whole}");
+    assert_eq!(
+        error_of(&decode_with(&bytes, &lenient)),
+        Some(whole.clone())
+    );
+    // Before the zeros, the one-shot calls refuse the tile, `header` gives
+    // the header, and `refine` waits on the same refusal.
+    let cut = &bytes[..bytes.len() - 2];
+    let refused = error_of(&read_header_with(cut, &lenient)).expect("an error");
+    assert!(refused.contains("TilePrecincts"), "{refused}");
+    let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+    decoder.feed(cut);
+    assert!(
+        matches!(decoder.header(), Ok(Some(_))),
+        "{:?}",
+        decoder.header()
+    );
+    match decoder.refine() {
+        Ok(Refined::Waiting(Waiting::SampleLimit { limit, .. })) => {
+            assert_eq!(format!("{:?}", Error::Limit(limit)), refused);
+        }
+        other => panic!("{other:?}"),
+    }
+    // On every prefix `header` gives no error the whole file does not.
+    for end in 0..=bytes.len() {
+        let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+        decoder.feed(&bytes[..end]);
+        if let Err(error) = decoder.header() {
+            assert_eq!(format!("{error:?}"), whole, "at {end}");
+        }
+    }
+    check_streams(&bytes, &lenient, "default cap");
+    check_streams(&bytes, &DecodeOptions::default(), "default cap, strict");
+}
+
+/// In a JP2 file, which never closes, `header` holds the refusal back until
+/// `finish`: a box after the codestream is checked first, so a short `colr`
+/// there replaces it even after the `EOC`.
+#[test]
+fn a_tile_cap_refusal_more_bytes_lift_waits_in_a_jp2_file() {
+    let codestream = default_cap_row(&EOC);
+    let bytes = in_jp2(&codestream, &[synth::bx(b"colr", &[1, 0])]);
+    let lenient = DecodeOptions::default().with_strict(false);
+    let whole = error_of(&read_header_with(&bytes, &lenient)).expect("an error");
+    assert!(whole.starts_with("FileFormat"), "{whole}");
+    let cut = in_jp2(&codestream, &[]);
+    let refused = error_of(&read_header_with(&cut, &lenient)).expect("an error");
+    assert!(refused.contains("TilePrecincts"), "{refused}");
+    let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+    decoder.feed(&cut);
+    assert!(matches!(decoder.header(), Ok(Some(_))));
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::SampleLimit { .. }))
+    ));
+    assert_eq!(error_of(&decoder.finish()), Some(refused));
+    check_streams(
+        &bytes,
+        &lenient,
+        "default cap in JP2, then a colr too short",
+    );
+}
+
+/// With an `EOC` in place of the zeros the tile-parts close, so `header`
+/// gives the refusal, as the one-shot read does, and `refine` still waits
+/// on it as [`Waiting::SampleLimit`].
+#[test]
+fn a_tile_cap_refusal_more_bytes_lift_is_given_at_the_eoc() {
+    let bytes = default_cap_row(&EOC);
+    let lenient = DecodeOptions::default().with_strict(false);
+    let refused = error_of(&read_header_with(&bytes, &lenient)).expect("an error");
+    assert!(refused.contains("TilePrecincts"), "{refused}");
+    let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+    decoder.feed(&bytes);
+    assert_eq!(error_of(&decoder.header()), Some(refused.clone()));
+    assert!(
+        matches!(
+            decoder.refine(),
+            Ok(Refined::Waiting(Waiting::SampleLimit { .. }))
+        ),
+        "a refusal more bytes lift"
+    );
+    assert_eq!(error_of(&decoder.finish()), Some(refused));
+}

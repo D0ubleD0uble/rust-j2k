@@ -39,9 +39,8 @@ pub(crate) fn read_header_kept(
 /// [`read_header_kept`] for a stream that may still grow, with `strict` off.
 /// The decode parses every tile-part before it counts a tile, so an error
 /// of the tile-parts may yet give way to a fault in a later one. In a
-/// codestream, a tile refusal that more bytes do not lift
-/// ([`incremental::is_final`]) is held, and the header given, while the
-/// tile-parts have not closed with an `EOC`
+/// codestream, a tile refusal, by the reduction or a tile cap, is held, and
+/// the header given, while the tile-parts have not closed with an `EOC`
 /// ([`codestream::Codestream::closed`]). A JP2 file never closes, as boxes
 /// can follow the codestream and the decode checks them first: every error
 /// of its tile-parts is held, and so is an error of its boxes that more bytes
@@ -90,6 +89,7 @@ fn read_header_from(
             .addr()
             .wrapping_sub(bytes.as_ptr().addr());
         // An error held back comes before those of the tile-parts.
+        let boxes = prefix.held.is_some();
         let checked = match prefix.held.clone() {
             Some(held) => Err(held),
             None => check_geometry(
@@ -104,10 +104,11 @@ fn read_header_from(
             ),
         };
         // Boxes can follow the codestream, and the decode checks them before
-        // the tile-parts, so a JP2 file never closes. A refusal more bytes
-        // lift is given, as in a codestream.
+        // the tile-parts, so a JP2 file never closes, and a tile refusal is
+        // held, one more bytes lift included, as a later fault replaces it.
+        // A refusal more bytes lift held back from the boxes is given.
         match checked {
-            Err(Error::Limit(limit)) if hold && incremental::lifts_with_bytes(&limit) => {
+            Err(Error::Limit(limit)) if hold && boxes && incremental::lifts_with_bytes(&limit) => {
                 return Err(Error::Limit(limit));
             }
             Err(_) if hold => {}
@@ -228,9 +229,9 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// on or off ([`codestream::tile_parts_fault`], a walk that keeps no tile
 /// record).
 ///
-/// With [`Hold::UntilClosed`], a refusal with no fault in the tile-parts
-/// that more bytes do not lift ([`incremental::is_final`]) is held while the
-/// walk of the tile-parts has not closed (see [`read_header_streamed`]).
+/// With [`Hold::UntilClosed`], a refusal with no fault in the tile-parts is
+/// held while the walk of the tile-parts has not closed (see
+/// [`read_header_streamed`]), one more bytes lift included.
 ///
 /// `kept` is what an earlier call on the start of the same input left, with
 /// where the codestream `bytes` starts in that input (see [`HeaderCache`]).
@@ -279,13 +280,9 @@ fn check_geometry(
         Ok(false) => fault().map_or(Ok(()), Err),
         Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => match fault() {
             Some(fault) => Err(fault),
-            // A later tile-part may yet hold a fault, which comes first.
-            None if hold == Hold::UntilClosed
-                && !faults.closed
-                && incremental::is_final(&error) =>
-            {
-                Ok(())
-            }
+            // A later tile-part may yet hold a fault, which comes first,
+            // whether or not more bytes would lift the refusal.
+            None if hold == Hold::UntilClosed && !faults.closed => Ok(()),
             None => Err(error),
         },
         Err(error) => Err(error),
@@ -301,7 +298,7 @@ fn check_geometry(
 enum Hold {
     /// It gives every error: a call on the whole input.
     Never,
-    /// It holds a refusal more bytes do not lift until the tile-parts close.
+    /// It holds a tile refusal until the tile-parts close.
     UntilClosed,
 }
 
@@ -2303,7 +2300,8 @@ pub(crate) mod tests {
         assert!(kept * 100 < afresh, "{kept} reads, {afresh} from the start");
     }
 
-    /// The same where each call refuses tile 1, and so walks the tile-parts
+    /// The same where each call refuses tile 1, or holds the refusal back
+    /// until the `EOC`, and so walks the tile-parts
     /// fed for the decode's error for them first: the walk goes on from
     /// where the last call kept it, so the calls read each `SOT` about once
     /// in all. A walk from the start on each call read 3,083,441 here.
@@ -2325,7 +2323,7 @@ pub(crate) mod tests {
                 Err(Error::Incomplete(_)) => Ok(None),
                 Err(error) => Err(error),
             };
-            let held = held_on_32_bits(&header, &alone, decoder.bytes().len() < bytes.len());
+            let held = held_while_open(&header, &alone, decoder.bytes().len() < bytes.len());
             refusals += u64::from(held || matches!(header, Err(Error::Limit(_))));
             if !held {
                 assert_eq!(format!("{header:?}"), format!("{alone:?}"));
@@ -2391,7 +2389,7 @@ pub(crate) mod tests {
                 Err(Error::Incomplete(_)) => Ok(None),
                 Err(error) => Err(error),
             };
-            if !held_on_32_bits(&header, &alone, decoder.bytes().len() < bytes.len()) {
+            if !held_while_open(&header, &alone, decoder.bytes().len() < bytes.len()) {
                 assert_eq!(format!("{header:?}"), format!("{alone:?}"));
             }
         }
@@ -2403,23 +2401,16 @@ pub(crate) mod tests {
 
     /// Whether `header`, an incremental decoder's, holds back the tile
     /// refusal `alone`, the header read's, on bytes that have not reached the
-    /// `EOC` (`open`). On a 32-bit target a tile over the default cap is past
-    /// the address space, which more bytes do not lift, so the header holds
-    /// it until the `EOC` is in. On a 64-bit target the refusal is one more
-    /// bytes lift, which the header gives.
-    fn held_on_32_bits(
+    /// `EOC` (`open`). A later tile-part may hold a fault that comes first,
+    /// so the header holds the refusal until the `EOC` is in, whether more
+    /// bytes lift it (the default cap on a 64-bit target) or not (the
+    /// address space on a 32-bit one).
+    fn held_while_open(
         header: &Result<Option<Header>>,
         alone: &Result<Option<Header>>,
         open: bool,
     ) -> bool {
-        let held = matches!(
-            (header, alone),
-            (Ok(Some(_)), Err(Error::Limit(limit))) if !incremental::lifts_with_bytes(limit)
-        );
-        assert!(
-            !held || cfg!(target_pointer_width = "32"),
-            "held on 64 bits: {alone:?}"
-        );
+        let held = matches!((header, alone), (Ok(Some(_)), Err(Error::Limit(_))));
         assert!(!held || open, "held at the EOC: {alone:?}");
         held
     }
