@@ -1487,8 +1487,8 @@ by its length. Reserved segment-less markers
 
 The refusal waits for the main header to reach its first `SOT`. If the walk
 stops on a structural fault first (a length below 2, a byte that is not a
-marker, `SOC`, `SOD` or `EOC`, or more than 65536 marker segments), the code was most likely damage, such as a
-damaged first `SOT`, and that fault is reported as `Codestream` or `Marker`
+marker, `SOC`, `SOD` or `EOC`, or more than 65536 marker segments), the
+code was most likely damage, such as a damaged first `SOT`, and that fault is reported as `Codestream` or `Marker`
 (`tests/main_header_fault_order.rs`). OpenJPEG skips the code there too, and
 reports the fault after it or decodes on.
 
