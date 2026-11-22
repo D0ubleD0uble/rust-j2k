@@ -161,11 +161,18 @@ use crate::{
 /// refines spend together. An error of the tiles, met once every tile-part
 /// fed has parsed (a tile refused by the reduction or a tile cap, a damaged
 /// packet header, too many bit-planes), waits too
-/// ([`Waiting::TileError`]): `decode_with` parses every tile-part before it
+/// ([`Waiting::Held`]): `decode_with` parses every tile-part before it
 /// decodes a tile, so a later tile-part's fault comes first. In a codestream
 /// it waits until the bytes fed close the tile-parts with an `EOC`; a JP2
 /// file never closes, as boxes can follow the codestream, so there only
 /// `finish` reports it, and a fault of the tile-parts waits the same way.
+/// So does, in a JP2 file, a fault in a box the bytes fed end inside, which
+/// more bytes can complete or change: a box cut short after the codestream,
+/// a box of length 0, which runs to the end of the input, or a box cut
+/// inside its `XLBox`, judged on its type before its length. A refusal of
+/// the sRGB step waits as well, as a box still to come after the codestream
+/// can be at fault, which `decode_with` checks first. A fault in a box the
+/// bytes fed hold whole is final.
 /// A caller
 /// who raises the packet work limit to the factor a refusal names, as
 /// [`DecodeOptions::raised_for`] does, and feeds the file to a new decoder,
@@ -331,15 +338,21 @@ impl IncrementalDecoder {
     /// on it instead ([`Waiting::SampleLimit`]). Under a ceiling of
     /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost) it does not grow,
     /// so a refusal of the image's samples here is final, and `refine`
-    /// returns it as an error too. A server that streams files in can refuse
+    /// returns it as an error too, except a refusal of the sRGB step in a
+    /// JP2 file, which waits. A server that streams files in can refuse
     /// a sample count as soon as its main header has come in. A tile refused
     /// by a cap under it, or by the reduction, is held back: this returns
     /// the header while the bytes fed do not close the tile-parts with an
-    /// `EOC`, as `refine` waits on it ([`Waiting::TileError`]), and the
+    /// `EOC`, as `refine` waits on it ([`Waiting::Held`]), and the
     /// refusal once they do, unless a later tile-part's fault comes first.
     /// In a JP2 file, which never closes, this holds back every error of
     /// the tile-parts and the tiles but a refusal more bytes lift, and
-    /// [`finish`](Self::finish) reports it.
+    /// [`finish`](Self::finish) reports it. It holds back the errors
+    /// `refine` waits on in a JP2 file's boxes too: a fault in a box after
+    /// the codestream that the bytes fed end inside, and a refusal of the
+    /// sRGB step, for which it gives the header with the channels as coded.
+    /// A fault in a box before the codestream that more bytes can change, of
+    /// length 0 or cut inside its `XLBox`, gives `Ok(None)`.
     ///
     /// Each call parses the main header again (its `PPM` data included), so
     /// a call costs the main header plus the tile-parts fed since. For the
@@ -555,14 +568,14 @@ impl IncrementalDecoder {
                 // may hold, grow with the bytes too, but only a refusal that
                 // can be lifted waits.
                 None if lifts_with_bytes(&limit) => Waiting::SampleLimit { limit },
-                None if held => Waiting::TileError {
+                None if held => Waiting::Held {
                     error: Error::Limit(limit),
                 },
                 None => return Err(self.fail(Error::Limit(limit))),
             },
             // An error of the tiles while a later tile-part may yet hold a
             // fault, which the decode gives first.
-            Err(error) if held => Waiting::TileError { error },
+            Err(error) if held => Waiting::Held { error },
             Err(error) => return Err(self.fail(error)),
         };
         Ok(Refined::Waiting(waiting))
@@ -734,7 +747,8 @@ impl Refined {
 /// Why [`IncrementalDecoder::refine`] gave no image.
 ///
 /// Each of these may clear as more bytes come in, so none is an error. A
-/// [`TileError`](Self::TileError) may give way to an earlier fault, and an
+/// [`Held`](Self::Held) may give way to an earlier fault, in a later
+/// tile-part or a JP2 box, and an
 /// image can still follow it, for example where a later tile-part's `POC`
 /// changes which packets the decode reads. Once the input has
 /// ended, [`finish`](IncrementalDecoder::finish) decodes
@@ -810,7 +824,7 @@ pub enum Waiting {
     /// by no limit, so neither is a wait: `refine` returns it as an error,
     /// and every later `refine` returns it again, whatever is fed, until a
     /// change of options. A tile's refusal of either sort waits as
-    /// [`TileError`](Self::TileError) until the tile-parts close, and a
+    /// [`Held`](Self::Held) until the tile-parts close, and a
     /// later tile's cap refusal met while a refine counts the code-block
     /// work ends the count as [`BoundSpent`](Self::BoundSpent).
     #[non_exhaustive]
@@ -907,11 +921,16 @@ pub enum Waiting {
     /// bound.
     #[non_exhaustive]
     RepeatLimit {},
-    /// The decode of the bytes fed parsed every tile-part and then failed in
-    /// a tile, and the input has not closed yet, so a later tile-part may
-    /// still hold a fault, which [`decode_with`] gives in its place.
-    /// `error` is the one `decode_with` gives with `strict` off for the
-    /// bytes fed: a tile refused by the reduction
+    /// The decode of the bytes fed fails with `error`, but more bytes can
+    /// still put an earlier error, or an image, in its place: a fault in a
+    /// later tile-part, or in a JP2 box still to come or still arriving. In a
+    /// codestream, the next refine that decodes once the `EOC` is in gives
+    /// the final answer; in a JP2
+    /// file, [`finish`](IncrementalDecoder::finish) does.
+    ///
+    /// `error` is the one [`decode_with`] gives with `strict` off for the
+    /// bytes fed. Once every tile-part fed has parsed, it is a tile refused
+    /// by the reduction
     /// ([`Error::InvalidOptions`]) or by a tile cap more bytes do not lift
     /// ([`Error::Limit`], under [`AtMost`](crate::SampleLimit::AtMost) or past
     /// the address space), or an error in its packets or code-blocks, such
@@ -920,9 +939,19 @@ pub enum Waiting {
     /// a component the image does not have: every error from the tile-parts
     /// on waits there.
     ///
+    /// In a JP2 file it can also be an error of the boxes that more bytes can
+    /// replace, met before any tile-part is parsed: a fault in a box the
+    /// bytes fed end inside, cut short after the codestream, cut inside its
+    /// `XLBox`, or of length 0
+    /// (which runs to the end of the input), or a refusal of the sRGB step,
+    /// which a fault in a box still to come after the codestream comes
+    /// before.
+    ///
     /// A codestream closes once the bytes fed reach the `EOC` after its
-    /// last tile-part. Then `refine` returns the error `decode_with` gives,
-    /// this one or a fault, and every later refine returns it again. A last
+    /// last tile-part. Then the next refine that decodes returns the error
+    /// `decode_with` gives, this one or a fault, and every later refine
+    /// returns it again; where no refine decodes after that,
+    /// [`finish`](IncrementalDecoder::finish) reports it. A last
     /// tile-part whose `Psot` is 0 runs to the end of the input, which may
     /// grow, and a JP2 file can have boxes after its codestream, which the
     /// decode checks first, so neither closes: `refine` waits until
@@ -933,10 +962,10 @@ pub enum Waiting {
     /// tile-part's `POC` changes which packets the decode reads, so that it
     /// no longer reads the one that failed. A caller that stops here gives
     /// up on such a file.
-    /// [`header`](IncrementalDecoder::header) holds a tile refusal back
-    /// while `refine` waits on it.
+    /// [`header`](IncrementalDecoder::header) holds the error back while
+    /// `refine` waits on it.
     #[non_exhaustive]
-    TileError {
+    Held {
         /// The error, as `decode_with` gives it.
         error: Error,
     },
@@ -993,13 +1022,13 @@ pub enum Waiting {
 /// }
 /// ```
 ///
-/// A `match` outside the crate cannot name `Waiting::TileError`'s fields
+/// A `match` outside the crate cannot name `Waiting::Held`'s fields
 /// without `..`:
 ///
 /// ```compile_fail,E0638
 /// fn error(why: rust_j2k::Waiting) -> Option<rust_j2k::Error> {
 ///     match why {
-///         rust_j2k::Waiting::TileError { error } => Some(error),
+///         rust_j2k::Waiting::Held { error } => Some(error),
 ///         _ => None,
 ///     }
 /// }
@@ -1201,7 +1230,7 @@ impl Ledger {
     /// Record that the decode failed past the parse of every tile-part, on
     /// an input whose tile-parts have `closed` or not. Where they have not, a
     /// later tile-part may hold a fault the decode gives first, so a refine
-    /// waits on the error ([`Waiting::TileError`]).
+    /// waits on the error ([`Waiting::Held`]).
     pub(crate) fn hold(&self, closed: bool) {
         self.held.set(!closed);
     }

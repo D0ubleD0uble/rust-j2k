@@ -1,7 +1,7 @@
 //! Whether the input an incremental decoder holds an error on can still
 //! change it. The one-shot decode parses every tile-part before it decodes
 //! a tile, so an error met after that parse gives way to a fault in a later
-//! tile-part. `refine` waits on such an error (`Waiting::TileError`) and
+//! tile-part. `refine` waits on such an error (`Waiting::Held`) and
 //! `header` gives the header, until the input closes: a codestream whose
 //! chain of `SOT`s steps by nonzero `Psot`s to an `EOC` the input holds. A
 //! JP2 file never closes, as boxes can follow the codestream and the decode

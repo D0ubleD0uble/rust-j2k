@@ -67,6 +67,9 @@ pub(crate) struct Boxes<'a> {
     /// The type of the box being read when the input ended inside it, once
     /// its type field was read.
     cut_kind: Option<[u8; 4]>,
+    /// Whether the input ended inside that box's `XLBox` field while it can
+    /// still be below 16.
+    cut_in_length: bool,
 }
 
 impl<'a> Boxes<'a> {
@@ -80,6 +83,7 @@ impl<'a> Boxes<'a> {
             done: false,
             last_open_ended: false,
             cut_kind: None,
+            cut_in_length: false,
         }
     }
 
@@ -93,6 +97,7 @@ impl<'a> Boxes<'a> {
             done: false,
             last_open_ended: false,
             cut_kind: None,
+            cut_in_length: false,
         }
     }
 
@@ -111,6 +116,13 @@ impl<'a> Boxes<'a> {
     /// that needs only the type can still be made on it.
     pub(crate) fn cut_kind(&self) -> Option<[u8; 4]> {
         self.cut_kind
+    }
+
+    /// Whether the input ended inside the `XLBox` field of the box
+    /// [`cut_kind`](Self::cut_kind) names while it can still be below 16: its
+    /// length, which can still be at fault, is not in yet.
+    pub(crate) fn cut_in_length(&self) -> bool {
+        self.cut_in_length
     }
 
     /// Read the box at `self.pos` and step past it.
@@ -135,6 +147,11 @@ impl<'a> Boxes<'a> {
             }
         };
         self.cut_kind = Some(kind);
+        // An `XLBox` below 16 is a fault, which bytes still to come can make
+        // only while those in are all 0.
+        self.cut_in_length = lbox == 1
+            && rest.len() < 16
+            && rest.get(8..).is_some_and(|xl| xl.iter().all(|&b| b == 0));
         let name = type_name(kind);
         self.last_open_ended = lbox == 0;
         // The top-level codestream box, whose length OpenJPEG does not use.
@@ -251,6 +268,11 @@ pub(crate) struct AfterCodestream<'a> {
     /// `XLBox` is below 16, or a box OpenJPEG reads that runs past the end of
     /// the file. It comes after every box in `boxes`.
     pub(crate) fault: Option<Error>,
+    /// Whether the input ends inside the box the walk ended on, so that more
+    /// bytes can still change that box: the fault is a box that runs past the
+    /// end of the input, or, with no fault, the last box in `boxes` has
+    /// `LBox` 0 and runs to the end.
+    pub(crate) open: bool,
 }
 
 /// Walk the bytes after the codestream the way OpenJPEG does after decoding
@@ -268,6 +290,7 @@ pub(crate) struct AfterCodestream<'a> {
 /// passes through.
 pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
     let mut boxes = Vec::new();
+    let mut open = false;
     let fault = loop {
         let [a, b, c, d, t0, t1, t2, t3, ..] = *rest else {
             break None;
@@ -300,6 +323,7 @@ pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
         }
         let Some(payload) = rest.get(header..length as usize) else {
             if READ_BY_OPENJPEG.contains(&&kind) {
+                open = true;
                 break Some(Error::file_format(format!(
                     "box `{}` after the codestream is {length} bytes but only {} remain in \
                      the file",
@@ -310,9 +334,11 @@ pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
             break None;
         };
         boxes.push(Jp2Box { kind, payload });
+        // A box of length 0 takes the rest of the input, so it is the last.
+        open = lbox == 0;
         // `length >= header >= 8`, so every step moves at least 8 bytes and
         // the walk ends.
         rest = rest.get(length as usize..).unwrap_or_default();
     };
-    AfterCodestream { boxes, fault }
+    AfterCodestream { boxes, fault, open }
 }
