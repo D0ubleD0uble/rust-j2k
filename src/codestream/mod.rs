@@ -663,14 +663,24 @@ pub(crate) fn first_part_at<'b, 'm>(
     Some(FirstPart::new(bytes, &parsed.header, offset, &sot, pos))
 }
 
-/// Whether `bytes` end inside the `SOT` marker segment at `offset`: before
-/// its first 12 bytes, which a `SOT` of `Lsot` 10 spans, or before the
-/// `2 + Lsot` bytes a longer `Lsot` gives. With `strict` off the tile-part
-/// walks end the codestream there, so that a `SOT` more bytes may complete
-/// is judged only once the input holds it.
-fn ends_in_sot(bytes: &[u8], offset: usize) -> bool {
-    let left = bytes.len().saturating_sub(offset);
-    left < 12 || read_u16(bytes, offset + 2).is_some_and(|lsot| left < 2 + usize::from(lsot))
+/// Refuse the `SOT` marker segment at `offset` once the input holds its
+/// `Lsot`, if that is not 10: [`decode_sot`] refuses any other length,
+/// whatever the bytes after it hold, so more input cannot change the error.
+/// This gives the error it gives for the whole segment: a length below 2,
+/// a body too short for the fields, or bytes left after them.
+fn check_sot_length(bytes: &[u8], offset: usize) -> Result<()> {
+    if read_u16(bytes, offset) != Some(marker::SOT) {
+        return Ok(());
+    }
+    match offset.checked_add(2).and_then(|at| read_u16(bytes, at)) {
+        None | Some(10) => Ok(()),
+        Some(0 | 1) => Err(Error::marker("marker segment length below 2")),
+        Some(2..=9) => Err(Error::marker("truncated marker segment")),
+        Some(lsot) => Err(Error::marker(format!(
+            "`SOT` segment has {} unexpected trailing byte(s)",
+            lsot - 10
+        ))),
+    }
 }
 
 /// The `SOT` marker segment at `offset` of `bytes`, and where it ends, or
@@ -1181,9 +1191,10 @@ fn walk_tiles<'a>(
     let mut closed = false;
     let mut part_offset = sot_offset;
     loop {
+        check_sot_length(bytes, part_offset)?;
         // Not strict: input that ends inside the `SOT` marker segment ends the
-        // codestream there.
-        if !strict && ends_in_sot(bytes, part_offset) {
+        // codestream there. `SOT` is always 12 bytes (Lsot = 10).
+        if !strict && bytes.len().saturating_sub(part_offset) < 12 {
             entries.push(ReportEntry::MissingEoc);
             ended_early = true;
             break;
