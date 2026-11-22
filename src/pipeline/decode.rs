@@ -33,8 +33,35 @@ pub(crate) fn read_header_kept(
     options: &DecodeOptions,
     kept: Option<&mut HeaderCache>,
 ) -> Result<Header> {
-    // What is kept is not keyed on `strict`: only reads with it off keep.
+    read_header_from(bytes, options, kept, false)
+}
+
+/// [`read_header_kept`] for a stream that may still grow, with `strict` off:
+/// a tile refusal that more bytes do not lift ([`incremental::is_final`]) is
+/// held, and the header given, while the tile-parts have not closed with an
+/// `EOC` ([`codestream::Codestream::closed`]), as a later tile-part can hold
+/// a fault the decode gives first. Once they close, it gives what
+/// [`read_header`] gives.
+pub(crate) fn read_header_streamed(
+    bytes: &[u8],
+    options: &DecodeOptions,
+    kept: Option<&mut HeaderCache>,
+) -> Result<Header> {
+    read_header_from(bytes, options, kept, true)
+}
+
+/// [`read_header_kept`], holding a tile refusal where `hold` is set (see
+/// [`read_header_streamed`]).
+fn read_header_from(
+    bytes: &[u8],
+    options: &DecodeOptions,
+    kept: Option<&mut HeaderCache>,
+    hold: bool,
+) -> Result<Header> {
+    // What is kept is not keyed on `strict`: only reads with it off keep,
+    // and only those hold.
     debug_assert!(kept.is_none() || !options.strict);
+    debug_assert!(!hold || !options.strict);
     check_options(options)?;
     let reduction = options.resolution_reduction;
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
@@ -52,6 +79,7 @@ pub(crate) fn read_header_kept(
             reduction,
             samples::cap(&options.sample_limit, bytes.len()),
             options.strict,
+            hold,
             kept.map(|kept| (kept, start)),
         )?;
         let area = &prefix.selection.area;
@@ -103,6 +131,7 @@ pub(crate) fn read_header_kept(
         reduction,
         samples::cap(&options.sample_limit, bytes.len()),
         options.strict,
+        hold,
         kept.map(|kept| (kept, 0)),
     )?;
     let (width, height) = selection.area.image_extent_at(reduction);
@@ -167,8 +196,13 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// on or off ([`codestream::tile_parts_fault`], a walk that keeps no tile
 /// record).
 ///
+/// With `hold`, a refusal with no fault in the tile-parts that more bytes
+/// do not lift ([`incremental::is_final`]) is held while the walk of the
+/// tile-parts has not closed (see [`read_header_streamed`]).
+///
 /// `kept` is what an earlier call on the start of the same input left, with
 /// where the codestream `bytes` starts in that input (see [`HeaderCache`]).
+#[allow(clippy::too_many_arguments)]
 fn check_geometry(
     bytes: &[u8],
     parsed: &codestream::ParsedHeader,
@@ -176,6 +210,7 @@ fn check_geometry(
     reduction: u8,
     cap: samples::Cap,
     strict: bool,
+    hold: bool,
     kept: Option<(&mut HeaderCache, usize)>,
 ) -> Result<()> {
     let (mut cache, start) = kept.map_or((None, 0), |(kept, start)| (Some(kept), start));
@@ -184,6 +219,7 @@ fn check_geometry(
     let main = cache.is_some().then(|| MainKey::of(bytes, parsed));
     let mut faults = Faults {
         keeps: cache.is_some(),
+        closed: false,
         walk: cache
             .as_deref_mut()
             .zip(main)
@@ -209,7 +245,12 @@ fn check_geometry(
     let checked = match counted {
         Ok(true) => Ok(()),
         Ok(false) => fault().map_or(Ok(()), Err),
-        Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => Err(fault().unwrap_or(error)),
+        Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => match fault() {
+            Some(fault) => Err(fault),
+            // A later tile-part may yet hold a fault, which comes first.
+            None if hold && !faults.closed && incremental::is_final(&error) => Ok(()),
+            None => Err(error),
+        },
         Err(error) => Err(error),
     };
     if let (Some(cache), Some(main), Some(walk)) = (cache, main, faults.walk) {
@@ -226,6 +267,9 @@ fn check_geometry(
 struct Faults {
     /// Whether the call keeps.
     keeps: bool,
+    /// Whether the last [`find`](Self::find) found no fault and the walk
+    /// closed ([`codestream::Codestream::closed`]).
+    closed: bool,
     walk: Option<codestream::KeptWalk>,
 }
 
@@ -238,11 +282,13 @@ impl Faults {
         parsed: &codestream::ParsedHeader,
         strict: bool,
     ) -> Option<Error> {
-        if self.keeps {
-            codestream::tile_parts_fault_kept(bytes, parsed, strict, &mut self.walk)
+        let walked = if self.keeps {
+            codestream::tile_parts_walk_kept(bytes, parsed, strict, &mut self.walk)
         } else {
-            codestream::tile_parts_fault(bytes, parsed, strict)
-        }
+            codestream::tile_parts_walk(bytes, parsed, strict)
+        };
+        self.closed = matches!(walked, Ok(true));
+        walked.err()
     }
 }
 
@@ -1335,12 +1381,17 @@ fn decode_codestream(
         let header = or_end_count!(cs.tile_header(position));
 
         // A tile COD can give one tile a shallower pyramid than the rest, so
-        // the reduction is checked per tile, not once for the image.
-        or_end_count!(check_reduction(&header, reduction, Some(index)));
-
-        // The tile's precincts and code-blocks, counted before its geometry
-        // is built, against what the sample limit allows a tile.
-        or_end_count!(tier2::check_tile(&header, tile.index, cap));
+        // the reduction is checked per tile, not once for the image. Then
+        // the tile's precincts and code-blocks, counted before its geometry
+        // is built, against what the sample limit allows a tile. Until the
+        // tile-parts close, a later one may hold a fault the decode gives
+        // first, so the ledger notes whether they have.
+        let checked = check_reduction(&header, reduction, Some(index))
+            .and_then(|()| tier2::check_tile(&header, tile.index, cap));
+        if let (Err(_), None, Some(ledger)) = (&checked, counting, ledger) {
+            ledger.refuse_tile(cs.closed);
+        }
+        or_end_count!(checked);
 
         // Tier-2: parse packets into per-code-block coded segments, per
         // component. The walk covers every resolution and layer whatever the

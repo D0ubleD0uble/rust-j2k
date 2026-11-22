@@ -210,6 +210,12 @@ pub struct Codestream<'a> {
     pub tiles: Vec<Tile<'a>>,
     /// What a walk with `strict` off found missing; always empty when strict.
     pub entries: Vec<ReportEntry>,
+    /// Whether the walk of the tile-parts ended at an `EOC` after a
+    /// tile-part whose `Psot` is not 0, so that an input that extends this
+    /// one holds the same tile-parts. With `strict` off a walk that ends with
+    /// the input, or at a tile-part whose `Psot` is 0, is not closed: more
+    /// input can add tile-parts, or data to that last one.
+    pub closed: bool,
 }
 
 impl Tile<'_> {
@@ -291,7 +297,9 @@ pub fn parse_tiles_with(
     split_tiles_checked(bytes, parsed, strict, true)
 }
 
-pub(crate) use fault::{KeptWalk, tile_parts_fault, tile_parts_fault_kept};
+pub(crate) use fault::{
+    KeptWalk, tile_parts_fault, tile_parts_fault_kept, tile_parts_walk, tile_parts_walk_kept,
+};
 
 /// Check the header of a tile's first tile-part, `tile`, as the tile walk
 /// reads it, so that a malformed tile-part header is a parse error rather
@@ -805,11 +813,12 @@ fn split_tiles_checked(
     check_headers: bool,
 ) -> Result<Codestream<'_>> {
     let mut entries = Vec::new();
-    let tiles = walk_parsed(bytes, &parsed, strict, check_headers, &mut entries)?;
+    let (tiles, closed) = walk_parsed(bytes, &parsed, strict, check_headers, &mut entries)?;
     Ok(Codestream {
         header: parsed.header,
         tiles,
         entries,
+        closed,
     })
 }
 
@@ -820,7 +829,7 @@ fn walk_parsed<'a>(
     strict: bool,
     check_headers: bool,
     entries: &mut Vec<ReportEntry>,
-) -> Result<Vec<Tile<'a>>> {
+) -> Result<(Vec<Tile<'a>>, bool)> {
     // The tile-parts that start a tile, so the walk can reserve one record
     // for each: a hop along the `SOT` chain that reads the `SOT` markers only.
     let mut first_parts = 0usize;
@@ -1113,6 +1122,9 @@ struct TileParts<'a> {
 /// tile-part is read ([`check_first_tile_part`]), and its `POC` volumes as
 /// each later one adds to them, so the fault refused is the first in the
 /// input, whatever the input holds after it.
+///
+/// It returns the tiles, and whether the walk closed: ended at an `EOC`
+/// after a tile-part whose `Psot` is not 0 (see [`Codestream::closed`]).
 #[allow(clippy::too_many_arguments)]
 fn walk_tiles<'a>(
     bytes: &'a [u8],
@@ -1123,7 +1135,7 @@ fn walk_tiles<'a>(
     check_headers: bool,
     first_parts: usize,
     entries: &mut Vec<ReportEntry>,
-) -> Result<Vec<Tile<'a>>> {
+) -> Result<(Vec<Tile<'a>>, bool)> {
     let tile_count = main.siz.num_tiles() as usize;
     // `PPM` (main header) supplies one packet-header chunk per tile-part in
     // codestream order; this counter walks them as the tile-parts are read.
@@ -1155,6 +1167,8 @@ fn walk_tiles<'a>(
     // Whether, with `strict` off, the walk ended where the input did, so a
     // `PPM` may carry chunks for tile-parts the input ends before.
     let mut ended_early = false;
+    // Whether the walk ended at an `EOC` after a tile-part's declared end.
+    let mut closed = false;
     let mut part_offset = sot_offset;
     loop {
         // Not strict: input that ends inside the `SOT` marker segment ends the
@@ -1422,7 +1436,10 @@ fn walk_tiles<'a>(
         // Another SOT continues the walk; EOC ends it. Anything else — or
         // nothing at all — means the tile-part chain does not close.
         match read_u16(bytes, data_end) {
-            Some(marker::EOC) => break,
+            Some(marker::EOC) => {
+                closed = true;
+                break;
+            }
             Some(marker::SOT) => part_offset = data_end,
             Some(other) => {
                 return Err(Error::codestream(format!(
@@ -1531,7 +1548,7 @@ fn walk_tiles<'a>(
             packed_headers: tile.packed_headers,
         });
     }
-    Ok(found)
+    Ok((found, closed))
 }
 
 /// A tile's count of tile-parts, for an error that names the count a `SOT`

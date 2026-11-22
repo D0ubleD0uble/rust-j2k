@@ -9,6 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "support/held.rs"]
+mod held;
 #[path = "support/inconsistent.rs"]
 mod inconsistent;
 use inconsistent::checked;
@@ -87,13 +89,15 @@ fn is_sample_limit(error: &Error) -> bool {
 /// What a refine on `prefix` must give: the strict-off decode, with a main
 /// header cut short and a refusal by a work bound or the sample limit as
 /// `None`. A sample limit of `AtMost` is a ceiling more bytes do not raise,
-/// so its refusal is the error.
+/// so its refusal is the error, except that a tile refusal is `None` too
+/// while the tile-parts have not closed ([`held::held`]).
 fn refine_oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>, Error> {
     let ceiling = matches!(options.sample_limit(), SampleLimit::AtMost(_));
     match checked(decode_with(prefix, &options.clone().with_strict(false))) {
         Ok(image) => Ok(Some(image)),
         Err(Error::Incomplete(_)) => Ok(None),
         Err(error) if is_work_limit(&error) || (is_sample_limit(&error) && !ceiling) => Ok(None),
+        Err(error) if held::held(&error, prefix) => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -190,6 +194,18 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
             }
         }
         (Waiting::RepeatLimit { .. }, _) => {}
+        // A tile refusal that a later tile-part's fault may yet replace is
+        // the one the decode gives.
+        (
+            Waiting::TileRefused { error, .. },
+            Err(expected @ (Error::InvalidOptions(_) | Error::Limit(_))),
+        ) if held::held(expected, prefix) => {
+            assert_eq!(
+                format!("{error:?}"),
+                format!("{expected:?}"),
+                "{name}, {at} bytes"
+            );
+        }
         _ => panic!("{name}, {at} bytes: waited for {why:?}, where the decode gives {one_shot:?}"),
     }
 }

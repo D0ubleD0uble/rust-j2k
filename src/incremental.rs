@@ -6,7 +6,7 @@ use std::fmt;
 use std::sync::{Mutex, PoisonError, TryLockError};
 
 use crate::codestream::{MainHeader, Tile};
-use crate::pipeline::decode::{HeaderCache, check_options, decode_metered, read_header_kept};
+use crate::pipeline::decode::{HeaderCache, check_options, decode_metered, read_header_streamed};
 use crate::tier2::resume::{Repeats, Walks};
 use crate::tier2::{CodedData, Meter, Reach, Refused};
 use crate::{
@@ -370,7 +370,7 @@ impl IncrementalDecoder {
             }
             Err(TryLockError::WouldBlock) => None,
         };
-        match read_header_kept(&self.bytes, &self.lenient, kept.as_deref_mut()) {
+        match read_header_streamed(&self.bytes, &self.lenient, kept.as_deref_mut()) {
             Ok(header) => Ok(Some(header)),
             Err(Error::Incomplete(_)) => Ok(None),
             Err(error) => Err(error),
@@ -512,6 +512,7 @@ impl IncrementalDecoder {
         let ledger = Ledger::over(spent, fed as u64);
         let decoded = decode_metered(&self.bytes, &self.lenient, Some(&ledger));
         let refusal = ledger.work_refused.get();
+        let held = ledger.held.get();
         #[cfg(test)]
         {
             self.refused = refusal.is_some();
@@ -537,23 +538,16 @@ impl IncrementalDecoder {
                 Some(Refusal::BoundSpent) => Waiting::BoundSpent { limit },
                 // The sample limit, and the code-blocks and precincts a tile
                 // may hold, grow with the bytes too, but only a refusal that
-                // can be lifted waits. The kind says whether an option
-                // raises it (not past the address space, which is its own
-                // kind), and a retry says whether the limit leaves room: it
-                // is `None` under `AtMost`, a ceiling the caller set, which
-                // more bytes do not raise. A refusal with no retry sticks.
-                None if matches!(
-                    limit.kind(),
-                    LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
-                ) && matches!(
-                    limit.retry_with(),
-                    Some(Raise::Raised(_) | Raise::Unlimited)
-                ) =>
-                {
-                    Waiting::SampleLimit { limit }
-                }
+                // can be lifted waits.
+                None if lifts_with_bytes(&limit) => Waiting::SampleLimit { limit },
+                None if held => Waiting::TileRefused {
+                    error: Error::Limit(limit),
+                },
                 None => return Err(self.fail(Error::Limit(limit))),
             },
+            // A tile refused while a later tile-part may yet hold a fault,
+            // which the decode gives first.
+            Err(error @ Error::InvalidOptions(_)) if held => Waiting::TileRefused { error },
             Err(error) => return Err(self.fail(error)),
         };
         Ok(Refined::Waiting(waiting))
@@ -893,6 +887,29 @@ pub enum Waiting {
     /// bound.
     #[non_exhaustive]
     RepeatLimit {},
+    /// A tile was refused, and the codestream has not closed yet: the bytes
+    /// fed do not reach the `EOC` after its last tile-part. The refusal is
+    /// one more bytes do not lift: a reduction past the levels the tile's
+    /// own header gives it ([`Error::InvalidOptions`]), or a tile of more
+    /// code-blocks or precincts than a limit of
+    /// [`AtMost`](crate::SampleLimit::AtMost), or the target, allows
+    /// ([`Error::Limit`]). A later tile-part can still hold a fault, which
+    /// [`decode_with`] gives in place of the refusal, so the refusal is not
+    /// final yet. The error is the one `decode_with` gives with `strict` off
+    /// for the bytes fed.
+    ///
+    /// Once the bytes fed reach the `EOC`, `refine` returns the error
+    /// `decode_with` gives then, the refusal or a fault, and every later
+    /// refine returns it again. A last tile-part whose `Psot` is 0 runs to
+    /// the end of the input, which may grow, so `refine` waits on such a
+    /// file until [`finish`](IncrementalDecoder::finish) reports the error.
+    /// [`header`](IncrementalDecoder::header) holds the same refusal back
+    /// while `refine` waits on it.
+    #[non_exhaustive]
+    TileRefused {
+        /// The refusal, as `decode_with` gives it.
+        error: Error,
+    },
 }
 
 /// Checks, as doctests, that the struct variants of [`Waiting`] that carry a
@@ -946,6 +963,18 @@ pub enum Waiting {
 /// }
 /// ```
 ///
+/// A `match` outside the crate cannot name `Waiting::TileRefused`'s fields
+/// without `..`:
+///
+/// ```compile_fail,E0638
+/// fn error(why: rust_j2k::Waiting) -> Option<rust_j2k::Error> {
+///     match why {
+///         rust_j2k::Waiting::TileRefused { error } => Some(error),
+///         _ => None,
+///     }
+/// }
+/// ```
+///
 /// A `match` outside the crate cannot name `Waiting::HeaderIncomplete`
 /// without `..`:
 ///
@@ -956,6 +985,34 @@ pub enum Waiting {
 /// ```
 #[cfg(doctest)]
 pub struct WaitingVariantsAreNonExhaustive;
+
+/// Whether more bytes may lift the refusal `limit`, so that a refine waits
+/// on it: the sample limit, and the code-blocks and precincts it allows a
+/// tile, grow with the bytes. The kind says whether an option raises it (not
+/// past the address space, which is its own kind), and a retry says whether
+/// the limit leaves room: it is `None` under `AtMost`, a ceiling the caller
+/// set, which more bytes do not raise.
+fn lifts_with_bytes(limit: &LimitDetail) -> bool {
+    matches!(
+        limit.kind(),
+        LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
+    ) && matches!(
+        limit.retry_with(),
+        Some(Raise::Raised(_) | Raise::Unlimited)
+    )
+}
+
+/// Whether `error`, given for a tile, is a refusal that more bytes do not
+/// lift: [`Error::InvalidOptions`], or an [`Error::Limit`] with no room
+/// left ([`lifts_with_bytes`]). Such a refusal is final once the tile-parts
+/// close; before that a later tile-part may hold a fault that comes first.
+pub(crate) fn is_final(error: &Error) -> bool {
+    match error {
+        Error::InvalidOptions(_) => true,
+        Error::Limit(limit) => !lifts_with_bytes(limit),
+        _ => false,
+    }
+}
 
 /// Which work bound refused a decode under a [`Ledger`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1008,6 +1065,10 @@ pub(crate) struct Ledger {
     bound: Cell<Option<u64>>,
     /// Which work bound refused the decode, if one did.
     work_refused: Cell<Option<Refusal>>,
+    /// Whether the decode refused a tile, by the reduction or a tile cap,
+    /// on a codestream whose tile-parts have not closed
+    /// ([`Codestream::closed`](crate::codestream::Codestream::closed)).
+    held: Cell<bool>,
     /// The bytes the decode is of, which the walks kept are held to (see
     /// [`Walks`]).
     fed: u64,
@@ -1020,6 +1081,7 @@ impl fmt::Debug for Ledger {
             .field("repeats", &self.repeats)
             .field("bound", &self.bound)
             .field("work_refused", &self.work_refused)
+            .field("held", &self.held)
             .field("fed", &self.fed)
             .finish_non_exhaustive()
     }
@@ -1035,6 +1097,7 @@ impl Ledger {
             repeats: Repeats::new(spent.repeats),
             bound: Cell::new(None),
             work_refused: Cell::new(None),
+            held: Cell::new(false),
             fed,
         }
     }
@@ -1103,6 +1166,14 @@ impl Ledger {
     /// tiles shrink, so more bytes may clear it.
     pub(crate) fn refuse(&self, why: Refusal) {
         self.work_refused.set(Some(why));
+    }
+
+    /// Record that the decode refused a tile, by the reduction or a tile
+    /// cap, on a codestream whose tile-parts have `closed` or not. Where they
+    /// have not, a later tile-part may hold a fault the decode gives first,
+    /// so a refine waits on the refusal ([`Waiting::TileRefused`]).
+    pub(crate) fn refuse_tile(&self, closed: bool) {
+        self.held.set(!closed);
     }
 
     /// Add `work` to the code-block work spent.

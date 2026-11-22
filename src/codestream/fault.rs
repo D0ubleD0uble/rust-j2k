@@ -132,9 +132,13 @@ impl Offsets {
 /// checked as its first tile-part is read, as the tile walk checks it, so a
 /// tile at fault is resolved in full from the header in hand.
 pub(crate) fn tile_parts_fault(bytes: &[u8], parsed: &ParsedHeader, strict: bool) -> Option<Error> {
-    Walk::new(bytes, parsed)
-        .run(bytes, parsed, strict, &mut None)
-        .err()
+    tile_parts_walk(bytes, parsed, strict).err()
+}
+
+/// The walk of [`tile_parts_fault`]: its error, or whether it closed, as
+/// [`Codestream::closed`](super::Codestream::closed) says of the tile walk.
+pub(crate) fn tile_parts_walk(bytes: &[u8], parsed: &ParsedHeader, strict: bool) -> Result<bool> {
+    Walk::new(bytes, parsed).run(bytes, parsed, strict, &mut None)
 }
 
 /// The walk of [`tile_parts_fault_kept`], kept for its next call on an
@@ -167,8 +171,19 @@ pub(crate) fn tile_parts_fault_kept(
     strict: bool,
     kept: &mut Option<KeptWalk>,
 ) -> Option<Error> {
+    tile_parts_walk_kept(bytes, parsed, strict, kept).err()
+}
+
+/// The walk of [`tile_parts_fault_kept`]: its error, or whether it closed
+/// (see [`tile_parts_walk`]).
+pub(crate) fn tile_parts_walk_kept(
+    bytes: &[u8],
+    parsed: &ParsedHeader,
+    strict: bool,
+    kept: &mut Option<KeptWalk>,
+) -> Result<bool> {
     if strict {
-        return tile_parts_fault(bytes, parsed, strict);
+        return tile_parts_walk(bytes, parsed, strict);
     }
     let tiles = parsed.header.siz.num_tiles() as usize;
     let mut walk = match kept.take() {
@@ -181,7 +196,7 @@ pub(crate) fn tile_parts_fault_kept(
         _ => Walk::new(bytes, parsed),
     };
     let mut undo = None;
-    let fault = walk.run(bytes, parsed, strict, &mut undo).err();
+    let walked = walk.run(bytes, parsed, strict, &mut undo);
     if let Some(undo) = undo {
         undo.restore(&mut walk);
     }
@@ -189,7 +204,7 @@ pub(crate) fn tile_parts_fault_kept(
         len: bytes.len(),
         walk,
     });
-    fault
+    walked
 }
 
 /// The state of a walk of the tile-parts between two of its steps.
@@ -273,15 +288,16 @@ impl Walk {
 
     /// [`walk_tiles`](super::walk_tiles) without the tile records, from
     /// where the walk stands: each step it takes, and each error it gives,
-    /// in the same order. `undo` is left holding what to take back of the
-    /// step the walk stopped in, or `None` if it stopped before one.
+    /// in the same order, and whether it closed, as `walk_tiles` returns it.
+    /// `undo` is left holding what to take back of the step the walk
+    /// stopped in, or `None` if it stopped before one.
     fn run(
         &mut self,
         bytes: &[u8],
         parsed: &ParsedHeader,
         strict: bool,
         undo: &mut Option<Undo>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let main = &parsed.header;
         let ppm = &parsed.ppm;
         let Walk {
@@ -300,6 +316,9 @@ impl Walk {
         // Whether the walk ended where the input did, with `strict` off:
         // where `walk_tiles` records `ReportEntry::MissingEoc`.
         let mut ended_early = false;
+        // Whether the walk ended at an `EOC` after a tile-part's declared
+        // end.
+        let mut closed = false;
 
         loop {
             *undo = None;
@@ -551,7 +570,10 @@ impl Walk {
                 break;
             }
             match read_u16(bytes, data_end) {
-                Some(marker::EOC) => break,
+                Some(marker::EOC) => {
+                    closed = true;
+                    break;
+                }
                 // The step read nothing past this `SOT`'s code, so it
                 // stands in any longer input.
                 Some(marker::SOT) => *part_offset = data_end,
@@ -595,6 +617,6 @@ impl Walk {
                 )));
             }
         }
-        Ok(())
+        Ok(closed)
     }
 }

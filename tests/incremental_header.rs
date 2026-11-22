@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "support/held.rs"]
+mod held;
 #[path = "support/synth.rs"]
 mod synth;
 
@@ -43,17 +45,20 @@ fn shown(result: Result<Option<rust_j2k::Header>, Error>) -> String {
     format!("{result:?}")
 }
 
+/// What [`oracle`] gives where `header` holds the refusal back.
+const HELD: &str = "held";
+
 /// What `IncrementalDecoder::header` must give on `prefix` under
 /// `options`: `read_header_with` with `strict` off, with an incomplete main
-/// header as `None`.
+/// header as `None`, and a tile refusal held while the tile-parts have not
+/// closed ([`held::held`]) as [`HELD`].
 fn oracle(prefix: &[u8], options: &DecodeOptions) -> String {
-    shown(
-        match read_header_with(prefix, &options.clone().with_strict(false)) {
-            Ok(header) => Ok(Some(header)),
-            Err(Error::Incomplete(_)) => Ok(None),
-            Err(error) => Err(error),
-        },
-    )
+    match read_header_with(prefix, &options.clone().with_strict(false)) {
+        Ok(header) => shown(Ok(Some(header))),
+        Err(Error::Incomplete(_)) => shown(Ok(None)),
+        Err(error) if held::held(&error, prefix) => HELD.to_owned(),
+        Err(error) => shown(Err(error)),
+    }
 }
 
 /// A change of options a feed can make before the read.
@@ -93,9 +98,18 @@ fn check(
         }
         let got = shown(decoder.header());
         let want = oracle(&bytes[..fed], decoder.options());
-        assert_eq!(got, want, "{name}: {fed} of {} bytes", bytes.len());
+        if want == HELD {
+            // The refusal is held back, and the header given.
+            assert!(
+                got.starts_with("Ok(Some("),
+                "{name}: {fed} of {}: {got}",
+                bytes.len()
+            );
+        } else {
+            assert_eq!(got, want, "{name}: {fed} of {} bytes", bytes.len());
+        }
         // A second call on the same bytes gives the same again.
-        assert_eq!(shown(decoder.header()), want, "{name}: {fed} again");
+        assert_eq!(shown(decoder.header()), got, "{name}: {fed} again");
         seen.push(got);
     }
     seen
