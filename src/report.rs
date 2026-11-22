@@ -217,10 +217,15 @@ pub enum ReportEntry {
         /// `SOD` marker is whole. Always `true` when `declared` is `None`.
         header_cut: bool,
     },
-    /// The tile's `SOT` markers declare a number of tile-parts (`TNsot`) other
-    /// than the number found, or, when `corrected` is set, one less than it.
+    /// The tile's parts found differ from the count it is held to: the count
+    /// its `SOT` markers state (`TNsot`), or one more when `corrected` is set.
     /// The tile decodes from the parts found; any packets they lack are
     /// reported as [`MissingPackets`](Self::MissingPackets).
+    ///
+    /// With [`IncrementalDecoder::refine`](crate::IncrementalDecoder::refine),
+    /// the entry describes the bytes so far, so it can appear and go away as
+    /// more arrive; `declared` does not change, and `corrected` is not taken
+    /// back.
     #[non_exhaustive]
     TilePartCountMismatch {
         /// The tile.
@@ -230,11 +235,11 @@ pub enum ReportEntry {
         /// The tile-parts found.
         found: u16,
         /// Whether OpenJPEG's `TPsot == TNsot` correction applies, so the
-        /// count `found` is held to is `declared + 1`. The correction is made
-        /// once for the whole codestream: it raises every tile's count when a
-        /// part of the first tile to have all its declared parts has `TPsot`
-        /// equal to its `TNsot`, so it can apply to a tile whose own count
-        /// is right.
+        /// tile is held to `declared + 1` parts. The correction is made once
+        /// for the whole codestream: it raises every tile's count when the
+        /// next part of the first tile to have all its declared parts has
+        /// `TPsot` equal to its `TNsot`, so it can apply to a tile whose own
+        /// count is right.
         corrected: bool,
     },
     /// Bytes of this tile were not read: every packet the tile's progression
