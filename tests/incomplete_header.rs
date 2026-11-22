@@ -512,10 +512,12 @@ fn damaged() -> Vec<(&'static str, Vec<u8>, usize)> {
     vec![
         ("SOC is not SOC", edited(&whole, &[(1, 0x4E)]), 2),
         ("Lsiz below 2", edited(&whole, &[(5, 1)]), 6),
+        // The walk loses sync after the short SIZ, but the SIZ is judged
+        // first, as OpenJPEG 2.5.0 does ("Error with SIZ marker size").
         (
-            "Lsiz one short, so the walk loses sync",
+            "Lsiz one short, before the walk loses sync",
             edited(&whole, &[(5, 40)]),
-            46,
+            44,
         ),
         (
             "Csiz past the SIZ segment's end",
@@ -634,11 +636,6 @@ fn a_damaged_main_header_is_codestream_or_marker() {
 /// segments the input holds are judged before the cut is reported. A shorter
 /// prefix does not yet show it, and is `Incomplete`, `Codestream` or `Marker`
 /// (a segment it holds in full whose length is wrong).
-///
-/// Each case here damages one place only, so the prefix's error is exactly
-/// the whole file's. That does not hold in general: a whole file whose header
-/// is also broken later, where the walk fails (a non-marker, `SOD`, a length
-/// below 2), reports that walk error before it judges any segment.
 #[test]
 fn a_cut_after_a_damaged_segment_is_an_error_not_incomplete() {
     let refused = refused()

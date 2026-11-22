@@ -30,9 +30,9 @@ use std::collections::hash_map::Entry;
 
 use super::{
     Cursor, Error, FaultSite, Overrides, ParsedHeader, Restated, Result, both_packed_headers,
-    check_first_tile_part, check_poc_budget, check_restatement, count_is_one_short, decode_sot,
-    fault_may_be_cut, marker, part_end, read_part_header, read_tile_part_header, read_u16, segment,
-    sot_at,
+    check_first_tile_part, check_poc_budget, check_restatement, count_is_one_short,
+    count_mismatch_message, decode_sot, fault_may_be_cut, marker, part_end, read_part_header,
+    read_tile_part_header, read_u16, segment, sot_at, stated_count, two_counts_message,
 };
 
 impl ParsedHeader {
@@ -345,17 +345,24 @@ impl Walk {
                 let stated = u16::from(sot.num_tile_parts) + *count_correction;
                 if strict && u16::from(sot.tile_part_index) >= stated {
                     return Err(Error::codestream(format!(
-                        "tile {index} tile-part {} of a declared {stated} tile-parts",
+                        "tile {index} tile-part {} of a declared {}",
                         sot.tile_part_index,
+                        stated_count(stated, *count_correction),
                     )));
                 }
                 match tile.declared {
                     0 => tile.declared = stated,
                     declared if declared != stated => {
-                        // With `strict` off the counts are the ones the
-                        // two `SOT`s state, as `walk_tiles` gives them.
-                        return Err(Error::codestream(format!(
-                            "tile {index} declares {stated} tile-parts in one `SOT` and {declared} in another",
+                        // The stated counts, with the held ones added when
+                        // the correction is on, as `walk_tiles` gives them.
+                        // The look-ahead runs only with `strict` on, so
+                        // with it off the correction is never on here, and
+                        // `walk_tiles` leaves it out with `strict` off.
+                        return Err(Error::codestream(two_counts_message(
+                            index,
+                            stated - *count_correction,
+                            declared - *count_correction,
+                            strict && *count_correction != 0,
                         )));
                     }
                     _ => {}
@@ -580,9 +587,11 @@ impl Walk {
                 continue;
             }
             if strict && tile.declared != 0 && tile.declared != tile.parts {
-                return Err(Error::codestream(format!(
-                    "tile {index} declares {} tile-parts but carries {}",
-                    tile.declared, tile.parts
+                return Err(Error::codestream(count_mismatch_message(
+                    index,
+                    tile.declared,
+                    *count_correction,
+                    usize::from(tile.parts),
                 )));
             }
         }

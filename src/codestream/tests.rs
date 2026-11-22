@@ -1405,7 +1405,7 @@ fn a_raised_count_is_still_held_to_the_parts() {
     );
     let e = perr(&bytes);
     assert!(
-        matches!(&e, Error::Codestream(m) if m.message().contains("tile 1 declares 2 tile-parts but carries 1")),
+        matches!(&e, Error::Codestream(m) if m.message().contains("tile 1 declares 1 tile-parts, 2 with the `TPsot == TNsot` correction, but carries 1")),
         "got {e:?}"
     );
 }
@@ -5716,7 +5716,7 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_rare_shapes() {
                 ],
                 &eoc,
             ),
-            "Codestream(\"tile 1 declares 2 tile-parts but carries 1\")",
+            "Codestream(\"tile 1 declares 1 tile-parts, 2 with the `TPsot == TNsot` correction, but carries 1\")",
         ),
         (
             "two counts",

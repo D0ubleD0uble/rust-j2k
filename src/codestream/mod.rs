@@ -1217,8 +1217,9 @@ fn walk_tiles<'a>(
             // the difference reported once the walk ends.
             if strict && u16::from(sot.tile_part_index) >= stated {
                 return Err(Error::codestream(format!(
-                    "tile {index} tile-part {} of a declared {stated} tile-parts",
+                    "tile {index} tile-part {} of a declared {}",
                     sot.tile_part_index,
+                    stated_count(stated, count_correction),
                 )));
             }
             match tile.declared_parts {
@@ -1227,11 +1228,11 @@ fn walk_tiles<'a>(
                     // correction may rest on bytes past this tile-part, so
                     // a prefix that ends before them would give other
                     // counts. Every count stated so far was raised with it.
-                    let shown = if strict { 0 } else { count_correction };
-                    return Err(Error::codestream(format!(
-                        "tile {index} declares {} tile-parts in one `SOT` and {} in another",
-                        stated - shown,
-                        declared - shown,
+                    return Err(Error::codestream(two_counts_message(
+                        index,
+                        stated - count_correction,
+                        declared - count_correction,
+                        strict && count_correction != 0,
                     )));
                 }
                 _ => tile.declared_parts = Some(stated),
@@ -1474,9 +1475,11 @@ fn walk_tiles<'a>(
         if let Some(declared) = tile.declared_parts {
             if usize::from(declared) != tile.parts.len() {
                 if strict {
-                    return Err(Error::codestream(format!(
-                        "tile {index} declares {declared} tile-parts but carries {}",
-                        tile.parts.len()
+                    return Err(Error::codestream(count_mismatch_message(
+                        index,
+                        declared,
+                        count_correction,
+                        tile.parts.len(),
                     )));
                 }
                 // The count the `SOT`s state: every count held includes the
@@ -1529,6 +1532,46 @@ fn walk_tiles<'a>(
         });
     }
     Ok(found)
+}
+
+/// A tile's count of tile-parts, for an error that names the count a `SOT`
+/// states. `held` is the count the walk holds the tile to: the stated count
+/// plus `correction`, which is 1 once the `TPsot == TNsot` correction is on
+/// (see [`count_is_one_short`]). When the correction applies the text says
+/// so, as `ReportEntry::TilePartCountMismatch` does.
+fn stated_count(held: u16, correction: u16) -> String {
+    let stated = held - correction;
+    if correction == 0 {
+        format!("{stated} tile-parts")
+    } else {
+        format!("{stated} tile-parts, {held} with the `TPsot == TNsot` correction")
+    }
+}
+
+/// The error for a tile that carries `carried` tile-parts against a count
+/// of `held` (the stated count plus `correction`).
+fn count_mismatch_message(index: usize, held: u16, correction: u16, carried: usize) -> String {
+    let comma = if correction == 0 { "" } else { "," };
+    format!(
+        "tile {index} declares {}{comma} but carries {carried}",
+        stated_count(held, correction)
+    )
+}
+
+/// The error for a tile whose `SOT`s state two counts, `later` and `earlier`.
+/// `corrected` adds that the correction holds the tile to one more of each,
+/// which the text may say only when the whole input is in hand (`strict` on).
+fn two_counts_message(index: usize, later: u16, earlier: u16, corrected: bool) -> String {
+    let mut text =
+        format!("tile {index} declares {later} tile-parts in one `SOT` and {earlier} in another");
+    if corrected {
+        text.push_str(&format!(
+            ", {} and {} with the `TPsot == TNsot` correction",
+            u32::from(later) + 1,
+            u32::from(earlier) + 1
+        ));
+    }
+    text
 }
 
 /// Whether the tile-part chain from `from` holds another part of tile `tile`
@@ -2199,14 +2242,21 @@ const MAX_MAIN_HEADER_SEGMENTS: usize = 1 << 16;
 ///   question, and `parse_main_header` answers it with `Unsupported`.
 ///
 /// Returns the segments in codestream order and the offset of the `SOT` that
-/// ended the header. When the input ends after `SOC` and before the first
-/// `SOT` marker is whole, the offset is [`Error::Incomplete`] instead and the
-/// segments are those the input holds in full, so the caller can judge them
-/// before it reports the cut: the walk reads only marker codes and lengths
-/// here, so running out of input means the input was cut short (or a length
-/// was damaged to reach past it, which looks the same). A non-marker where a
-/// marker must be and `SOD`/`EOC` before any tile-part are
-/// [`Error::Codestream`]; a length below 2 is [`Error::Marker`].
+/// ended the header. When the walk stops before that `SOT`, the offset is
+/// the error that stopped it instead, and the segments are those located
+/// before it, so the caller can judge them first and a damaged segment is
+/// reported on every prefix that holds it, as in the whole file:
+///
+/// - [`Error::Incomplete`] when the input ends after `SOC` and before the
+///   first `SOT` marker is whole. The walk reads only marker codes and
+///   lengths here, so running out of input means the input was cut short (or
+///   a length was damaged to reach past it, which looks the same);
+/// - [`Error::Codestream`] for a non-marker where a marker must be, `SOC`,
+///   `SOD` or `EOC` before any tile-part, and more than
+///   [`MAX_MAIN_HEADER_SEGMENTS`] segments;
+/// - [`Error::Marker`] for a length below 2.
+///
+/// Only input that is not, or not yet, `SOC` is an error of the walk itself.
 fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
     let mut cur = Cursor::at(bytes, 0);
 
@@ -2232,13 +2282,13 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
             // A second SOC, or a delimiter that belongs to a tile-part, means
             // the header is malformed rather than merely unfamiliar.
             marker::SOC | marker::SOD | marker::EOC => {
-                return Err(Error::codestream(format!(
+                break Err(Error::codestream(format!(
                     "unexpected marker {code:#06X} before any tile-part"
                 )));
             }
 
             _ if !marker::is_marker(code) => {
-                return Err(Error::codestream(format!(
+                break Err(Error::codestream(format!(
                     "expected a marker in the main header, found {code:#06X}"
                 )));
             }
@@ -2250,14 +2300,15 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
                 // conformant main header comes close, and the cap keeps a hostile
                 // input's allocation proportional to nothing but this constant.
                 if segments.len() == MAX_MAIN_HEADER_SEGMENTS {
-                    return Err(Error::codestream(format!(
+                    break Err(Error::codestream(format!(
                         "main header has more than {MAX_MAIN_HEADER_SEGMENTS} marker segments"
                     )));
                 }
                 let body = if marker::has_segment(code) {
-                    match main_header_segment(&mut cur)? {
-                        Some(body) => body,
-                        None => {
+                    match main_header_segment(&mut cur) {
+                        Err(fault) => break Err(fault),
+                        Ok(Some(body)) => body,
+                        Ok(None) => {
                             break Err(cut_short(&format!(
                                 "in its {} segment",
                                 marker::describe(code)
@@ -2302,10 +2353,10 @@ fn cut_short(place: &str) -> Error {
 /// The header is walked in full by [`walk_main_header`] first, then each
 /// located segment is interpreted in codestream order.
 fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> {
-    // A cut header is judged on the segments the input holds in full, in the
-    // order a whole one is, so a damaged segment before the cut is reported
-    // as it would be in the whole file; `end` reports the cut only once those
-    // all pass.
+    // The segments before a cut or a structural fault are judged first, in
+    // codestream order, so a damaged segment before the cut is reported as
+    // it would be in the whole file; `end` reports the cut or the fault only
+    // once those all pass. OpenJPEG reads the header in the same order.
     let (segments, end) = walk_main_header(bytes)?;
 
     // SIZ shall be the first marker segment after SOC (A.6).
@@ -2339,6 +2390,10 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     // Packed packet headers (A.7.4), collected as `(Zppm, Ippm)` and split into
     // per-tile-part chunks after the walk by `decode_ppm_chunks`.
     let mut ppm: Vec<(u8, Vec<u8>)> = Vec::new();
+
+    // A marker this decoder does not read, held until the walk is known to
+    // have reached `SOT`: see below.
+    let mut unsupported = None;
 
     for seg in &segments[1..] {
         let body = || Cursor::new(seg.body);
@@ -2428,10 +2483,11 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // multiple-component transforms, non-linearity, extra bit depths —
             // rather than reading as a bare unknown code.
             code if marker::PART2.contains(&code) => {
-                return Err(Error::unsupported(format!(
+                unsupported = Some(Error::unsupported(format!(
                     "{} is a JPEG 2000 Part 2 marker, outside the Part 1 subset",
                     marker::describe(seg.code)
                 )));
+                break;
             }
 
             // The reserved segment-less range is *defined* to carry nothing, so
@@ -2445,11 +2501,24 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // the packet data means. Guessing that it is ignorable would trade
             // a clean rejection for a silently wrong image.
             other => {
-                return Err(Error::unsupported(format!(
+                unsupported = Some(Error::unsupported(format!(
                     "unrecognized marker {other:#06X} in the main header"
                 )));
+                break;
             }
         }
+    }
+
+    // A Part 2 or unknown marker is refused only once the walk reaches the
+    // first `SOT`. Before that the header may still be cut (and the next
+    // bytes may show it damaged), and a walk that stops on a structural
+    // fault has likely lost sync, so the code was damage, not a marker: a
+    // damaged first `SOT` is stepped over as an unknown marker and the walk
+    // stops at the `SOD` after it. The tile-part header calls such a code
+    // lost sync the same way (`lost_sync`).
+    if let Some(error) = unsupported {
+        end?;
+        return Err(error);
     }
 
     // Every segment the input holds is valid. What is left needs the whole
