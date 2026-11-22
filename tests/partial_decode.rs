@@ -253,8 +253,14 @@ fn missing_tiles_are_zero_and_reported() {
     );
     assert!(entries.iter().any(|e| matches!(
         e,
-        ReportEntry::TruncatedTilePart { tile: 1, tile_part: 0, declared, present, .. }
-            if present < declared
+        ReportEntry::TruncatedTilePart {
+            tile: 1,
+            tile_part: 0,
+            declared: Some(declared),
+            present,
+            header_cut: false,
+            ..
+        } if present < declared
     )));
     assert!(!image.report.is_complete());
     assert_eq!(image.report.complete_reduction, None);
