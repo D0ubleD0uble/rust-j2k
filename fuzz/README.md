@@ -506,7 +506,7 @@ cargo +nightly fuzz run ht_block -- -max_total_time=60 -max_len=8192 -rss_limit_
 cp tests/fixtures/conformance/ht/codestreams/ds0_hm_15_b8.j2k fuzz/corpus/decode/
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096
 
-# The incremental target (116 files), seeded with the fixtures of 3072 bytes or
+# The incremental target (120 files), seeded with the fixtures of 3072 bytes or
 # less, the same behind control bytes that change the options between refines,
 # and the files of `tests/fixtures/incremental` of 4096 bytes or less (the
 # target runs with `-max_len=4096`, which would truncate larger ones). The

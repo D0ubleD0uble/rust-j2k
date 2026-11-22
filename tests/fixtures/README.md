@@ -620,6 +620,36 @@ its wait gives the tile and work `decode_with` gives. It starts with `SOC`,
 so the target reads it with all-zero control bytes, and its extension keeps
 it out of the sweeps of the fixtures. Replay it with the command above.
 
+`incremental/tile_error_*.seed` are four seeds of the `incremental_decode`
+fuzz target for an error in a tile that a later tile-part's fault replaces
+(#605). They are built by `seeds()` in `tests/tile_error_final.rs` (no
+encoder, no input image, so no license restriction), which checks that
+the committed bytes are its output; `J2K_BLESS_TILE_ERROR_SEEDS=1` writes
+them again. Without them the target did not catch a refine that never
+waits on such an error in 1.1M runs; with them it fails on the first
+replay.
+
+- `tile_error_reduction_then_cod.seed` (133 bytes, SHA-256
+  `be231354a9de33f58e1ab2c25371c2c9475ed8f52d5c5c8af082228a1695e3c8`):
+  the control bytes `20 00 00 00 00 00` (a reduction of 1) in front of a
+  64 x 64 tile whose own `COD` gives no levels, with a later tile-part's
+  `COD` that differs.
+- `tile_error_lblock_then_coc.seed` (120 bytes, SHA-256
+  `9b0a74c06abb9b55dae6413dbcc2f3ce580b3ddfcb5065ec382f265813a89a7a`): a
+  4 x 4 tile whose packet header has an Lblock indicator longer than any
+  Lblock, with a later tile-part's `COC` for component 5 of 1.
+- `tile_error_lblock_then_cod.seed` (123 bytes, SHA-256
+  `79d122b19f70b84ff2f928c27d8a52f32c215f06d1bf46ab6dc5911299100c18`): the
+  same packet, with a later tile-part's `COD` that differs.
+- `tile_error_lblock_jp2_then_colr.seed` (204 bytes, SHA-256
+  `e4b36b717405e28a90aa0fc1052cf66fec50f95fd9c72b1fce3b51edf0453c47`): the
+  packet's codestream in a JP2 file, followed by a `colr` box too short to
+  hold its fields.
+
+All but the first start with `SOC` or the JP2 signature, so the target
+reads them with all-zero control bytes. Their extension keeps them out of
+the sweeps of the fixtures. Replay them with the command above.
+
 ### Retry ladder fixtures
 
 `retry_ladder/tile_precincts.j2k` (98 bytes, SHA-256

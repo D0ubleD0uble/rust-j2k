@@ -24,8 +24,13 @@
 //! only after work was spent, and where the one-shot decode passes the
 //! code-block bound, or is refused by it at the tile and for the work the
 //! wait's `refused_at` gives: a refine cut short by what was spent does not
-//! decode the tiles it counts, and waits there. The probe below is checked
-//! by the same rule. After an
+//! decode the tiles it counts, and waits there. `TileError` comes only
+//! where the one-shot decode gives that error and the bytes fed have not
+//! closed (a codestream whose tile-parts step to an `EOC`; a JP2 file never
+//! does), as a later tile-part's fault would come first. The probe below is
+//! checked by the same rule. An error is final: once a refine gives one,
+//! with no change of options since, the decode of the whole input gives it
+//! too. After an
 //! error, every later refine gives it again, and `finish` is the decode of
 //! all the bytes under the decoder's options.
 //!
@@ -73,6 +78,8 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../../tests/support/held.rs"]
+mod held;
 #[path = "../../tests/support/inconsistent.rs"]
 mod inconsistent;
 use inconsistent::checked;
@@ -141,7 +148,8 @@ fuzz_target!(|input: &[u8]| {
     }
     // A ceiling the bytes do not raise: a refusal by the sample limit, or by
     // the code-blocks or precincts it allows a tile, is the one-shot decode's
-    // sticky error, not a wait. It is sized from the samples the file
+    // sticky error, not a wait, but for a tile refused before the input
+    // closes (`open` below). It is sized from the samples the file
     // declares: all of them for three draws in four, else half. The first
     // are admitted by the header's check, unless the decoder counts more
     // than the header declares, so the refines go on to decode; the others
@@ -196,6 +204,8 @@ fuzz_target!(|input: &[u8]| {
     };
     let mut fed = 0;
     let mut failed = None;
+    // The bytes fed when the refine first gave `failed`.
+    let mut failed_at = 0;
     // The bytes fed at the last refine that was due.
     let mut tried = 0;
     let mut checks_left = MAX_CHECKED_TRIES;
@@ -240,6 +250,7 @@ fuzz_target!(|input: &[u8]| {
             }
             if let Err(error) = refined {
                 failed = Some(error);
+                failed_at = fed;
             }
             continue;
         }
@@ -247,13 +258,17 @@ fuzz_target!(|input: &[u8]| {
         if due {
             let one_shot = checked(decode_with(&data[..fed], &lenient));
             let shape = one_shot.as_ref().map(|_| ()).map_err(Error::clone);
+            // An error of the tiles on an input that has not closed may be a
+            // wait.
+            let open = !held::closes(&data[..fed]);
+            let waits_on_tiles = matches!(&waiting, Some(Waiting::TileError { .. }));
             let repeat_work = incremental_repeat_work(&decoder);
             if let Some(why) = &waiting {
                 assert!(
                     !(ceiling && matches!(why, Waiting::SampleLimit { .. })),
                     "{fed} bytes: waits on a ceiling: {why:?}"
                 );
-                check_waiting(why, &shape, repeat_work.refused.is_some(), spent, fed);
+                check_waiting(why, &shape, open, repeat_work.refused.is_some(), spent, fed);
             }
             let expected = keyed(match one_shot {
                 Ok(image) => Ok(Some(image)),
@@ -277,6 +292,7 @@ fuzz_target!(|input: &[u8]| {
                 {
                     Ok(None)
                 }
+                Err(_) if open && waits_on_tiles => Ok(None),
                 Err(error) => Err(error),
             });
             // The work this try spends, and what it gives with nothing spent:
@@ -349,13 +365,14 @@ fuzz_target!(|input: &[u8]| {
                 // cut, so its reason is checked too.
                 if let Ok(Refined::Waiting(why)) = &probe_refine {
                     let repeats = incremental_repeat_work(&probe).refused.is_some();
-                    check_waiting(why, &shape, repeats, spent, fed);
+                    check_waiting(why, &shape, open, repeats, spent, fed);
                 }
                 let probed = keyed(probe_refine.map(Refined::image));
                 cut.check(&probe, spent, &probed, "probe");
             }
             if let Err(error) = refined {
                 failed = Some(error);
+                failed_at = fed;
             }
             continue;
         }
@@ -377,8 +394,20 @@ fuzz_target!(|input: &[u8]| {
                     Ok(_) => panic!("{fed} bytes: {error}, where the decode gives an image"),
                 }
                 failed = Some(error);
+                failed_at = fed;
             }
         }
+    }
+    // A refine's error is final: the whole input gives it too. In a JP2
+    // file it is checked once the bytes fed held the `jp2c` box's header:
+    // before that the decode may still take the input for a codestream, and
+    // the walk of the boxes before the codestream gives an error that more
+    // boxes can replace, which is not what this target checks.
+    let settled = data.starts_with(&[0xFF, 0x4F])
+        || jp2c_end(data).is_some_and(|end| end <= failed_at);
+    if let (Some(error), true) = (&failed, settled) {
+        let whole = keyed(checked(decode_with(data, &lenient)).map(|_| ()));
+        assert_eq!(whole, Err(error.clone()), "a refine failed for good");
     }
     let finished = checked(decoder.finish());
     match checked(decode_with(data, &options)) {
@@ -393,13 +422,42 @@ fuzz_target!(|input: &[u8]| {
     }
 });
 
+/// Where the header of the first top-level `jp2c` box of `data` ends, if
+/// `data` holds it.
+fn jp2c_end(data: &[u8]) -> Option<usize> {
+    let u32_at = |at: usize| -> Option<u64> {
+        Some(u64::from(u32::from_be_bytes(
+            data.get(at..at.checked_add(4)?)?.try_into().ok()?,
+        )))
+    };
+    let mut at = 0usize;
+    loop {
+        let length = u32_at(at)?;
+        let kind = data.get(at + 4..at + 8)?;
+        let (header, size) = match length {
+            1 => (16, u32_at(at + 8)? << 32 | u32_at(at + 12)?),
+            n => (8, n),
+        };
+        if kind == b"jp2c" {
+            return Some(at + header).filter(|&end| end <= data.len());
+        }
+        if size < header as u64 {
+            return None;
+        }
+        at = at.checked_add(usize::try_from(size).ok()?)?;
+    }
+}
+
 /// Check `why`, the reason a due refine of `fed` bytes waited, against
 /// `one_shot`, the decode of those bytes on their own (its error, or `()`
-/// for an image); `repeats`, whether the bound on the walks done again
-/// refused the refine; and `spent`, the code-block work spent before it.
+/// for an image); `open`, whether the bytes fed have not closed, so an
+/// error of the tiles may still give way; `repeats`, whether the bound on the
+/// walks done again refused the refine; and `spent`, the code-block work
+/// spent before it.
 fn check_waiting(
     why: &Waiting,
     one_shot: &Result<(), Error>,
+    open: bool,
     repeats: bool,
     spent: u64,
     fed: usize,
@@ -413,6 +471,11 @@ fn check_waiting(
     }
     match (why, one_shot) {
         (Waiting::HeaderIncomplete { .. }, Err(Error::Incomplete(_))) => {}
+        // An error of the tiles, held while a later tile-part may bring a
+        // fault that comes first.
+        (Waiting::TileError { error, .. }, Err(expected)) if open => {
+            assert_eq!(format!("{error:?}"), format!("{expected:?}"), "{fed} bytes");
+        }
         // The sample limit, and the code-blocks and precincts it allows a
         // tile, grow with the bytes.
         (Waiting::SampleLimit { limit, .. }, Err(Error::Limit(expected)))

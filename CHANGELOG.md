@@ -104,9 +104,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every component the codestream codes, a palette's expanded channels and
   sRGB output). `read_header_with` refuses the sample count as the decode
   would, and the tile caps where the main header shows them. A refusal under
-  it gives no retry, and in an `IncrementalDecoder` it is an error, not a
-  wait, except a later tile's cap refusal met while a refine counts the
-  code-block work, which ends the count as `BoundSpent`.
+  it gives no retry, and in an `IncrementalDecoder` a refusal of the image
+  is an error, not a wait. A tile's cap refusal waits as `TileError`
+  until the codestream reaches its `EOC`, and in a JP2 file until `finish`,
+  and one met while a refine counts the code-block work ends the count as
+  `BoundSpent`.
   `AtMost(0)` is `InvalidOptions`. It
   replaces counting the samples by hand from the header (#475).
 - For a refusal by the code-block work bound or by a tile's cap on
@@ -276,6 +278,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   such as `0xFF12`, was refused as an unrecognized marker, and is now
   refused as `Error::Codestream` for the `SOD` after it. A whole file whose
   main header reaches `SOT` gives the same error as before (#606).
+- With `strict` off, `IncrementalDecoder` no longer takes an error in a
+  tile as final while a later tile-part can still replace it.
+  `decode_with` parses every tile-part before it decodes any tile, so a
+  later tile-part's fault, such as a `COD` that differs from the first
+  tile-part's, comes before an error in a tile: a reduction past the
+  tile's levels (`InvalidOptions`), a tile cap under `AtMost` or past the
+  address space (`Limit`), a damaged packet header, or too many
+  bit-planes. `refine` returned such an error for good on a prefix, and
+  then no longer matched `decode_with` or `finish` on more bytes. It now
+  waits on it with the new `Waiting::TileError`, and `header` holds it back,
+  until the input closes: a codestream closes once the bytes fed reach the
+  `EOC` after the last tile-part. A JP2 file never closes, as the decode
+  checks the boxes after the codestream before its tile-parts, and a file
+  whose last tile-part has `Psot` 0 never closes either: for these `refine`
+  waits and `finish` reports the error. In a JP2 file a fault of the
+  tile-parts waits the same way. An image can still follow a `TileError`,
+  for example where a later tile-part's `POC` changes which packets are
+  read. A caller that
+  stopped on such an error from
+  `refine` now sees a wait: a tile cap refusal under `AtMost`, for one,
+  comes at the `EOC` in a codestream and from `finish` in a JP2 file. The
+  refine that waits does not build the refused tile. Errors of the image and
+  the main header stay final at once. `decode_with`, `read_header_with` and
+  `finish` are unchanged (#605).
 - A tile-part header is read no further than its `Psot`, where the
   tile-part ends inside the input. With `strict` off, input cut inside a
   header that runs past its `Psot` was refused as "truncated marker
