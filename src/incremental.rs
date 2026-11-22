@@ -924,7 +924,8 @@ pub enum Waiting {
     /// The decode of the bytes fed fails with `error`, but more bytes can
     /// still put an earlier error, or an image, in its place: a fault in a
     /// later tile-part, or in a JP2 box still to come or still arriving. In a
-    /// codestream, the refine at the `EOC` gives the final answer; in a JP2
+    /// codestream, the next refine that decodes once the `EOC` is in gives
+    /// the final answer; in a JP2
     /// file, [`finish`](IncrementalDecoder::finish) does.
     ///
     /// `error` is the one [`decode_with`] gives with `strict` off for the
@@ -947,8 +948,10 @@ pub enum Waiting {
     /// before.
     ///
     /// A codestream closes once the bytes fed reach the `EOC` after its
-    /// last tile-part. Then `refine` returns the error `decode_with` gives,
-    /// this one or a fault, and every later refine returns it again. A last
+    /// last tile-part. Then the next refine that decodes returns the error
+    /// `decode_with` gives, this one or a fault, and every later refine
+    /// returns it again; where no refine decodes after that,
+    /// [`finish`](IncrementalDecoder::finish) reports it. A last
     /// tile-part whose `Psot` is 0 runs to the end of the input, which may
     /// grow, and a JP2 file can have boxes after its codestream, which the
     /// decode checks first, so neither closes: `refine` waits until

@@ -318,8 +318,16 @@ fuzz_target!(|input: &[u8]| {
             let (fresh, work) = if refined == Ok(None) && (bound.is_some() || repeats) {
                 let mut zero = checked(IncrementalDecoder::new(options.clone())).unwrap();
                 zero.feed(&data[..fed]);
-                zeroed = keyed(checked(zero.refine()).map(Refined::image));
-                assert_eq!(zeroed, expected, "{fed} bytes, nothing spent");
+                let zero_refine = checked(zero.refine());
+                // A decoder with nothing spent can reach the error the main
+                // one stopped short of, and wait on it as `Held` on its own.
+                let zero_held = matches!(&zero_refine, Ok(Refined::Waiting(Waiting::Held { .. })));
+                zeroed = keyed(zero_refine.map(Refined::image));
+                if open && zero_held && shape.is_err() {
+                    assert_eq!(zeroed, Ok(None), "{fed} bytes, nothing spent");
+                } else {
+                    assert_eq!(zeroed, expected, "{fed} bytes, nothing spent");
+                }
                 let (work, zero_bound) = incremental_code_block_work(&zero);
                 assert_eq!(zero_bound, bound, "{fed} bytes, nothing spent");
                 // One refine walks each tile once, so it charges only the

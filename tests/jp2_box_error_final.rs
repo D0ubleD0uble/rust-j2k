@@ -310,7 +310,16 @@ fn a_whole_box_at_fault_is_final() {
         ),
         (
             "a colr too short in the jp2h",
-            synth::jp2_file(&[ihdr, synth::bx(b"colr", &[1, 0])], &[], &one, &[]),
+            synth::jp2_file(&[ihdr.clone(), synth::bx(b"colr", &[1, 0])], &[], &one, &[]),
+        ),
+        (
+            "a child of length 4 in the jp2h",
+            synth::jp2_file(
+                &[ihdr, vec![0, 0, 0, 4, b'x', b'x', b'x', b'x']],
+                &[],
+                &one,
+                &[],
+            ),
         ),
         (
             "a box after the signature whose XLBox is past 2^56 so far",

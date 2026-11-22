@@ -322,8 +322,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the header, or `None` for such a box before the codestream, until
   `finish`. A fault in a box the bytes fed hold whole stays final at once.
   `decode_with`, `read_header_with` and `finish` are unchanged. The wait
-  added for tile errors since 0.5.0, first named `Waiting::TileError`, is
-  `Waiting::Held`, as it now carries these errors of the boxes too (#642).
+  for tile errors, `Waiting::Held`, carries these errors of the boxes too
+  (#642).
 - A tile-part header is read no further than its `Psot`, where the
   tile-part ends inside the input. With `strict` off, input cut inside a
   header that runs past its `Psot` was refused as "truncated marker
