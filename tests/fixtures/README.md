@@ -467,8 +467,12 @@ test requires our decode to match.
 `packed_overrun/` byte by byte; `tests/packed_overrun.rs` uses them. Each is
 a 1x1 image, one 8-bit component, no decomposition level, one packet whose
 header is packed in a `PPT` or `PPM` marker, and a body of seven 0x00
-bytes. The script runs `opj_decompress` (OpenJPEG 2.5.0) on each file and
-checks the result in the table.
+bytes. `ppm_two_parts.j2k` adds an empty second layer in a second
+tile-part, and a `COM` that sizes the first so that the prefixes
+`rust_j2k::fuzz::tile_parts_walks_agree` cuts end in it and just after it
+(`tests/tile_parts_walks_seeds.rs` runs that check on it). The script runs
+`opj_decompress` (OpenJPEG 2.5.0) on each file and checks the result in the
+table.
 
 | File | Size | SHA-256 | Packed header | `opj_decompress` |
 | ---- | ---- | ------- | ------------- | ---------------- |
@@ -477,6 +481,7 @@ checks the result in the table.
 | `ppm_short.j2k` | 98 | `9afba12af3b58b11ace07073ce14d295ca69718b80265e297914a091da4b709f` | `PPM`: `C4`, one bit short | 128, no error |
 | `ppt_whole.j2k` | 96 | `92405a6bd86b72739596d19973d334283281ee4549f781195f8d8c55db2e9eaa` | `PPT`: `C4 FF 00`, whole | 176 |
 | `ppm_whole.j2k` | 100 | `9a07d9e65b8af391ac0bd3231e9efc8a60bcd5c2f883059b818e4790386d7639` | `PPM`: `C4 FF 00`, whole | 176 |
+| `ppm_two_parts.j2k` | 129 | `3497fa81a3f244deb3953a351b044e63ab0547efa559ee7e8a4b3f1c57a4814d` | `PPM`: `C4 FF 00` and `00`, two layers in two tile-parts | 176 |
 
 The first three are refused with `strict` on and off. The two whole files
 are the controls and decode to 176, as OpenJPEG gives.
