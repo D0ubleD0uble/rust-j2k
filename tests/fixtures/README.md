@@ -622,29 +622,42 @@ it out of the sweeps of the fixtures. Replay it with the command above.
 
 `incremental/tile_error_*.seed` are four seeds of the `incremental_decode`
 fuzz target for an error in a tile that a later tile-part's fault replaces
-(#605). They are built by `seeds()` in `tests/tile_error_final.rs` (no
-encoder, no input image, so no license restriction), which checks that
-the committed bytes are its output; `J2K_BLESS_TILE_ERROR_SEEDS=1` writes
-them again. Without them the target did not catch a refine that never
-waits on such an error in 1.1M runs; with them it fails on the first
-replay.
+(#605), and `incremental/held_box_cut_colr_jp2.seed` one for a box after
+the codestream that the input ends inside (#642). They are built by
+`seeds()` in `tests/tile_error_final.rs` (no encoder, no input image, so
+no license restriction), which checks that the committed bytes are its
+output; `J2K_BLESS_TILE_ERROR_SEEDS=1` writes them again. Without them the
+target did not catch a refine that never waits on such an error in 1.1M
+runs. The target decodes only on a refine due under its doubling rule, so
+each seed puts 512 bytes of comment (a `COM` segment, or a `free` box or
+a long `colr`) between where the error comes and where it is replaced,
+which a due refine cannot step over. With `Ledger::hold` made to hold
+nothing, each fails on its first replay (#645); without that padding,
+only `tile_error_lblock_then_coc.seed` did.
 
-- `tile_error_reduction_then_cod.seed` (133 bytes, SHA-256
-  `be231354a9de33f58e1ab2c25371c2c9475ed8f52d5c5c8af082228a1695e3c8`):
+- `tile_error_reduction_then_cod.seed` (649 bytes, SHA-256
+  `f3f915ac8bccd8133cb15b43e4c3b691b619968df64af6fb7ee227ab712b2720`):
   the control bytes `20 00 00 00 00 00` (a reduction of 1) in front of a
   64 x 64 tile whose own `COD` gives no levels, with a later tile-part's
-  `COD` that differs.
-- `tile_error_lblock_then_coc.seed` (120 bytes, SHA-256
-  `9b0a74c06abb9b55dae6413dbcc2f3ce580b3ddfcb5065ec382f265813a89a7a`): a
+  `COM`, then a `COD` that differs.
+- `tile_error_lblock_then_coc.seed` (636 bytes, SHA-256
+  `f9edf66fd5ff052bd6e0b86b11046c32a4cf537412d30ae5dd9c66d45947ad03`): a
   4 x 4 tile whose packet header has an Lblock indicator longer than any
-  Lblock, with a later tile-part's `COC` for component 5 of 1.
-- `tile_error_lblock_then_cod.seed` (123 bytes, SHA-256
-  `79d122b19f70b84ff2f928c27d8a52f32c215f06d1bf46ab6dc5911299100c18`): the
-  same packet, with a later tile-part's `COD` that differs.
-- `tile_error_lblock_jp2_then_colr.seed` (204 bytes, SHA-256
-  `e4b36b717405e28a90aa0fc1052cf66fec50f95fd9c72b1fce3b51edf0453c47`): the
-  packet's codestream in a JP2 file, followed by a `colr` box too short to
-  hold its fields.
+  Lblock, with a later tile-part's `COM`, then a `COC` for component 5 of
+  1.
+- `tile_error_lblock_then_cod.seed` (639 bytes, SHA-256
+  `09695eba7435cf107cf5ddc122fc8ea4fdda482816521a3da9628e6034a3ad2b`): the
+  same packet, with a later tile-part's `COM`, then a `COD` that differs.
+- `tile_error_lblock_jp2_then_colr.seed` (724 bytes, SHA-256
+  `6b836027e224c1b10e1184376735fec3819613aadeb6d1509e926bb781dc0660`): the
+  packet's codestream in a JP2 file, followed by a `free` box and a `colr`
+  box too short to hold its fields.
+- `held_box_cut_colr_jp2.seed` (708 bytes, SHA-256
+  `474281b3d7c6475836e45b2adfc9cbfa9309f9be384cb67495a29ddf03fada36`): a
+  4 x 4 tile of one empty packet in a JP2 file, followed by a `colr` of
+  519 bytes. OpenJPEG ignores its contents, as the header's `colr` was
+  read, so the file decodes; a prefix that ends inside it is refused as
+  cut short.
 
 All but the first start with `SOC` or the JP2 signature, so the target
 reads them with all-zero control bytes. Their extension keeps them out of

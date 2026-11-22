@@ -339,7 +339,8 @@ impl IncrementalDecoder {
     /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost) it does not grow,
     /// so a refusal of the image's samples here is final, and `refine`
     /// returns it as an error too, except a refusal of the sRGB step in a
-    /// JP2 file, which waits. A server that streams files in can refuse
+    /// JP2 file, which waits while a box after the codestream can still be
+    /// read. A server that streams files in can refuse
     /// a sample count as soon as its main header has come in. A tile refused
     /// by a cap under it, or by the reduction, is held back: this returns
     /// the header while the bytes fed do not close the tile-parts with an
@@ -349,10 +350,12 @@ impl IncrementalDecoder {
     /// the tile-parts and the tiles but a refusal more bytes lift, and
     /// [`finish`](Self::finish) reports it. It holds back the errors
     /// `refine` waits on in a JP2 file's boxes too: a fault in a box after
-    /// the codestream that the bytes fed end inside, and a refusal of the
-    /// sRGB step, for which it gives the header with the channels as coded.
-    /// A fault in a box before the codestream that more bytes can change, of
-    /// length 0 or cut inside its `XLBox`, gives `Ok(None)`.
+    /// the codestream that the bytes fed end inside and that more bytes can
+    /// change, and a refusal of the sRGB step while a box after the
+    /// codestream can still be read, for which it gives the header with the
+    /// channels as coded. A fault in a box before the codestream that more
+    /// bytes can change, of length 0 or cut inside its `XLBox`, gives
+    /// `Ok(None)`.
     ///
     /// Each call parses the main header again (its `PPM` data included), so
     /// a call costs the main header plus the tile-parts fed since. For the
@@ -943,9 +946,11 @@ pub enum Waiting {
     /// replace, met before any tile-part is parsed: a fault in a box the
     /// bytes fed end inside, cut short after the codestream, cut inside its
     /// `XLBox`, or of length 0
-    /// (which runs to the end of the input), or a refusal of the sRGB step,
-    /// which a fault in a box still to come after the codestream comes
-    /// before.
+    /// (which runs to the end of the input) where it depends on the bytes
+    /// still to come, or a refusal of the sRGB step, which a fault in a box
+    /// still to come after the codestream comes before. A fault of a box of
+    /// length 0 judged on its type, and a refusal of the sRGB step where no
+    /// box after the codestream can still be read, are final.
     ///
     /// A codestream closes once the bytes fed reach the `EOC` after its
     /// last tile-part. Then the next refine that decodes returns the error

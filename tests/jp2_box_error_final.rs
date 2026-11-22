@@ -35,7 +35,9 @@
 //! options, `strict` on and off.
 //!
 //! A whole box at fault stays final at once, before or after the codestream:
-//! [`a_whole_box_at_fault_is_final`].
+//! [`a_whole_box_at_fault_is_final`]. So does a fault that no byte after it
+//! can change, in a box of length 0 or a refusal of the sRGB step where no
+//! box after the codestream can still be read: [`final_shapes`].
 
 #[path = "support/synth.rs"]
 mod synth;
@@ -163,6 +165,16 @@ fn shapes() -> Vec<(&'static str, Vec<u8>, DecodeOptions)> {
             [&synth::JP2_SIGNATURE[..], &[0, 0, 0, 1], &[0; 12]].concat(),
             DecodeOptions::default(),
         ),
+        (
+            "a jp2h of length 0 with its ihdr last",
+            [
+                &synth::JP2_SIGNATURE[..],
+                &synth::ftyp_jp2(),
+                &open_box(b"jp2h", &[gray(), synth::ihdr_for(&one)].concat()),
+            ]
+            .concat(),
+            DecodeOptions::default(),
+        ),
     ]
 }
 
@@ -234,12 +246,13 @@ waits! {
     a_jp2h_of_length_0_that_ends_at_fault_waits: 7,
     an_ftyp_of_length_0_that_ends_at_fault_waits: 8,
     a_box_whose_xlbox_is_cut_waits: 9,
+    a_jp2h_of_length_0_with_its_ihdr_last_waits: 10,
 }
 
 /// The checks of [`waits!`] on shape `index` of [`shapes`].
 fn check_waits(index: usize) {
     let shapes = shapes();
-    assert_eq!(shapes.len(), 10, "a shape with no test");
+    assert_eq!(shapes.len(), 11, "a shape with no test");
     let (name, bytes, options) = shapes.into_iter().nth(index).expect("a shape");
     let lenient = options.clone().with_strict(false);
     let whole = error_of(&decode_with(&bytes, &lenient));
@@ -387,7 +400,8 @@ type FinalShape = (&'static str, Vec<u8>, DecodeOptions, usize);
 ///   header;
 /// - a `jp2h` of length 0 after the codestream whose whole child is at
 ///   fault so, and one before the codestream whose whole `ihdr` is at
-///   fault: settled by that child, with a `colr` after it;
+///   fault, or a child whose length is 4 or 0: settled by that child (its
+///   header, for a length), with a `colr` after it;
 /// - a refusal of the sRGB step where OpenJPEG reads no box after the
 ///   codestream: settled by the `Psot` of 0 of its last tile-part, by the
 ///   header of a `jp2c` the walk there stops at, or by the fourth byte of
@@ -495,7 +509,31 @@ fn final_shapes() -> Vec<FinalShape> {
             srgb(),
             4 + short_colr.len(),
         ),
+        (
+            "a jp2h of length 0 with a child of length 4",
+            open_jp2h(&[0, 0, 0, 4, b'x', b'x', b'x', b'x']),
+            default(),
+            gray().len(),
+        ),
+        (
+            "a jp2h of length 0 with a child of length 0",
+            open_jp2h(&[0, 0, 0, 0, b'x', b'x', b'x', b'x']),
+            default(),
+            gray().len(),
+        ),
     ]
+}
+
+/// A JP2 file whose `jp2h` has length 0 and holds a matching `ihdr`,
+/// `child`, then a `colr`.
+fn open_jp2h(child: &[u8]) -> Vec<u8> {
+    let ihdr = synth::ihdr_for(&codestream(1));
+    [
+        &synth::JP2_SIGNATURE[..],
+        &synth::ftyp_jp2(),
+        &open_box(b"jp2h", &[&ihdr[..], child, &gray()].concat()),
+    ]
+    .concat()
 }
 
 /// Bytes appended to a file of [`final_shapes`]: none changes its error.
@@ -539,12 +577,14 @@ final_at_once! {
     an_srgb_refusal_with_psot_0_is_final: 8,
     an_srgb_refusal_before_a_second_jp2c_is_final: 9,
     an_srgb_refusal_before_an_xlbox_of_2_32_is_final: 10,
+    a_child_of_length_4_in_a_jp2h_of_length_0_is_final: 11,
+    a_child_of_length_0_in_a_jp2h_of_length_0_is_final: 12,
 }
 
 /// The checks of [`final_at_once!`] on shape `index` of [`final_shapes`].
 fn check_final(index: usize) {
     let shapes = final_shapes();
-    assert_eq!(shapes.len(), 11, "a shape with no test");
+    assert_eq!(shapes.len(), 13, "a shape with no test");
     let (name, bytes, options, after) = shapes.into_iter().nth(index).expect("a shape");
     let settled = bytes.len() - after;
     let lenient = options.clone().with_strict(false);
