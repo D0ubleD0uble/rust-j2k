@@ -67,6 +67,9 @@ pub(crate) struct Boxes<'a> {
     /// The type of the box being read when the input ended inside it, once
     /// its type field was read.
     cut_kind: Option<[u8; 4]>,
+    /// Whether the input ended inside that box's `XLBox` field, so its
+    /// length is still to come.
+    cut_in_length: bool,
 }
 
 impl<'a> Boxes<'a> {
@@ -80,6 +83,7 @@ impl<'a> Boxes<'a> {
             done: false,
             last_open_ended: false,
             cut_kind: None,
+            cut_in_length: false,
         }
     }
 
@@ -93,6 +97,7 @@ impl<'a> Boxes<'a> {
             done: false,
             last_open_ended: false,
             cut_kind: None,
+            cut_in_length: false,
         }
     }
 
@@ -111,6 +116,13 @@ impl<'a> Boxes<'a> {
     /// that needs only the type can still be made on it.
     pub(crate) fn cut_kind(&self) -> Option<[u8; 4]> {
         self.cut_kind
+    }
+
+    /// Whether the input ended inside the `XLBox` field of the box
+    /// [`cut_kind`](Self::cut_kind) names: its length, which can still be at
+    /// fault, is not in yet.
+    pub(crate) fn cut_in_length(&self) -> bool {
+        self.cut_in_length
     }
 
     /// Read the box at `self.pos` and step past it.
@@ -135,6 +147,7 @@ impl<'a> Boxes<'a> {
             }
         };
         self.cut_kind = Some(kind);
+        self.cut_in_length = lbox == 1 && rest.len() < 16;
         let name = type_name(kind);
         self.last_open_ended = lbox == 0;
         // The top-level codestream box, whose length OpenJPEG does not use.

@@ -168,7 +168,8 @@ use crate::{
 /// `finish` reports it, and a fault of the tile-parts waits the same way.
 /// So does, in a JP2 file, a fault in a box the bytes fed end inside, which
 /// more bytes can complete or change: a box cut short after the codestream,
-/// or a box of length 0, which runs to the end of the input. A refusal of
+/// a box of length 0, which runs to the end of the input, or a box cut
+/// inside its `XLBox`, judged on its type before its length. A refusal of
 /// the sRGB step waits as well, as a box still to come after the codestream
 /// can be at fault, which `decode_with` checks first. A fault in a box the
 /// bytes fed hold whole is final.
@@ -350,8 +351,8 @@ impl IncrementalDecoder {
     /// `refine` waits on in a JP2 file's boxes too: a fault in a box after
     /// the codestream that the bytes fed end inside, and a refusal of the
     /// sRGB step, for which it gives the header with the channels as coded.
-    /// A fault in a box of length 0 before the codestream, whose contents
-    /// are still coming, gives `Ok(None)`.
+    /// A fault in a box before the codestream that more bytes can change, of
+    /// length 0 or cut inside its `XLBox`, gives `Ok(None)`.
     ///
     /// Each call parses the main header again (its `PPM` data included), so
     /// a call costs the main header plus the tile-parts fed since. For the
@@ -939,7 +940,8 @@ pub enum Waiting {
     ///
     /// In a JP2 file it can also be an error of the boxes that more bytes can
     /// replace, met before any tile-part is parsed: a fault in a box the
-    /// bytes fed end inside, cut short after the codestream or of length 0
+    /// bytes fed end inside, cut short after the codestream, cut inside its
+    /// `XLBox`, or of length 0
     /// (which runs to the end of the input), or a refusal of the sRGB step,
     /// which a fault in a box still to come after the codestream comes
     /// before.

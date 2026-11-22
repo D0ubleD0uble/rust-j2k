@@ -20,6 +20,9 @@
 //!   are at fault on a prefix and whole on the file, which then has no
 //!   `jp2c`, and each with bytes at fault at its end, so that a prefix with
 //!   no `jp2c` comes before a fault of the box;
+//! - a box after the signature with `LBox` 1, on a prefix that ends inside
+//!   its `XLBox`: judged on its type there ("the `ftyp` box must follow the
+//!   signature"), and on the file refused for its `XLBox` of 0;
 //! - a `colr` of length 0 after the codestream, too short on a prefix and
 //!   whole on the file;
 //! - `jp2_real/byte_tlm_plt.jp2` with a `colr` after its codestream, whole
@@ -155,6 +158,11 @@ fn shapes() -> Vec<(&'static str, Vec<u8>, DecodeOptions)> {
             [open_ftyp.clone(), vec![0; 2]].concat(),
             DecodeOptions::default(),
         ),
+        (
+            "a box with XLBox 0 after the signature",
+            [&synth::JP2_SIGNATURE[..], &[0, 0, 0, 1], &[0; 12]].concat(),
+            DecodeOptions::default(),
+        ),
     ]
 }
 
@@ -225,12 +233,13 @@ waits! {
     a_colr_of_length_0_after_a_real_codestream_waits: 6,
     a_jp2h_of_length_0_that_ends_at_fault_waits: 7,
     an_ftyp_of_length_0_that_ends_at_fault_waits: 8,
+    a_box_whose_xlbox_is_cut_waits: 9,
 }
 
 /// The checks of [`waits!`] on shape `index` of [`shapes`].
 fn check_waits(index: usize) {
     let shapes = shapes();
-    assert_eq!(shapes.len(), 9, "a shape with no test");
+    assert_eq!(shapes.len(), 10, "a shape with no test");
     let (name, bytes, options) = shapes.into_iter().nth(index).expect("a shape");
     let lenient = options.clone().with_strict(false);
     let whole = error_of(&decode_with(&bytes, &lenient));

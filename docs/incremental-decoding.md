@@ -187,7 +187,10 @@ wait the same way:
   codestream is too short on a prefix and whole on the file, and a `jp2h`
   or `ftyp` of length 0 before the codestream can be at fault on a prefix
   and whole on a longer one, where the file has no `jp2c`, or whole on a
-  prefix and at fault on a longer one.
+  prefix and at fault on a longer one. A box after the signature cut inside
+  its `XLBox` is judged on its type ("the `ftyp` box must follow the
+  signature"), and the `XLBox` still to come can be at fault, which comes
+  first.
 - A refusal of the sRGB step. `decode_with` checks the boxes after the
   codestream before it plans that step, so a box at fault there, still to
   come, replaces it.
@@ -205,7 +208,8 @@ bytes, 0 bytes remaining" for the cut `colr`, "Bad COLR header box (bad
 size)" for the short one, and "JP2H box missing" or "Expected a SOC
 marker" where a box of length 0 swallows the rest of the file, and then
 "Error with FTYP signature Box size" once an `ftyp` of length 0 is at
-fault. It does not refuse sRGB output; that
+fault, or "Cannot handle box of undefined sizes" once an `XLBox` of 0 is
+in. It does not refuse sRGB output; that
 refusal is this crate's. `tests/jp2_box_error_final.rs` feeds each shape,
 synthetic and from `jp2_real/byte_tlm_plt.jp2`, and checks every prefix
 through `header`, `refine` and `finish` with `strict` on and off.

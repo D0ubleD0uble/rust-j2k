@@ -235,9 +235,15 @@ pub(crate) fn parse_boxes<'a>(
             check_file_type(&ftyp).map_err(|error| of_box(&boxes, error))?
         }
         Some(Ok(other)) => return Err(not_ftyp(other.kind).into()),
-        // A box cut short is judged on its type once that has arrived.
+        // A box cut short is judged on its type once that has arrived. A
+        // fault of its `XLBox`, still to come, would come first.
         Some(Err(error @ Error::Incomplete(_))) => match boxes.cut_kind() {
-            Some(kind) if &kind != b"ftyp" => return Err(not_ftyp(kind).into()),
+            Some(kind) if &kind != b"ftyp" => {
+                return Err(BoxFault {
+                    error: not_ftyp(kind),
+                    open: boxes.cut_in_length(),
+                });
+            }
             _ => return Err(error.into()),
         },
         Some(Err(error)) => return Err(error.into()),

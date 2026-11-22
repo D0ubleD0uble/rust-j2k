@@ -315,10 +315,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   codestream that the bytes fed end inside was refused as cut short
   (`FileFormat`), and a box of length 0, which runs to the end of the
   input, was judged on the contents so far, before the codestream or after
-  it; a refusal of the sRGB step was
+  it, and a box after the signature cut inside its `XLBox` on its type,
+  before its length; a refusal of the sRGB step was
   final too, though a box still to come after the codestream comes first.
   `refine` now waits on these as `Waiting::Held`, and `header` gives
-  the header, or `None` for a box of length 0 before the codestream, until
+  the header, or `None` for such a box before the codestream, until
   `finish`. A fault in a box the bytes fed hold whole stays final at once.
   `decode_with`, `read_header_with` and `finish` are unchanged. The wait
   added for tile errors since 0.5.0, first named `Waiting::TileError`, is
