@@ -1519,7 +1519,7 @@ with `YTsiz` patched to the image height.
 | OpenJPEG 2.5.0 | decodes some such files to the same image; fails others ("failed to decode image"). On random small subsampled grids it failed 153 of 184 whole decodes (2.5.0) |
 | Standard | Eq. B-12 gives `tcx0 == tcx1` or `tcy0 == tcy1`; B-15 and B.6 give such a tile-component no precinct, so no packet |
 | Rule | 1 |
-| Tests and fixtures | `tests/empty_tile_component.rs`; `tests/fixtures/empty_tile_component/opjfail_l1_lrcp.j2k`, `probe_none_l1.j2k` |
+| Tests and fixtures | `tests/empty_tile_component.rs`, `tests/main_header_fault_order.rs`; `tests/fixtures/empty_tile_component/opjfail_l1_lrcp.j2k`, `probe_none_l1.j2k` |
 | Decided | #595, 2026-11-21 |
 
 A tile narrower than a component's `XRsiz` or shorter than its `YRsiz` can
@@ -1543,7 +1543,11 @@ file, its image is this decoder's, bit for bit (the files are lossless,
   under `opj_decompress -t 0` to this decoder's image.
 
 A component with no sample in the whole image is refused with `SIZ`
-(`Error::Marker`), as OpenJPEG fails to decode it.
+(`Error::Marker`), as OpenJPEG fails to decode it. OpenJPEG finds this only
+once it decodes, so where a structural fault follows `SIZ` in the main header
+(a length below 2, a byte that is not a marker) OpenJPEG reports that fault,
+while this decoder reports the `SIZ`, as it does for every prefix that holds
+the `SIZ` (`tests/main_header_fault_order.rs`).
 
 A resolution reduction that leaves a component with no sample in the
 image is an older, separate case: this decoder returns the component 0

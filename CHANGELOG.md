@@ -242,6 +242,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A marker segment in the main header that is refused, such as a `SIZ`
+  with a zero sub-sampling factor, gives its own error when a structural
+  fault follows it in the main header: a length below 2, a byte that is
+  not a marker, `SOD`, `EOC` or a second `SOC` before the first `SOT`, or
+  more than 65536 marker segments. The structural fault was reported
+  first in a whole file, while a prefix that ended before it gave the
+  segment's error, so the error changed as the input grew, and with
+  `strict` off `IncrementalDecoder::refine` kept the prefix's. OpenJPEG
+  2.5.0 also reports the earlier segment first (#606).
 - A tile-part header is read no further than its `Psot`, where the
   tile-part ends inside the input. With `strict` off, input cut inside a
   header that runs past its `Psot` was refused as "truncated marker
