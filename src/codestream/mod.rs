@@ -1248,14 +1248,17 @@ fn walk_tiles<'a>(
             // none of it is read. A fault the input holds in full is
             // refused, as when strict.
             Err(_) if !strict && fault_may_be_cut(bytes, part_offset, sot.psot, site) => {
-                // `declared` is 0 for a `Psot` 0 tile-part, which runs to the
-                // end of the input. Its input may still end in an `EOC`: a
-                // segment whose length runs past the end reads as a cut.
+                // `declared` is `None` for a `Psot` 0 tile-part, which runs
+                // to the end of the input. Its input may still end in an
+                // `EOC`: a segment whose length runs past the end reads as a
+                // cut. A nonzero `Psot` runs past the end of the input
+                // (`fault_may_be_cut`), so it is more than `present`.
                 entries.push(ReportEntry::TruncatedTilePart {
                     tile: u32::from(sot.tile_index),
                     tile_part: sot.tile_part_index,
-                    declared: u64::from(sot.psot),
+                    declared: (sot.psot != 0).then(|| u64::from(sot.psot)),
                     present: (bytes.len() - part_offset) as u64,
+                    header_cut: true,
                 });
                 if sot.psot != 0 || !bytes.ends_with(&marker::EOC.to_be_bytes()) {
                     entries.push(ReportEntry::MissingEoc);
@@ -1350,13 +1353,15 @@ fn walk_tiles<'a>(
             {
                 Some(end) => end,
                 // Not strict, a tile-part cut short is read as far as it goes,
-                // and the codestream ends there.
+                // and the codestream ends there. Its header is whole, and
+                // its `Psot` runs past the end of the input.
                 None if !strict => {
                     entries.push(ReportEntry::TruncatedTilePart {
                         tile: u32::from(sot.tile_index),
                         tile_part: sot.tile_part_index,
-                        declared: u64::from(sot.psot),
+                        declared: Some(u64::from(sot.psot)),
                         present: (bytes.len() - part_offset) as u64,
+                        header_cut: false,
                     });
                     bytes.len()
                 }

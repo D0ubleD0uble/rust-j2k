@@ -207,11 +207,15 @@ pub enum ReportEntry {
         /// The tile-part, as its `TPsot` numbers it.
         tile_part: u8,
         /// The tile-part's length as its `Psot` declares it, from its `SOT`
-        /// marker on. 0 when `Psot` is 0 (the tile-part runs to the end of
-        /// the codestream).
-        declared: u64,
-        /// The bytes of it the input holds.
+        /// marker on, or `None` when `Psot` is 0 (the tile-part runs to the
+        /// end of the codestream). When it is `Some`, it is more than
+        /// `present`.
+        declared: Option<u64>,
+        /// The bytes of it the input holds, from its `SOT` marker on.
         present: u64,
+        /// Whether the input ends inside the tile-part's header, before its
+        /// `SOD` marker is whole. Always `true` when `declared` is `None`.
+        header_cut: bool,
     },
     /// The tile's `SOT` markers declare a number of tile-parts (`TNsot`, after
     /// OpenJPEG's `TPsot == TNsot` correction when that applies) other than
@@ -286,23 +290,17 @@ impl fmt::Display for ReportEntry {
             ReportEntry::TruncatedTilePart {
                 tile,
                 tile_part,
-                declared: 0,
-                present,
-            } => write!(
-                f,
-                "tile {tile} tile-part {tile_part} is cut short in its header: {present} bytes \
-                 of it are there, and its `Psot` is 0"
-            ),
-            ReportEntry::TruncatedTilePart {
-                tile,
-                tile_part,
                 declared,
                 present,
-            } => write!(
-                f,
-                "tile {tile} tile-part {tile_part} is cut short: {present} of its {declared} \
-                 bytes are there"
-            ),
+                header_cut,
+            } => {
+                let place = if *header_cut { " in its header" } else { "" };
+                write!(f, "tile {tile} tile-part {tile_part} is cut short{place}: ")?;
+                match declared {
+                    Some(declared) => write!(f, "{present} of its {declared} bytes are there"),
+                    None => write!(f, "{present} bytes of it are there, and its `Psot` is 0"),
+                }
+            }
             ReportEntry::TilePartCountMismatch {
                 tile,
                 declared,

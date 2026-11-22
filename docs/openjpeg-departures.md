@@ -1083,8 +1083,8 @@ of the data is the data ending, and the packet adds nothing.
 
 With `strict` off, a tile-part header that the input ends inside decodes:
 the codestream ends at that tile-part, none of the tile-part is read, and the
-report names it as `TruncatedTilePart` (with `declared` 0 when its `Psot` is
-0). OpenJPEG 2.5.0 refuses such a file with "Stream too short", even under
+report names it as `TruncatedTilePart` with `header_cut` set (and `declared`
+`None` when its `Psot` is 0). OpenJPEG 2.5.0 refuses such a file with "Stream too short", even under
 `-allow-partial`. This is what lets every prefix of a file decode as it
 streams in.
 
@@ -1107,10 +1107,13 @@ file's result.
 A tile-part that ends inside the input, by its `Psot`, is not cut short, so
 its header is read no further than its `Psot`. A marker or segment that runs
 past it is refused at once, with `strict` on or off, as a `Psot` shorter
-than its header (`Error::Codestream`), whatever its fields hold, and before
-any fault the header's checks find within the `Psot`. That holds
-for a segment length damaged to run past the end of an input that ends in
-an `EOC`: it is refused, not read as a cut. OpenJPEG 2.5.0 refuses such a
+than its header (`Error::Codestream`), whatever its fields hold. The header
+is read in order, so a bad field in a segment before that one keeps its own
+`Error::Marker`, as in OpenJPEG. Only a check made once the header is read
+(the quantization steps against the levels, a later tile-part's differing
+`COD` or `QCD`) gives way to the `Psot` refusal. The refusal holds for a
+segment length damaged to run past the end of an input that ends in an
+`EOC`: it is refused, not read as a cut. OpenJPEG 2.5.0 refuses such a
 whole file ("Tile part length size inconsistent with stream length"), and
 with `-allow-partial` decodes some of them with that as a warning; it
 refuses the input cut inside the header ("Stream too short"), and a length
