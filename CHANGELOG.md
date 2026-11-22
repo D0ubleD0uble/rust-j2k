@@ -334,11 +334,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `refine` now waits on these as `Waiting::Held`, and `header` gives
   the header, or `None` for such a box before the codestream, until
   `finish`. A fault in a box the bytes fed hold whole stays final at once.
-  So does a fault of a box of length 0 judged on its type and the boxes
-  before it (a second `pclr`, a `cmap` with no `pclr`), or on a whole
-  child of a `jp2h` of length 0, and a refusal of the sRGB step where no
-  box after the codestream can still be read: past a last tile-part with
-  `Psot` 0, a `jp2c`, or an `XLBox` of 2^32 or more.
+  So does a fault of a whole child of a `jp2h` of length 0 before the
+  codestream, and a refusal of the sRGB step where no box after the
+  codestream can still be read: past a last tile-part with `Psot` 0, a
+  `jp2c`, or an `XLBox` of 2^32 or more.
   `decode_with`, `read_header_with` and `finish` are unchanged. The wait
   for tile errors, `Waiting::Held`, carries these errors of the boxes too
   (#642, #645).

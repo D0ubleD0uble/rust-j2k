@@ -329,8 +329,10 @@ pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
             break None;
         }
         let (length, header) = match lbox {
-            // OpenJPEG cannot hold a box over 2^32 bytes; nothing that long
-            // fits in memory here either.
+            // OpenJPEG cannot hold a box over 2^32 bytes, and ends its walk
+            // there with no error. So a box of length 0 is read only while
+            // under 2^32 bytes follow, and more bytes can always take its
+            // fault away.
             0 => match u32::try_from(rest.len()) {
                 Ok(length) => (length, 8),
                 Err(_) => break None,

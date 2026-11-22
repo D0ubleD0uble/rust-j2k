@@ -350,8 +350,7 @@ impl IncrementalDecoder {
     /// the tile-parts and the tiles but a refusal more bytes lift, and
     /// [`finish`](Self::finish) reports it. It holds back the errors
     /// `refine` waits on in a JP2 file's boxes too: a fault in a box after
-    /// the codestream that the bytes fed end inside and that more bytes can
-    /// change, and a refusal of the sRGB step while a box after the
+    /// the codestream that the bytes fed end inside, and a refusal of the sRGB step while a box after the
     /// codestream can still be read, for which it gives the header with the
     /// channels as coded. A fault in a box before the codestream that more
     /// bytes can change, of length 0 or cut inside its `XLBox`, gives
@@ -948,9 +947,10 @@ pub enum Waiting {
     /// `XLBox`, or of length 0
     /// (which runs to the end of the input) where it depends on the bytes
     /// still to come, or a refusal of the sRGB step, which a fault in a box
-    /// still to come after the codestream comes before. A fault of a box of
-    /// length 0 judged on its type, and a refusal of the sRGB step where no
-    /// box after the codestream can still be read, are final.
+    /// still to come after the codestream comes before. A fault of a whole
+    /// child of a `jp2h` of length 0 before the codestream, and a refusal of
+    /// the sRGB step where no box after the codestream can still be read,
+    /// are final.
     ///
     /// A codestream closes once the bytes fed reach the `EOC` after its
     /// last tile-part. Then the next refine that decodes returns the error

@@ -198,12 +198,9 @@ wait the same way:
 
 Some of these are final all the same, and are given at once:
 
-- A fault of a box of length 0 judged on its type and the boxes before it:
-  a signature box or an `ftyp` after the codestream, a second `pclr`,
-  `cmap` or `cdef`, or a `cmap` with no `pclr`. More bytes grow its
-  contents, which that check does not read.
-- A fault of a whole child of a `jp2h` of length 0, such as an `ihdr`
-  that declares a height of 0. The children are read in order, so the
+- A fault of a whole child of a `jp2h` of length 0 before the codestream,
+  such as an `ihdr` that declares a height of 0, or a child whose length
+  is shorter than its header. The children are read in order, so the
   ones after it come too late.
 - A refusal of the sRGB step where OpenJPEG reads no box after the
   codestream, whatever follows: its last tile-part has `Psot` 0, so it
@@ -212,7 +209,10 @@ Some of these are final all the same, and are given at once:
 
 An unsupported brand in an `ftyp` of length 0 is not final: more bytes
 add compatibility codes, and `jp2 ` among them makes the file readable,
-while a byte or three leaves the box out of whole codes.
+while a byte or three leaves the box out of whole codes. Nor is any fault
+of a box of length 0 after the codestream, even one judged on its type
+(a second `pclr`): OpenJPEG skips such a box unread once 2^32 bytes or
+more follow it, and the file then decodes.
 
 `refine` waits on these as `Waiting::Held`, with the error
 `decode_with` gives on the bytes fed, and `finish` reports what the whole

@@ -392,33 +392,22 @@ fn cmyk_file(psot: Option<u32>, trailing: &[u8]) -> Vec<u8> {
 /// error.
 type FinalShape = (&'static str, Vec<u8>, DecodeOptions, usize);
 
-/// Shapes whose error no byte after the first `len - after` can change:
+/// Boxes of length 0 after the codestream at fault for their type and the
+/// boxes before them alone (a signature box, an `ftyp`, a second `pclr`,
+/// `cmap` or `cdef`, a `cmap` with no `pclr`), or for a whole child of a
+/// `jp2h` (a `cmap` with no `pclr`, a `colr` too short), each in a gray
+/// file, with how many bytes of it settle the fault were the box read.
 ///
-/// - a box of length 0 after the codestream at fault for its type and the
-///   boxes before it alone (a signature box, an `ftyp`, a second `pclr`,
-///   `cmap` or `cdef`, a `cmap` with no `pclr`): settled by its 8-byte
-///   header;
-/// - a `jp2h` of length 0 after the codestream whose whole child is at
-///   fault (a `cmap` with no `pclr`, a `colr` too short), and one before
-///   the codestream whose whole `ihdr` is at fault, or whose child has a
-///   length of 4 or 0 or an `XLBox` of 8: settled by that child (its
-///   header, for a length), with a `colr` after it;
-/// - a refusal of the sRGB step where OpenJPEG reads no box after the
-///   codestream: settled by the `Psot` of 0 of its last tile-part, by the
-///   header of a `jp2c` the walk there stops at, or by the fourth byte of
-///   an `XLBox` of 2^32 there. Each has a `colr` too short after it, which
-///   would be a fault if it were read.
-fn final_shapes() -> Vec<FinalShape> {
+/// Each is held all the same: OpenJPEG skips a box of length 0 there that
+/// runs 2^32 bytes or more, so enough bytes after it take the fault away
+/// ([`a_box_of_length_0_after_the_codestream_past_2_32_bytes_is_skipped`]).
+fn held_after_shapes() -> Vec<FinalShape> {
     let one = codestream(1);
     let ihdr = synth::ihdr_for(&one);
     let pclr = synth::bx(b"pclr", &PCLR);
     let cmap = synth::bx(b"cmap", &CMAP);
-    let short_colr = synth::bx(b"colr", &[1, 0]);
     let after = |boxes: &[&[u8]]| gray_file(&boxes.concat());
     let default = DecodeOptions::default;
-    // After the `Psot` of the one tile-part: `TPsot`, `TNsot`, `SOD`, 3
-    // bytes of packets and `EOC`.
-    let past_psot = 2 + 2 + 3 + 2;
     vec![
         (
             "a signature box of length 0 after the codestream",
@@ -458,10 +447,84 @@ fn final_shapes() -> Vec<FinalShape> {
         ),
         (
             "a jp2h of length 0 after the codestream with a cmap and no pclr",
-            after(&[&open_box(b"jp2h", &[ihdr, cmap, gray()].concat())]),
+            after(&[&open_box(b"jp2h", &[ihdr.clone(), cmap, gray()].concat())]),
             default(),
             gray().len(),
         ),
+        (
+            "a jp2h of length 0 after the codestream with a colr too short",
+            after(&[&open_box(
+                b"jp2h",
+                &[ihdr, synth::bx(b"colr", &[1, 0]), gray()].concat(),
+            )]),
+            default(),
+            gray().len(),
+        ),
+    ]
+}
+
+/// Each of [`held_after_shapes`], whole: `refine` waits on `Held` with the
+/// error `decode_with` gives, and `header` gives the header. With more
+/// bytes, it stays held with the same error.
+#[test]
+fn a_fault_of_a_box_of_length_0_after_the_codestream_waits() {
+    for (name, bytes, options, _) in held_after_shapes() {
+        let lenient = options.clone().with_strict(false);
+        let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+        assert!(whole.starts_with("FileFormat"), "{name}: {whole}");
+        for strict in [false, true] {
+            let mut decoder =
+                IncrementalDecoder::new(options.clone().with_strict(strict)).expect("valid");
+            for piece in [&bytes[..], &[0; 64]] {
+                decoder.feed(piece);
+                assert!(matches!(decoder.header(), Ok(Some(_))), "{name}: header");
+                match decoder.refine() {
+                    Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
+                        assert_eq!(format!("{error:?}"), whole, "{name}");
+                    }
+                    // Too few bytes since the last decode for another.
+                    Ok(Refined::Waiting(Waiting::MoreBytes { .. })) if piece.len() == 64 => {}
+                    other => panic!("{name}, strict {strict}: {other:?}"),
+                }
+            }
+        }
+    }
+}
+
+/// Why [`held_after_shapes`] wait: with 2^32 bytes or more after the
+/// codestream, OpenJPEG skips a box of length 0 there unread, and the file
+/// decodes. The zeros are allocated lazily and only the start is written,
+/// so the test needs little memory.
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn a_box_of_length_0_after_the_codestream_past_2_32_bytes_is_skipped() {
+    let shapes = held_after_shapes();
+    for (name, bytes, options, _) in [&shapes[0], &shapes[2], &shapes[6]] {
+        let mut padded = vec![0u8; bytes.len() + (1 << 32) + 16];
+        padded[..bytes.len()].copy_from_slice(bytes);
+        let lenient = options.clone().with_strict(false);
+        assert!(decode_with(&padded, &lenient).is_ok(), "{name}");
+    }
+}
+
+/// Shapes whose error no byte after the first `len - after` can change:
+///
+/// - a `jp2h` of length 0 before the codestream whose whole `ihdr` is at
+///   fault, or whose child has a length of 4 or 0 or an `XLBox` of 8:
+///   settled by that child (its header, for a length), with a `colr` after
+///   it;
+/// - a refusal of the sRGB step where OpenJPEG reads no box after the
+///   codestream: settled by the `Psot` of 0 of its last tile-part, by the
+///   header of a `jp2c` the walk there stops at, or by the fourth byte of
+///   an `XLBox` of 2^32 there. Each has a `colr` too short after it, which
+///   would be a fault if it were read.
+fn final_shapes() -> Vec<FinalShape> {
+    let short_colr = synth::bx(b"colr", &[1, 0]);
+    let default = DecodeOptions::default;
+    // After the `Psot` of the one tile-part: `TPsot`, `TNsot`, `SOD`, 3
+    // bytes of packets and `EOC`.
+    let past_psot = 2 + 2 + 3 + 2;
+    vec![
         (
             "a jp2h of length 0 whose ihdr is at fault",
             [
@@ -528,15 +591,6 @@ fn final_shapes() -> Vec<FinalShape> {
             default(),
             gray().len(),
         ),
-        (
-            "a jp2h of length 0 after the codestream with a colr too short",
-            after(&[&open_box(
-                b"jp2h",
-                &[synth::ihdr_for(&one), synth::bx(b"colr", &[1, 0]), gray()].concat(),
-            )]),
-            default(),
-            gray().len(),
-        ),
     ]
 }
 
@@ -582,27 +636,19 @@ macro_rules! final_at_once {
 }
 
 final_at_once! {
-    a_signature_box_of_length_0_after_the_codestream_is_final: 0,
-    an_ftyp_of_length_0_after_the_codestream_is_final: 1,
-    a_second_pclr_of_length_0_is_final: 2,
-    a_second_cmap_of_length_0_is_final: 3,
-    a_second_cdef_of_length_0_is_final: 4,
-    a_cmap_of_length_0_with_no_pclr_is_final: 5,
-    a_whole_child_at_fault_in_a_jp2h_of_length_0_after_the_codestream_is_final: 6,
-    a_whole_ihdr_at_fault_in_a_jp2h_of_length_0_is_final: 7,
-    an_srgb_refusal_with_psot_0_is_final: 8,
-    an_srgb_refusal_before_a_second_jp2c_is_final: 9,
-    an_srgb_refusal_before_an_xlbox_of_2_32_is_final: 10,
-    a_child_of_length_4_in_a_jp2h_of_length_0_is_final: 11,
-    a_child_of_length_0_in_a_jp2h_of_length_0_is_final: 12,
-    a_child_with_xlbox_8_in_a_jp2h_of_length_0_is_final: 13,
-    a_whole_colr_too_short_in_a_jp2h_of_length_0_after_the_codestream_is_final: 14,
+    a_whole_ihdr_at_fault_in_a_jp2h_of_length_0_is_final: 0,
+    an_srgb_refusal_with_psot_0_is_final: 1,
+    an_srgb_refusal_before_a_second_jp2c_is_final: 2,
+    an_srgb_refusal_before_an_xlbox_of_2_32_is_final: 3,
+    a_child_of_length_4_in_a_jp2h_of_length_0_is_final: 4,
+    a_child_of_length_0_in_a_jp2h_of_length_0_is_final: 5,
+    a_child_with_xlbox_8_in_a_jp2h_of_length_0_is_final: 6,
 }
 
 /// The checks of [`final_at_once!`] on shape `index` of [`final_shapes`].
 fn check_final(index: usize) {
     let shapes = final_shapes();
-    assert_eq!(shapes.len(), 15, "a shape with no test");
+    assert_eq!(shapes.len(), 7, "a shape with no test");
     let (name, bytes, options, after) = shapes.into_iter().nth(index).expect("a shape");
     let settled = bytes.len() - after;
     let lenient = options.clone().with_strict(false);

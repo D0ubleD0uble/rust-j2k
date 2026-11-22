@@ -33,8 +33,8 @@
 use super::boxes::{Boxes, Jp2Box};
 use super::{BoxFault, Jp2File};
 use super::{channels, color, palette};
-use crate::Error;
 use crate::codestream::markers::marker::{EOC, SOC, SOT};
+use crate::{Error, Result};
 
 /// The fewest bytes a tile-part can span: `SOT` and its 10-byte segment,
 /// then `SOD`.
@@ -149,40 +149,36 @@ impl State {
     }
 
     /// Read one box as OpenJPEG's handler for its type does; other types are
-    /// ignored. A fault is open ([`BoxFault::open`]) where it depends on the
-    /// box's contents, which grow with the input in a box of length 0. One
-    /// judged on the box's type and the boxes before it is not.
-    fn read(&mut self, item: &Jp2Box<'_>) -> Result<(), BoxFault> {
+    /// ignored.
+    fn read(&mut self, item: &Jp2Box<'_>) -> Result<()> {
         let payload = item.payload;
         match &item.kind {
             b"colr" => {
                 if payload.len() < 3 {
-                    return Err(of_contents(fault(format!(
+                    return Err(fault(format!(
                         "a `colr` box holds {} bytes; it needs at least 3",
                         payload.len()
-                    ))));
+                    )));
                 }
                 if !self.has_color {
-                    self.has_color = color::parse_usable(payload)
-                        .map_err(|error| of_contents(context(error)))?
-                        .is_some();
+                    self.has_color = color::parse_usable(payload).map_err(context)?.is_some();
                 }
             }
             b"bpcc" => {
                 if payload.len() != self.components {
-                    return Err(of_contents(fault(format!(
+                    return Err(fault(format!(
                         "a `bpcc` box holds {} bytes; it needs one per component ({})",
                         payload.len(),
                         self.components
-                    ))));
+                    )));
                 }
             }
             b"pclr" => {
                 if self.palette.is_some() {
-                    return Err(of_type(fault("the file has a second `pclr` box")));
+                    return Err(fault("the file has a second `pclr` box"));
                 }
                 let columns = palette::Palette::parse(payload)
-                    .map_err(|error| of_contents(context(error)))?
+                    .map_err(context)?
                     .columns()
                     .len();
                 self.palette = Some(columns);
@@ -190,22 +186,21 @@ impl State {
             }
             b"cmap" => {
                 let Some(columns) = self.palette else {
-                    return Err(of_type(fault(
+                    return Err(fault(
                         "the file has a `cmap` box with no `pclr` box before it",
-                    )));
+                    ));
                 };
                 if self.mapped {
-                    return Err(of_type(fault("the file has a second `cmap` box")));
+                    return Err(fault("the file has a second `cmap` box"));
                 }
-                palette::parse_cmap(payload, columns)
-                    .map_err(|error| of_contents(context(error)))?;
+                palette::parse_cmap(payload, columns).map_err(context)?;
                 self.mapped = true;
             }
             b"cdef" => {
                 if self.channel_definitions {
-                    return Err(of_type(fault("the file has a second `cdef` box")));
+                    return Err(fault("the file has a second `cdef` box"));
                 }
-                channels::check_layout(payload).map_err(|error| of_contents(context(error)))?;
+                channels::check_layout(payload).map_err(context)?;
                 self.channel_definitions = true;
             }
             _ => {}
@@ -227,18 +222,6 @@ fn context(error: Error) -> Error {
     }
 }
 
-/// A fault judged on a box's type and the boxes before it, which more bytes
-/// in the box do not change.
-fn of_type(error: Error) -> BoxFault {
-    BoxFault { error, open: false }
-}
-
-/// A fault judged on a box's contents, which more bytes in the box can
-/// change.
-fn of_contents(error: Error) -> BoxFault {
-    BoxFault { error, open: true }
-}
-
 /// Read the boxes after the codestream as OpenJPEG does once it has decoded
 /// it, if its walk reaches them ([`Jp2File::after_read`]). `raw_channels` is
 /// whether the palette and channel definitions were skipped, which decides
@@ -246,24 +229,18 @@ fn of_contents(error: Error) -> BoxFault {
 /// every box it walked.
 ///
 /// A fault is open ([`BoxFault::open`]) where the input ends inside the box
-/// at fault and more bytes there can change it: the walk's fault of a box
-/// that runs past the end, or a fault of the contents of the last box when
-/// it has length 0. A fault of that box judged on its type alone (a second
-/// `pclr`, a `cmap` with no `pclr`), or of a whole child of a `jp2h` of
-/// length 0, is final, as the boxes before it are whole and read the same
-/// whatever follows.
-pub(crate) fn check(file: &Jp2File<'_>, raw_channels: bool) -> Result<(), BoxFault> {
+/// at fault: the walk's fault of a box that runs past the end, or a fault in
+/// the last box when it has length 0. The boxes before it are whole and read
+/// the same whatever follows, so every other fault is final.
+pub(crate) fn check(file: &Jp2File<'_>, raw_channels: bool) -> core::result::Result<(), BoxFault> {
     if !file.after_read {
         return Ok(());
     }
     let mut state = State::after_decode(file, raw_channels);
     let last = file.after_codestream.len().checked_sub(1);
     for (index, item) in file.after_codestream.iter().enumerate() {
-        let open_ended = file.after_open && file.after_fault.is_none() && Some(index) == last;
-        check_box(&mut state, item).map_err(|fault| BoxFault {
-            open: open_ended && fault.open,
-            ..fault
-        })?;
+        let open = file.after_open && file.after_fault.is_none() && Some(index) == last;
+        check_box(&mut state, item).map_err(|error| BoxFault { error, open })?;
     }
     match &file.after_fault {
         Some(error) => Err(BoxFault {
@@ -274,41 +251,30 @@ pub(crate) fn check(file: &Jp2File<'_>, raw_channels: bool) -> Result<(), BoxFau
     }
 }
 
-/// Read one top-level box after the codestream. A fault is open where more
-/// bytes in the box can change it, as in [`State::read`].
-fn check_box(state: &mut State, item: &Jp2Box<'_>) -> Result<(), BoxFault> {
+/// Read one top-level box after the codestream.
+fn check_box(state: &mut State, item: &Jp2Box<'_>) -> Result<()> {
     match &item.kind {
-        b"jP  " => Err(of_type(fault(
+        b"jP  " => Err(fault(
             "the file has a signature box, which must be the first box",
-        ))),
-        b"ftyp" => Err(of_type(fault(
+        )),
+        b"ftyp" => Err(fault(
             "the file has an `ftyp` box, which must be the second box",
-        ))),
+        )),
         b"ihdr" => Ok(()),
         b"jp2h" => {
             let mut has_ihdr = false;
-            let mut children = Boxes::children(item.payload, "a `jp2h` box after the codestream");
-            while let Some(child) = children.next() {
-                // A child cut short by the end of the contents changes with
-                // more of them; a child's length fault does not.
-                let child = child.map_err(|error| BoxFault {
-                    error,
-                    open: children.cut_short(),
-                })?;
+            for child in Boxes::children(item.payload, "a `jp2h` box after the codestream") {
+                let child = child?;
                 if &child.kind == b"ihdr" {
                     has_ihdr = true;
                 } else {
-                    // The child is whole, and so are those before it.
-                    state
-                        .read(&child)
-                        .map_err(|fault| BoxFault::from(fault.error))?;
+                    state.read(&child)?;
                 }
             }
             if has_ihdr {
                 Ok(())
             } else {
-                // A later child may be the `ihdr`.
-                Err(of_contents(fault("a `jp2h` box has no `ihdr` box")))
+                Err(fault("a `jp2h` box has no `ihdr` box"))
             }
         }
         _ => state.read(item),
