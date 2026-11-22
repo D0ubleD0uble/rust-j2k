@@ -9,11 +9,12 @@
 //! correction once it holds the whole `SOT` that sets it. A longer prefix
 //! never changes a tile's `declared`, and never takes the correction back.
 //!
-//! OpenJPEG 2.5.0 makes the correction for the whole codestream
-//! (`opj_j2k_read_tile_header`, `j2k.c:9696`, raises every tile's count), so
-//! a tile whose own `SOT`s are right is held to one part more as well. It
-//! decodes `corrected_file()` with exit 0, with and without
-//! `-allow-partial`, warning "Non conformant codestream TPsot==TNsot".
+//! OpenJPEG 2.5.0 makes the correction for the whole codestream: it raises
+//! every tile's count (`opj_j2k_read_tile_header`, `j2k.c:9714`), so a tile
+//! whose own `SOT`s are right is held to one part more as well. It does not
+//! compare a tile's count with its parts, and decodes both files here with
+//! exit 0, with and without `-allow-partial`, warning "Non conformant
+//! codestream TPsot==TNsot" on `corrected_file()`.
 
 #[path = "support/synth.rs"]
 mod synth;

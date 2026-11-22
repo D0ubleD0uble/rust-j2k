@@ -62,6 +62,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   inside the tile-part's header, and the entry's text says so ("is cut
   short in its header"). Match `declared: Some(declared)` where you
   matched `declared` (#614).
+- `ReportEntry::TilePartCountMismatch::declared` is the count the tile's
+  `SOT`s state. It was that count plus one where OpenJPEG's `TPsot ==
+  TNsot` correction applies, a count no `SOT` states. A new `corrected`
+  field says the correction applies, so the tile is held to `declared + 1`
+  parts, and the entry's text gives both counts ("tile 1 declares 2
+  tile-part(s), 3 with the `TPsot == TNsot` correction, and 2 were found")
+  (#618).
 
 ### Added
 
