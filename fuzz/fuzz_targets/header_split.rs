@@ -137,6 +137,34 @@ fn codestream_start(bytes: &[u8]) -> Option<usize> {
     }
 }
 
+/// Whether the top-level boxes of the JP2 file `bytes` end, before any
+/// `jp2c`, in a box of length 0, which runs to the end of the input.
+/// `header()` gives `None` on every fault there, as more bytes grow the
+/// box, though a fault of a part of it held whole is final; that wait is
+/// allowed, not required.
+fn ends_in_open_box(bytes: &[u8]) -> bool {
+    let mut at = 12usize;
+    while let (Some(lbox), Some(kind)) = (u32_at(bytes, at), bytes.get(at + 4..at + 8)) {
+        if kind == b"jp2c" {
+            return false;
+        }
+        let length = match lbox {
+            0 => return true,
+            1 => match u32_at(bytes, at + 12) {
+                Some(length) if length >= 16 => length,
+                _ => return false,
+            },
+            n if n >= 8 => n,
+            _ => return false,
+        };
+        match at.checked_add(length) {
+            Some(next) => at = next,
+            None => return false,
+        }
+    }
+    false
+}
+
 /// `prefix`, a JP2 file cut inside or just after its codestream's
 /// tile-parts, with zeros to the end of the tile-part the input ends
 /// inside, an `EOC`, then [`SHORT_COLR`]: an input on which the decode
@@ -197,7 +225,9 @@ fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
 /// the [`oracle`], allowing an error held back where more bytes can replace
 /// it: in a codestream, while its tile-parts have not closed; in a JP2
 /// file, where a suffix changes what `read_header_with` gives, or, for a
-/// refusal of the sRGB step, as the header with the channels as coded.
+/// refusal of the sRGB step, as the header with the channels as coded,
+/// or, inside a box of length 0 before the codestream, as `None`
+/// ([`ends_in_open_box`]).
 fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOptions, at: &str) {
     let want = oracle(prefix, options);
     if format!("{got:?}") == want {
@@ -230,7 +260,7 @@ fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOpt
         };
     match got {
         Ok(Some(_)) if held => {}
-        Ok(None) if held && !codestream => {}
+        Ok(None) if (held || refused && ends_in_open_box(prefix)) && !codestream => {}
         _ => panic!("{at}: {got:?}, where read_header_with gives {want}"),
     }
 }
