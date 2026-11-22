@@ -118,7 +118,7 @@ fn refine_image(decoder: &mut IncrementalDecoder) -> Result<Option<Image>, Error
 /// follows, held only while the input has not closed ([`held::closes`]).
 fn settled(refined: Result<Refined, Error>, prefix: &[u8]) -> Result<Option<Image>, Error> {
     match refined {
-        Ok(Refined::Waiting(Waiting::TileError { error, .. })) => {
+        Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
             assert!(!held::closes(prefix), "held at {}: {error:?}", prefix.len());
             Err(error)
         }
@@ -209,7 +209,7 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
         (Waiting::RepeatLimit { .. }, _) => {}
         // An error that a later tile-part's fault may yet replace is the one
         // the decode gives.
-        (Waiting::TileError { error, .. }, Err(expected)) if !held::closes(prefix) => {
+        (Waiting::Held { error, .. }, Err(expected)) if !held::closes(prefix) => {
             assert_eq!(
                 format!("{error:?}"),
                 format!("{expected:?}"),

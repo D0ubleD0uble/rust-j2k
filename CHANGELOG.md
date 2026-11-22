@@ -105,7 +105,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sRGB output). `read_header_with` refuses the sample count as the decode
   would, and the tile caps where the main header shows them. A refusal under
   it gives no retry, and in an `IncrementalDecoder` a refusal of the image
-  is an error, not a wait. A tile's cap refusal waits as `TileError`
+  is an error, not a wait. A tile's cap refusal waits as `Held`
   until the codestream reaches its `EOC`, and in a JP2 file until `finish`,
   and one met while a refine counts the code-block work ends the count as
   `BoundSpent`.
@@ -295,13 +295,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   address space (`Limit`), a damaged packet header, or too many
   bit-planes. `refine` returned such an error for good on a prefix, and
   then no longer matched `decode_with` or `finish` on more bytes. It now
-  waits on it with the new `Waiting::TileError`, and `header` holds it back,
+  waits on it with the new `Waiting::Held`, and `header` holds it back,
   until the input closes: a codestream closes once the bytes fed reach the
   `EOC` after the last tile-part. A JP2 file never closes, as the decode
   checks the boxes after the codestream before its tile-parts, and a file
   whose last tile-part has `Psot` 0 never closes either: for these `refine`
   waits and `finish` reports the error. In a JP2 file a fault of the
-  tile-parts waits the same way. An image can still follow a `TileError`,
+  tile-parts waits the same way. An image can still follow a `Held`,
   for example where a later tile-part's `POC` changes which packets are
   read. A caller that
   stopped on such an error from
@@ -317,10 +317,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   input, was judged on the contents so far, before the codestream or after
   it; a refusal of the sRGB step was
   final too, though a box still to come after the codestream comes first.
-  `refine` now waits on these as `Waiting::TileError`, and `header` gives
+  `refine` now waits on these as `Waiting::Held`, and `header` gives
   the header, or `None` for a box of length 0 before the codestream, until
   `finish`. A fault in a box the bytes fed hold whole stays final at once.
-  `decode_with`, `read_header_with` and `finish` are unchanged (#642).
+  `decode_with`, `read_header_with` and `finish` are unchanged. The wait
+  added for tile errors since 0.5.0, first named `Waiting::TileError`, is
+  `Waiting::Held`, as it now carries these errors of the boxes too (#642).
 - A tile-part header is read no further than its `Psot`, where the
   tile-part ends inside the input. With `strict` off, input cut inside a
   header that runs past its `Psot` was refused as "truncated marker

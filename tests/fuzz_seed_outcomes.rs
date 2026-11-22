@@ -858,7 +858,7 @@ fn the_inputs_at_each_work_cap_fit_it_and_one_more_row_does_not() {
 /// checked tries and the draws of the changes and the probe, which
 /// `incremental_checked_tries_stay_within_the_work_weight` relies on. If it
 /// changed, check that test's count of bounds, then update this hash.
-const INCREMENTAL_HASH: u64 = 14867273395372835911;
+const INCREMENTAL_HASH: u64 = 11889596842896184915;
 
 #[test]
 fn incremental_checked_tries_stay_within_the_work_weight() {

@@ -24,10 +24,11 @@
 //! only after work was spent, and where the one-shot decode passes the
 //! code-block bound, or is refused by it at the tile and for the work the
 //! wait's `refused_at` gives: a refine cut short by what was spent does not
-//! decode the tiles it counts, and waits there. `TileError` comes only
+//! decode the tiles it counts, and waits there. `Held` comes only
 //! where the one-shot decode gives that error and the bytes fed have not
 //! closed (a codestream whose tile-parts step to an `EOC`; a JP2 file never
-//! does), as a later tile-part's fault would come first. The probe below is
+//! does), as a later tile-part or JP2 box may bring a fault that comes
+//! first. The probe below is
 //! checked by the same rule. An error is final: once a refine gives one,
 //! with no change of options since, the decode of the whole input gives it
 //! too. After an
@@ -258,10 +259,10 @@ fuzz_target!(|input: &[u8]| {
         if due {
             let one_shot = checked(decode_with(&data[..fed], &lenient));
             let shape = one_shot.as_ref().map(|_| ()).map_err(Error::clone);
-            // An error of the tiles on an input that has not closed may be a
+            // An error on an input that has not closed may be a
             // wait.
             let open = !held::closes(&data[..fed]);
-            let waits_on_tiles = matches!(&waiting, Some(Waiting::TileError { .. }));
+            let waits_held = matches!(&waiting, Some(Waiting::Held { .. }));
             let repeat_work = incremental_repeat_work(&decoder);
             if let Some(why) = &waiting {
                 assert!(
@@ -292,7 +293,7 @@ fuzz_target!(|input: &[u8]| {
                 {
                     Ok(None)
                 }
-                Err(_) if open && waits_on_tiles => Ok(None),
+                Err(_) if open && waits_held => Ok(None),
                 Err(error) => Err(error),
             });
             // The work this try spends, and what it gives with nothing spent:
@@ -479,9 +480,9 @@ fn check_waiting(
     }
     match (why, one_shot) {
         (Waiting::HeaderIncomplete { .. }, Err(Error::Incomplete(_))) => {}
-        // An error of the tiles, held while a later tile-part may bring a
+        // An error held while a later tile-part or JP2 box may bring a
         // fault that comes first.
-        (Waiting::TileError { error, .. }, Err(expected)) if open => {
+        (Waiting::Held { error, .. }, Err(expected)) if open => {
             assert_eq!(format!("{error:?}"), format!("{expected:?}"), "{fed} bytes");
         }
         // The sample limit, and the code-blocks and precincts it allows a

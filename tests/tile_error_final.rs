@@ -6,7 +6,7 @@
 //! refuses, and before a damaged packet header. On a prefix that ends before
 //! that tile-part, `decode_with` gives the tile's error; on a longer one,
 //! the fault. So an [`IncrementalDecoder`] waits on such an error, as
-//! [`Waiting::TileError`], and its `header` holds a tile refusal back, until
+//! [`Waiting::Held`], and its `header` holds a tile refusal back, until
 //! the bytes fed reach the `EOC`. A JP2 file never closes, as boxes after
 //! the codestream are checked first. Fed in any two pieces or a byte at a
 //! time, each goes from the main header cut short, to images or waits, to
@@ -265,7 +265,7 @@ impl Track {
             // Not a step: the refine did not decode.
             Ok(Refined::Waiting(Waiting::MoreBytes { .. })) => return,
             Ok(Refined::Waiting(Waiting::HeaderIncomplete { .. })) => Phase::Incomplete,
-            Ok(Refined::Waiting(Waiting::TileError { error, .. })) => {
+            Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
                 // The error it waits on is the one-shot decode's, on bytes
                 // that have not closed.
                 assert!(!held::closes(&fed), "{context}: wait on {error:?}");
@@ -483,10 +483,7 @@ fn an_error_in_a_tile_is_final_at_the_eoc() {
         let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
         decoder.feed(cut);
         assert!(
-            matches!(
-                decoder.refine(),
-                Ok(Refined::Waiting(Waiting::TileError { .. }))
-            ),
+            matches!(decoder.refine(), Ok(Refined::Waiting(Waiting::Held { .. }))),
             "{name}"
         );
         assert!(decoder.header().is_ok(), "{name}");
@@ -494,10 +491,7 @@ fn an_error_in_a_tile_is_final_at_the_eoc() {
         let mut strict = IncrementalDecoder::new(options.with_strict(true)).expect("valid options");
         strict.feed(cut);
         assert!(
-            matches!(
-                strict.refine(),
-                Ok(Refined::Waiting(Waiting::TileError { .. }))
-            ),
+            matches!(strict.refine(), Ok(Refined::Waiting(Waiting::Held { .. }))),
             "{name}"
         );
         assert!(
@@ -559,7 +553,7 @@ fn a_jp2_file_never_closes() {
             let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
             decoder.feed(&bytes);
             match decoder.refine() {
-                Ok(Refined::Waiting(Waiting::TileError { error, .. })) if gives.is_empty() => {
+                Ok(Refined::Waiting(Waiting::Held { error, .. })) if gives.is_empty() => {
                     assert_eq!(format!("{error:?}"), whole, "{name}");
                     assert!(decoder.header().is_ok(), "{name}");
                 }
@@ -574,10 +568,7 @@ fn a_jp2_file_never_closes() {
             let mut open = IncrementalDecoder::new(lenient.clone()).expect("valid options");
             open.feed(&cut);
             assert!(
-                matches!(
-                    open.refine(),
-                    Ok(Refined::Waiting(Waiting::TileError { .. }))
-                ),
+                matches!(open.refine(), Ok(Refined::Waiting(Waiting::Held { .. }))),
                 "{name}"
             );
         }
@@ -664,7 +655,7 @@ fn a_poc_in_a_later_tile_part_can_clear_an_error_in_a_tile() {
         let refined = decoder.refine();
         let one_shot = decode_with(&bytes[..end], &lenient);
         match refined {
-            Ok(Refined::Waiting(Waiting::TileError { error, .. })) => {
+            Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
                 let error = format!("{error:?}");
                 assert!(error.contains("Lblock"), "{end}: {error}");
                 assert!(end < poc_in, "{end}: waits with the POC in");

@@ -6,7 +6,7 @@
 //! or change what it holds, so its fault is not final. And the decode checks
 //! the boxes after the codestream before the sRGB step, so a box yet to come
 //! there can replace a refusal of that step. An [`IncrementalDecoder`] waits
-//! on these: `refine` as [`Waiting::TileError`], with the error `decode_with`
+//! on these: `refine` as [`Waiting::Held`], with the error `decode_with`
 //! gives on the bytes fed, and `header` gives the header, or `None` where the
 //! box is before the codestream. The shapes:
 //!
@@ -203,7 +203,7 @@ fn check_finish(decoder: &IncrementalDecoder, bytes: &[u8], options: &DecodeOpti
 
 /// Fed each prefix, a decoder under `strict` on and off gives an error from
 /// `refine` or `header` only where it is the whole file's, waits on
-/// `TileError` with the one-shot error of the prefix, and finishes as
+/// `Held` with the one-shot error of the prefix, and finishes as
 /// `decode_with` does. Each shape has a prefix where `refine` waits on an
 /// error that is not the whole file's.
 macro_rules! waits {
@@ -266,7 +266,7 @@ fn check_waits(index: usize) {
                     assert_eq!(error, whole, "{at}: refine");
                     assert_eq!(error, one_shot, "{at}: refine");
                 }
-                Ok(Refined::Waiting(Waiting::TileError { error, .. })) => {
+                Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
                     let error = Some(format!("{error:?}"));
                     assert_eq!(error, one_shot, "{at}: wait");
                     held += usize::from(error != whole);

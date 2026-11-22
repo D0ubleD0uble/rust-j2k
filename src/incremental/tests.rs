@@ -59,11 +59,11 @@ fn refine_now(decoder: &mut IncrementalDecoder) -> Result<Option<Image>> {
 }
 
 /// [`refine_now`], and whether the refine waited on an error of the tiles
-/// ([`Waiting::TileError`]), which more bytes may replace.
+/// ([`Waiting::Held`]), which more bytes may replace.
 fn refine_held(decoder: &mut IncrementalDecoder) -> (Result<Option<Image>>, bool) {
     decoder.tried = 0;
     match decoder.refine() {
-        Ok(Refined::Waiting(Waiting::TileError { error })) => (Err(error), true),
+        Ok(Refined::Waiting(Waiting::Held { error })) => (Err(error), true),
         refined => (refined.map(Refined::image), false),
     }
 }

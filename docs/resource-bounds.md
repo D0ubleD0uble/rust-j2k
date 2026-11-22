@@ -291,7 +291,7 @@ A refusal under `AtMost(n)` has kind `Samples` (or `TileCodeBlocks` or
 It gives no retry (`retry_with` is `None`, so `raised_for` is `None`): the
 caller set the ceiling. In an `IncrementalDecoder` a refusal of the image
 is an error, not a wait, as more bytes do not raise it. A tile's refusal
-waits as `Waiting::TileError` until the bytes fed reach the `EOC`, and in a
+waits as `Waiting::Held` until the bytes fed reach the `EOC`, and in a
 JP2 file until `finish`, as a later fault comes before it in the decode;
 the refine that waits does not build the tile. A refusal from a later tile while a refine
 counts the code-block work ends the count as `Waiting::BoundSpent` (see

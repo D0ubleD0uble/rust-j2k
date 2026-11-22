@@ -1066,7 +1066,7 @@ pub(crate) fn decode_metered(
 /// `decoded`, a step of the decode past the parse of every tile-part, noted
 /// on `ledger` when it is an error and the tile-parts have not `closed`: a
 /// later tile-part may hold a fault the decode gives first, so a refine
-/// waits on the error ([`Waiting::TileError`](crate::Waiting::TileError)).
+/// waits on the error ([`Waiting::Held`](crate::Waiting::Held)).
 /// A JP2 file's error of the boxes that more bytes can replace is noted the
 /// same way, as never `closed`.
 fn held_unless<T>(
