@@ -52,10 +52,11 @@ fn a_ppm_header_one_bit_short_is_refused() {
 }
 
 /// The same header whole, `C4 FF 00`, decodes to OpenJPEG's sample, 176,
-/// strict and not: only the overrun is refused.
+/// strict and not: only the overrun is refused. So does it with an empty
+/// second layer in a second tile-part.
 #[test]
 fn the_same_header_whole_decodes_as_openjpeg() {
-    for name in ["ppt_whole.j2k", "ppm_whole.j2k"] {
+    for name in ["ppt_whole.j2k", "ppm_whole.j2k", "ppm_two_parts.j2k"] {
         let bytes = read(name);
         let strict =
             decode_with(&bytes, &options(true, 0)).unwrap_or_else(|e| panic!("{name}: {e}"));
