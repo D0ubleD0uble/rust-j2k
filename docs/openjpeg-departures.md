@@ -871,9 +871,10 @@ parts that arrive like any other count, and the parts are still read in
 
 The two decoders differ where the counts are mixed. When the correction is
 on, a tile whose own count was right now carries one part fewer than its
-count, and is refused as a tile with a missing part ("tile 3 declares 4
-tile-parts but carries 3"). OpenJPEG decodes it as it decodes a truncated
-tile, which here gives the full image. When the first tile to complete is
+count, and is refused as a tile with a missing part ("tile 3 declares 3
+tile-parts, 4 with the `TPsot == TNsot` correction, but carries 3").
+OpenJPEG decodes it as it decodes a truncated tile, which here gives the full
+image. When the first tile to complete is
 counted right and a later tile has an extra part, the correction is not
 made, and the extra part is refused ("tile 1 tile-part 2 of a declared 2
 tile-parts"). OpenJPEG decodes that tile from the parts before it and drops
@@ -2045,7 +2046,8 @@ samples wrong. With 256 tile-parts the same encode decodes to the source:
 
 This decoder applies the same count correction, so the declared count is 17.
 In strict mode the 18th part (`TPsot` 17) is then past the declared count, and
-the file is refused ("tile 0 tile-part 17 of a declared 17 tile-parts"). With
+the file is refused ("tile 0 tile-part 17 of a declared 16 tile-parts, 17 with
+the `TPsot == TNsot` correction"). With
 `strict` off the count is advisory and the walk reads on, but at the 257th part
 `TPsot` reads 0 where 256 parts were read, which is refused whatever `strict`
 is ("tile 0 tile-part index is 0, but 256 of its tile-parts have been read").

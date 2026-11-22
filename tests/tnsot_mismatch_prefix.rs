@@ -1,14 +1,14 @@
 //! A tile whose `SOT`s state two counts (`TNsot`), where the `TPsot ==
 //! TNsot` look-ahead reads past the tile-part at fault.
 //!
-//! With `strict` on, the counts in "tile T declares A tile-parts in one
-//! `SOT` and B in another" are raised by one when the look-ahead finds the
-//! next part of the first tile to complete has `TPsot == TNsot`. That part
-//! may lie past the tile-part at fault, so on a prefix the look-ahead's
-//! answer depends on bytes that have not arrived. With `strict` off the
-//! message gives the counts the two `SOT`s state, which the input holds
-//! from the first prefix that is refused, so every longer prefix gives the
-//! same error.
+//! With `strict` on, the message "tile T declares A tile-parts in one `SOT`
+//! and B in another" gives the counts the two `SOT`s state, and adds the
+//! counts raised by one when the look-ahead finds the next part of the first
+//! tile to complete has `TPsot == TNsot`. That part may lie past the
+//! tile-part at fault, so on a prefix the look-ahead's answer depends on
+//! bytes that have not arrived. With `strict` off the message gives the
+//! stated counts alone, which the input holds from the first prefix that is
+//! refused, so every longer prefix gives the same error.
 //!
 //! OpenJPEG 2.5.0 decodes these files (it does not compare a tile's
 //! counts); refusing them is the departure "a `TNsot` that differs between
@@ -74,7 +74,7 @@ fn options(strict: bool) -> DecodeOptions {
 /// first refused on, and the strict-on error of the whole file.
 fn cases() -> Vec<(&'static str, Vec<u8>, &'static str, &'static str)> {
     let stated = "Codestream(\"tile 0 declares 1 tile-parts in one `SOT` and 3 in another\")";
-    let raised = "Codestream(\"tile 0 declares 2 tile-parts in one `SOT` and 4 in another\")";
+    let raised = "Codestream(\"tile 0 declares 1 tile-parts in one `SOT` and 3 in another, 2 and 4 with the `TPsot == TNsot` correction\")";
     vec![
         ("case 356", CASE_356.to_vec(), stated, raised),
         ("raised", built(4, 2), stated, raised),
@@ -138,9 +138,9 @@ fn every_prefix_from_the_first_refusal_gives_one_message() {
     }
 }
 
-/// With `strict` on, the whole file's error keeps the raised counts where
-/// the look-ahead raises them. Where it does not, the part past its count
-/// is refused first.
+/// With `strict` on, the whole file's error gives the stated counts, and
+/// says the raised ones where the look-ahead raises them. Where it does not,
+/// the part past its count is refused first.
 #[test]
 fn strict_keeps_the_raised_counts() {
     for (name, bytes, _, want) in cases() {
