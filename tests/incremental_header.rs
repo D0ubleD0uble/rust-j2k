@@ -50,13 +50,13 @@ const HELD: &str = "held";
 
 /// What `IncrementalDecoder::header` must give on `prefix` under
 /// `options`: `read_header_with` with `strict` off, with an incomplete main
-/// header as `None`, and a tile refusal held while the tile-parts have not
-/// closed ([`held::held`]) as [`HELD`].
+/// header as `None`, and an error the decoder may hold back while the input
+/// has not closed ([`held::closes`]) as [`HELD`].
 fn oracle(prefix: &[u8], options: &DecodeOptions) -> String {
     match read_header_with(prefix, &options.clone().with_strict(false)) {
         Ok(header) => shown(Ok(Some(header))),
         Err(Error::Incomplete(_)) => shown(Ok(None)),
-        Err(error) if held::held(&error, prefix) => HELD.to_owned(),
+        Err(error) if !held::closes(prefix) => format!("{HELD} {}", shown(Err(error))),
         Err(error) => shown(Err(error)),
     }
 }
@@ -98,11 +98,11 @@ fn check(
         }
         let got = shown(decoder.header());
         let want = oracle(&bytes[..fed], decoder.options());
-        if want == HELD {
-            // The refusal is held back, and the header given.
+        if let Some(error) = want.strip_prefix(HELD).map(str::trim_start) {
+            // The error, or the header where it is held back.
             assert!(
-                got.starts_with("Ok(Some("),
-                "{name}: {fed} of {}: {got}",
+                got == error || got.starts_with("Ok(Some("),
+                "{name}: {fed} of {}: {got}, where the read gives {error}",
                 bytes.len()
             );
         } else {

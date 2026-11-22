@@ -52,10 +52,20 @@ fn uncut(options: DecodeOptions) -> DecodeOptions {
     options.with_code_block_work_limit(WorkLimit::Unlimited)
 }
 
-/// Refine now, whatever the cadence says.
+/// Refine now, whatever the cadence says, with a wait on an error of the
+/// tiles as that error.
 fn refine_now(decoder: &mut IncrementalDecoder) -> Result<Option<Image>> {
+    refine_held(decoder).0
+}
+
+/// [`refine_now`], and whether the refine waited on an error of the tiles
+/// ([`Waiting::TileError`]), which more bytes may replace.
+fn refine_held(decoder: &mut IncrementalDecoder) -> (Result<Option<Image>>, bool) {
     decoder.tried = 0;
-    decoder.refine().map(Refined::image)
+    match decoder.refine() {
+        Ok(Refined::Waiting(Waiting::TileError { error })) => (Err(error), true),
+        refined => (refined.map(Refined::image), false),
+    }
 }
 
 /// Feed `bytes` up to each of `ends` in turn, refining at each: every
@@ -67,7 +77,8 @@ fn refine_at(name: &str, bytes: &[u8], ends: &[usize], options: &DecodeOptions) 
     for &end in ends {
         let before = decoder.bytes_fed();
         decoder.feed(&bytes[before..end]);
-        let refined = keyed(refine_now(&mut decoder));
+        let (refined, held) = refine_held(&mut decoder);
+        let refined = keyed(refined);
         assert_eq!(
             refined,
             keyed(oracle(&bytes[..end], options)),
@@ -76,6 +87,8 @@ fn refine_at(name: &str, bytes: &[u8], ends: &[usize], options: &DecodeOptions) 
         match refined {
             Ok(Some(_)) => images += 1,
             Ok(None) => {}
+            // More bytes may replace it with a fault that comes first.
+            Err(_) if held => {}
             Err(error) => {
                 decoder.feed(&bytes[end..]);
                 assert_eq!(

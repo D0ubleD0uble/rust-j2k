@@ -36,12 +36,16 @@ pub(crate) fn read_header_kept(
     read_header_from(bytes, options, kept, false)
 }
 
-/// [`read_header_kept`] for a stream that may still grow, with `strict` off:
-/// a tile refusal that more bytes do not lift ([`incremental::is_final`]) is
-/// held, and the header given, while the tile-parts have not closed with an
-/// `EOC` ([`codestream::Codestream::closed`]), as a later tile-part can hold
-/// a fault the decode gives first. Once they close, it gives what
-/// [`read_header`] gives.
+/// [`read_header_kept`] for a stream that may still grow, with `strict` off.
+/// The decode parses every tile-part before it counts a tile, so an error
+/// of the tile-parts may yet give way to a fault in a later one. In a
+/// codestream, a tile refusal that more bytes do not lift
+/// ([`incremental::is_final`]) is held, and the header given, while the
+/// tile-parts have not closed with an `EOC`
+/// ([`codestream::Codestream::closed`]). A JP2 file never closes, as boxes
+/// can follow the codestream and the decode checks them first: every error
+/// of its tile-parts is held. Past that, it gives what [`read_header`]
+/// gives.
 pub(crate) fn read_header_streamed(
     bytes: &[u8],
     options: &DecodeOptions,
@@ -50,8 +54,8 @@ pub(crate) fn read_header_streamed(
     read_header_from(bytes, options, kept, true)
 }
 
-/// [`read_header_kept`], holding a tile refusal where `hold` is set (see
-/// [`read_header_streamed`]).
+/// [`read_header_kept`], holding the errors of the tile-parts where `hold`
+/// is set (see [`read_header_streamed`]).
 fn read_header_from(
     bytes: &[u8],
     options: &DecodeOptions,
@@ -72,16 +76,26 @@ fn read_header_from(
             .as_ptr()
             .addr()
             .wrapping_sub(bytes.as_ptr().addr());
-        check_geometry(
+        let checked = check_geometry(
             prefix.codestream,
             &prefix.parsed,
             &prefix.selection,
             reduction,
             samples::cap(&options.sample_limit, bytes.len()),
             options.strict,
-            hold,
+            Hold::Never,
             kept.map(|kept| (kept, start)),
-        )?;
+        );
+        // Boxes can follow the codestream, and the decode checks them before
+        // the tile-parts, so a JP2 file never closes. A refusal more bytes
+        // lift is given, as in a codestream.
+        match checked {
+            Err(Error::Limit(limit)) if hold && incremental::lifts_with_bytes(&limit) => {
+                return Err(Error::Limit(limit));
+            }
+            Err(_) if hold => {}
+            checked => checked?,
+        }
         let area = &prefix.selection.area;
         let (width, height) = area.image_extent_at(reduction);
         let mut components = if prefix.selection.subset {
@@ -131,7 +145,7 @@ fn read_header_from(
         reduction,
         samples::cap(&options.sample_limit, bytes.len()),
         options.strict,
-        hold,
+        if hold { Hold::UntilClosed } else { Hold::Never },
         kept.map(|kept| (kept, 0)),
     )?;
     let (width, height) = selection.area.image_extent_at(reduction);
@@ -196,9 +210,9 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// on or off ([`codestream::tile_parts_fault`], a walk that keeps no tile
 /// record).
 ///
-/// With `hold`, a refusal with no fault in the tile-parts that more bytes
-/// do not lift ([`incremental::is_final`]) is held while the walk of the
-/// tile-parts has not closed (see [`read_header_streamed`]).
+/// With [`Hold::UntilClosed`], a refusal with no fault in the tile-parts
+/// that more bytes do not lift ([`incremental::is_final`]) is held while the
+/// walk of the tile-parts has not closed (see [`read_header_streamed`]).
 ///
 /// `kept` is what an earlier call on the start of the same input left, with
 /// where the codestream `bytes` starts in that input (see [`HeaderCache`]).
@@ -210,7 +224,7 @@ fn check_geometry(
     reduction: u8,
     cap: samples::Cap,
     strict: bool,
-    hold: bool,
+    hold: Hold,
     kept: Option<(&mut HeaderCache, usize)>,
 ) -> Result<()> {
     let (mut cache, start) = kept.map_or((None, 0), |(kept, start)| (Some(kept), start));
@@ -248,7 +262,12 @@ fn check_geometry(
         Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => match fault() {
             Some(fault) => Err(fault),
             // A later tile-part may yet hold a fault, which comes first.
-            None if hold && !faults.closed && incremental::is_final(&error) => Ok(()),
+            None if hold == Hold::UntilClosed
+                && !faults.closed
+                && incremental::is_final(&error) =>
+            {
+                Ok(())
+            }
             None => Err(error),
         },
         Err(error) => Err(error),
@@ -257,6 +276,15 @@ fn check_geometry(
         cache.fault = Some(Box::new(KeptFault { start, main, walk }));
     }
     checked
+}
+
+/// Whether [`check_geometry`] holds a tile refusal back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hold {
+    /// It gives every error: a call on the whole input.
+    Never,
+    /// It holds a refusal more bytes do not lift until the tile-parts close.
+    UntilClosed,
 }
 
 /// The walk of the tile-parts for the decode's error for them
@@ -1008,7 +1036,27 @@ pub(crate) fn decode_metered(
     let selection = selection?;
     let cs = codestream::parse_tiles_with(bytes, parsed, options.strict)?;
     let cap = samples::cap(&options.sample_limit, bytes.len());
-    decode_codestream(cs, options, &selection, cap, ledger)
+    let closed = cs.closed;
+    held_unless(
+        closed,
+        ledger,
+        decode_codestream(cs, options, &selection, cap, ledger),
+    )
+}
+
+/// `decoded`, a step of the decode past the parse of every tile-part, noted
+/// on `ledger` when it is an error and the tile-parts have not `closed`: a
+/// later tile-part may hold a fault the decode gives first, so a refine
+/// waits on the error ([`Waiting::TileError`](crate::Waiting::TileError)).
+fn held_unless<T>(
+    closed: bool,
+    ledger: Option<&incremental::Ledger>,
+    decoded: Result<T>,
+) -> Result<T> {
+    if let (Err(_), Some(ledger)) = (&decoded, ledger) {
+        ledger.hold(closed);
+    }
+    decoded
 }
 
 /// Options that contradict each other, whatever the input.
@@ -1205,24 +1253,29 @@ fn decode_jp2(
     ledger: Option<&incremental::Ledger>,
 ) -> Result<Image> {
     let prefix = read_jp2_prefix(bytes, options)?;
-    let cs = codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict)?;
-    let cap = samples::cap(&options.sample_limit, bytes.len());
-    let image = decode_codestream(cs, options, &prefix.selection, cap, ledger)?;
-    // A subset is planned raw, so the plans would pass it through, but they
-    // are planned for every component.
-    let mut components = if prefix.selection.subset {
-        image.components
-    } else {
-        prefix.plans.apply(image.components)?
+    // Boxes can follow the codestream, and their faults come before those of
+    // the tile-parts, so a JP2 file never closes.
+    let decoded = || {
+        let cs = codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict)?;
+        let cap = samples::cap(&options.sample_limit, bytes.len());
+        let image = decode_codestream(cs, options, &prefix.selection, cap, ledger)?;
+        // A subset is planned raw, so the plans would pass it through, but
+        // they are planned for every component.
+        let mut components = if prefix.selection.subset {
+            image.components
+        } else {
+            prefix.plans.apply(image.components)?
+        };
+        if let Some(srgb) = &prefix.srgb {
+            components = srgb.apply(components)?;
+        }
+        Ok(Image {
+            components,
+            jp2: Some(prefix.metadata),
+            ..image
+        })
     };
-    if let Some(srgb) = &prefix.srgb {
-        components = srgb.apply(components)?;
-    }
-    Ok(Image {
-        components,
-        jp2: Some(prefix.metadata),
-        ..image
-    })
+    held_unless(false, ledger, decoded())
 }
 
 /// Decode a parsed codestream into the area and components `selection`
@@ -1381,17 +1434,12 @@ fn decode_codestream(
         let header = or_end_count!(cs.tile_header(position));
 
         // A tile COD can give one tile a shallower pyramid than the rest, so
-        // the reduction is checked per tile, not once for the image. Then
-        // the tile's precincts and code-blocks, counted before its geometry
-        // is built, against what the sample limit allows a tile. Until the
-        // tile-parts close, a later one may hold a fault the decode gives
-        // first, so the ledger notes whether they have.
-        let checked = check_reduction(&header, reduction, Some(index))
-            .and_then(|()| tier2::check_tile(&header, tile.index, cap));
-        if let (Err(_), None, Some(ledger)) = (&checked, counting, ledger) {
-            ledger.refuse_tile(cs.closed);
-        }
-        or_end_count!(checked);
+        // the reduction is checked per tile, not once for the image.
+        or_end_count!(check_reduction(&header, reduction, Some(index)));
+
+        // The tile's precincts and code-blocks, counted before its geometry
+        // is built, against what the sample limit allows a tile.
+        or_end_count!(tier2::check_tile(&header, tile.index, cap));
 
         // Tier-2: parse packets into per-code-block coded segments, per
         // component. The walk covers every resolution and layer whatever the

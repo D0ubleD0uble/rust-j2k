@@ -89,15 +89,14 @@ fn is_sample_limit(error: &Error) -> bool {
 /// What a refine on `prefix` must give: the strict-off decode, with a main
 /// header cut short and a refusal by a work bound or the sample limit as
 /// `None`. A sample limit of `AtMost` is a ceiling more bytes do not raise,
-/// so its refusal is the error, except that a tile refusal is `None` too
-/// while the tile-parts have not closed ([`held::held`]).
+/// so its refusal is the error. A refine that waits on an error of the
+/// tiles ([`settled`]) gives that error here.
 fn refine_oracle(prefix: &[u8], options: &DecodeOptions) -> Result<Option<Image>, Error> {
     let ceiling = matches!(options.sample_limit(), SampleLimit::AtMost(_));
     match checked(decode_with(prefix, &options.clone().with_strict(false))) {
         Ok(image) => Ok(Some(image)),
         Err(Error::Incomplete(_)) => Ok(None),
         Err(error) if is_work_limit(&error) || (is_sample_limit(&error) && !ceiling) => Ok(None),
-        Err(error) if held::held(&error, prefix) => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -110,7 +109,21 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 
 /// A refine, with the reason it waited dropped.
 fn refine_image(decoder: &mut IncrementalDecoder) -> Result<Option<Image>, Error> {
-    checked(decoder.refine()).map(Refined::image)
+    let refined = checked(decoder.refine());
+    settled(refined, decoder.bytes())
+}
+
+/// `refined`, a refine of `prefix`, with the reason it waited dropped, and
+/// a wait on an error of the tiles as that error: it is an error no image
+/// follows, held only while the input has not closed ([`held::closes`]).
+fn settled(refined: Result<Refined, Error>, prefix: &[u8]) -> Result<Option<Image>, Error> {
+    match refined {
+        Ok(Refined::Waiting(Waiting::TileError { error, .. })) => {
+            assert!(!held::closes(prefix), "held at {}: {error:?}", prefix.len());
+            Err(error)
+        }
+        refined => refined.map(Refined::image),
+    }
 }
 
 /// Check `why`, the reason a refine that tried on `prefix` waited, against
@@ -194,12 +207,9 @@ fn check_waiting(name: &str, why: &Waiting, prefix: &[u8], options: &DecodeOptio
             }
         }
         (Waiting::RepeatLimit { .. }, _) => {}
-        // A tile refusal that a later tile-part's fault may yet replace is
-        // the one the decode gives.
-        (
-            Waiting::TileRefused { error, .. },
-            Err(expected @ (Error::InvalidOptions(_) | Error::Limit(_))),
-        ) if held::held(expected, prefix) => {
+        // An error that a later tile-part's fault may yet replace is the one
+        // the decode gives.
+        (Waiting::TileError { error, .. }, Err(expected)) if !held::closes(prefix) => {
             assert_eq!(
                 format!("{error:?}"),
                 format!("{expected:?}"),
@@ -293,13 +303,19 @@ fn stream(name: &str, bytes: &[u8], rng: &mut Rng, options: &DecodeOptions) -> u
             Ok(_) => unreachable!("a new variant of `Refined`"),
             Err(error) => {
                 let expected = refine_oracle(&bytes[..fed], options);
-                assert_eq!(keyed(Err(error)), keyed(expected), "{name}, {fed} bytes");
-                // A refine error is final, so the whole input must err too:
-                // a decoder that gave up for good on a prefix of a file
-                // that decodes would pass the check above.
-                assert!(
-                    checked(decode_with(bytes, &options.clone().with_strict(false))).is_err(),
-                    "{name}: refine failed for good at {fed} bytes, but the whole input decodes"
+                assert_eq!(
+                    keyed(Err(error.clone())),
+                    keyed(expected),
+                    "{name}, {fed} bytes"
+                );
+                // A refine error is final, so the whole input gives it too:
+                // a decoder that gave up for good on a prefix, with an error
+                // more bytes replace, would pass the check above.
+                let whole = checked(decode_with(bytes, &options.clone().with_strict(false)));
+                assert_eq!(
+                    keyed(whole.map(|_| ())),
+                    keyed(Err(error)),
+                    "{name}: refine failed for good at {fed} bytes"
                 );
                 return images;
             }
@@ -370,7 +386,7 @@ fn cut(name: &str, bytes: &[u8], cuts: &[usize], rng: &mut Rng, options: &Decode
             _ => {}
         }
         assert_eq!(
-            keyed(refined.map(Refined::image)),
+            keyed(settled(refined, prefix)),
             keyed(refine_oracle(prefix, options)),
             "{name}, cut at {at}"
         );
@@ -606,7 +622,8 @@ fn a_pterm_file_resumes_from_a_prefix_to_the_strict_decode() {
 }
 
 /// A damaged PTERM segment is refused once the bytes hold it whole: by
-/// `refine` when the segment is not the block's last, and by the strict
+/// `refine` when the segment is not the block's last, as an error of the
+/// tiles it waits on until the codestream closes, and by the strict
 /// `finish` when it is.
 #[test]
 fn a_damaged_pterm_segment_is_refused() {
@@ -616,7 +633,7 @@ fn a_damaged_pterm_segment_is_refused() {
     bad[188] ^= 0x10;
     let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
     decoder.feed(&bad[..300]);
-    match decoder.refine() {
+    match settled(decoder.refine(), &bad[..300]) {
         Err(Error::Codestream(m)) => {
             assert!(m.message().contains("predictable termination"), "{m}")
         }
@@ -1359,7 +1376,7 @@ fn a_refine_refused_for_what_was_spent_waits_where_an_earlier_tile_fails_its_blo
         let mut fresh = IncrementalDecoder::new(options.clone()).unwrap();
         fresh.feed(&bytes);
         assert_eq!(
-            keyed(fresh.refine().map(|_| ())),
+            keyed(settled(fresh.refine(), &bytes).map(|_| ())),
             keyed::<()>(Err(error.clone())),
             "{name}"
         );
