@@ -1479,10 +1479,13 @@ fn walk_tiles<'a>(
                         tile.parts.len()
                     )));
                 }
+                // The count the `SOT`s state: every count held includes the
+                // correction once it is on.
                 entries.push(ReportEntry::TilePartCountMismatch {
                     tile: index as u32,
-                    declared,
+                    declared: declared - count_correction,
                     found: tile.parts.len() as u16,
+                    corrected: count_correction != 0,
                 });
             }
         }

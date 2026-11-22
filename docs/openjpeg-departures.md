@@ -880,6 +880,14 @@ tile-parts"). OpenJPEG decodes that tile from the parts before it and drops
 the last one: 2293 of the 3072 samples then differ from the source. Both
 were measured on `quirk_tpsot_tnsot_lossless` with its counts edited.
 
+With `strict` off, a count is advisory, and a tile whose parts differ from
+its count gets a `ReportEntry::TilePartCountMismatch`. Its `declared` is the
+count the tile's `SOT`s state, and `corrected` says the correction holds the
+tile to one part more ("tile 1 declares 2 tile-part(s), 3 with the `TPsot ==
+TNsot` correction, and 2 were found"). On a prefix, the correction applies
+once the prefix holds the whole `SOT` it rests on, which may lie past the
+tile the entry is for (`tests/tile_part_count_prefix.rs`).
+
 ### A COD, COC, QCD or QCC restated in a later tile-part
 
 A.4.2 puts these in a tile's first tile-part. BAP Image Systems writes the main
