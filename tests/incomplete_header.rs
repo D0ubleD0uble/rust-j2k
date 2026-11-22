@@ -274,12 +274,22 @@ fn every_cut_inside_the_main_header_is_incomplete() {
     assert_eq!(jphs, want, "JPH files cut");
 }
 
-/// Empty input, and the first byte of `SOC` or of the JP2 signature, may
-/// still become JPEG 2000, so they are `Incomplete`. A short input that can
-/// no longer become either is `Codestream`, as text is.
+/// Empty input, the first byte of `SOC`, and input under 8 bytes whose bytes
+/// from 4 on start the JP2 signature box's type, may still become JPEG 2000,
+/// so they are `Incomplete`: bytes 4 to 8 that hold that type make the input
+/// a JP2 file, whatever bytes 0 to 4 hold. A short input that can no longer
+/// become either is `Codestream`, as text is.
 #[test]
 fn input_shorter_than_a_magic_is_incomplete_while_it_could_still_match() {
-    let incomplete: [&[u8]; 4] = [&[], &[0xFF], &[0x00], &[0, 0, 0, 12, b'j', b'P', b' ']];
+    let incomplete: [&[u8]; 7] = [
+        &[],
+        &[0xFF],
+        &[0x00],
+        &[0, 0, 0, 12, b'j', b'P', b' '],
+        &[0x41],
+        &[0xFF, 0x4E],
+        &[0x00, 0x01, 0x02, 0x03, b'j'],
+    ];
     for prefix in incomplete {
         for result in [
             read_header(prefix).map(|_| ()),
@@ -292,7 +302,12 @@ fn input_shorter_than_a_magic_is_incomplete_while_it_could_still_match() {
             );
         }
     }
-    let not_jpeg_2000: [&[u8]; 4] = [&[0x41], &[0xFF, 0x4E], &[0x00, 0x01], b"hello"];
+    let not_jpeg_2000: [&[u8]; 4] = [
+        &[0x41, 0, 0, 0, b'j', b'Q'],
+        &[0xFF, 0x4E, 0, 0, 0],
+        &[0x00, 0x01, 0x02, 0x03, b'j', b'P', b' ', b'!'],
+        b"hello",
+    ];
     for bytes in not_jpeg_2000 {
         for result in [
             read_header(bytes).map(|_| ()),
@@ -341,9 +356,6 @@ fn incomplete_before_the_main_header_says_where_the_input_ends() {
         );
     }
 }
-
-/// The JP2 signature box (I.5.1).
-const SIGNATURE: [u8; 12] = [0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
 
 /// `jp2_signed16.jp2`: the signature at 0, `ftyp` at 12 (20 bytes), `jp2h`
 /// at 32 (45 bytes, holding `ihdr` at 40 and `colr` at 62) and `jp2c` at 77,
@@ -455,9 +467,9 @@ fn damaged_boxes() -> Vec<(&'static str, Vec<u8>, String, usize)> {
 /// Damaging a complete box header or field before the codestream gives the
 /// same error as before `Incomplete` reached the box layer, from
 /// `read_header`, a strict decode and a partial one. So does every prefix
-/// that holds the damage; a shorter one is `Incomplete`, or, under 8 bytes
-/// that are not the start of the signature, `Codestream`, since such input
-/// is not yet known to be JP2.
+/// that holds the damage; a shorter one is `Incomplete`, also under 8 bytes
+/// that are not the start of the signature, as bytes 4 to 8 may yet give the
+/// signature box's type, which makes the input a JP2 file.
 #[test]
 fn a_damaged_box_before_the_codestream_keeps_its_error() {
     for (what, bytes, error, holds) in damaged_boxes() {
@@ -470,11 +482,6 @@ fn a_damaged_box_before_the_codestream_keeps_its_error() {
             ] {
                 if length >= holds {
                     assert_eq!(shown(result), Err(error.clone()), "{what}, cut at {length}");
-                } else if length < 8 && !SIGNATURE.starts_with(prefix) {
-                    assert!(
-                        matches!(result, Err(Error::Codestream(_))),
-                        "{what}, cut at {length}: {result:?}"
-                    );
                 } else {
                     assert!(
                         matches!(result, Err(Error::Incomplete(_))),
@@ -510,7 +517,9 @@ fn edited(whole: &[u8], edits: &[(usize, u8)]) -> Vec<u8> {
 fn damaged() -> Vec<(&'static str, Vec<u8>, usize)> {
     let whole = latlon();
     vec![
-        ("SOC is not SOC", edited(&whole, &[(1, 0x4E)]), 2),
+        // Bytes 4 on could still give the JP2 signature box's type, and so
+        // a JP2 file, until byte 4 is not `j`.
+        ("SOC is not SOC", edited(&whole, &[(1, 0x4E)]), 5),
         ("Lsiz below 2", edited(&whole, &[(5, 1)]), 6),
         // The walk loses sync after the short SIZ, but the SIZ is judged
         // first, as OpenJPEG 2.5.0 does ("Error with SIZ marker size").

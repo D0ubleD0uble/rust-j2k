@@ -258,6 +258,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Input under 8 bytes that does not open with `SOC` is `Error::Incomplete`
+  while its bytes from 4 on may still give the JP2 signature box's type
+  (`jP  `), as such input is read as a JP2 file whatever its first 4
+  bytes. A 1-byte `41`, or `FF 4E`, was refused for its missing `SOC`, and
+  `IncrementalDecoder::refine` kept that error where the whole file gave
+  the signature box's `FileFormat` error. `refine` and `header` now wait
+  on such input; input whose bytes from 4 on already differ from `jP  `,
+  such as `hello`, is still refused at once (#641).
 - A marker segment in the main header that is refused, such as a `SIZ`
   with a zero sub-sampling factor, gives its own error when a structural
   fault follows it in the main header: a length below 2, a byte that is

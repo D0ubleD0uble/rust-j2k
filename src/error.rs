@@ -164,9 +164,12 @@ pub enum Error {
     ///
     /// If no more bytes are coming, the file is truncated. A box or segment
     /// length that is damaged so that it reaches past the end of the input
-    /// looks the same as a cut, so it is this variant too. Input that can no
-    /// longer become JPEG 2000 is [`Error::Codestream`]: a byte that is not
-    /// the start of the `SOC` marker or of the JP2 signature box, for example.
+    /// looks the same as a cut, so it is this variant too. So is input under
+    /// 8 bytes that does not open with `SOC` and whose bytes from 4 on may
+    /// still give the JP2 signature box's type, which makes the input a JP2
+    /// file whatever its first 4 bytes. Input that can no longer become JPEG
+    /// 2000 is [`Error::Codestream`]: for example `hello`, which opens with
+    /// neither `SOC` nor, in bytes 4 to 8, `jP  `.
     ///
     /// ```
     /// use rust_j2k::{DecodeOptions, Error, decode_with, read_header};
