@@ -10,6 +10,12 @@
 //! other targets never call `header()`, and the committed differential test
 //! (`tests/incremental_header.rs`) uses the default limits only.
 //!
+//! The exception is an error more bytes can replace, which `header()` holds
+//! back while the input has not closed (`tests/support/held.rs`; a JP2 file
+//! never closes): it gives the header where that read gives the error, or,
+//! in a JP2 file whose box of length 0 before the codestream is at fault,
+//! `None`.
+//!
 //! Layout: 12 control bytes, then the file.
 //!
 //! - Byte 0, mod 3: the resolution reduction.
@@ -35,12 +41,14 @@
 
 use libfuzzer_sys::fuzz_target;
 
+#[path = "../../tests/support/held.rs"]
+mod held;
 #[path = "../../tests/support/inconsistent.rs"]
 mod inconsistent;
 use inconsistent::checked;
 use rust_j2k::{
-    read_header_with, ColorOutput, DecodeOptions, Error, IncrementalDecoder, Region, SampleLimit,
-    Window,
+    read_header_with, ColorOutput, DecodeOptions, Error, Header, IncrementalDecoder, Region,
+    SampleLimit, Window,
 };
 
 /// splitmix64: the same stream on every platform, from a seed in the input.
@@ -91,6 +99,26 @@ fn oracle(prefix: &[u8], options: &DecodeOptions) -> String {
             Err(error) => Err(error),
         }
     )
+}
+
+/// Check `got`, what `header()` gave on `prefix` under `options`, against
+/// the [`oracle`], allowing an error held back on an input that has not
+/// closed.
+fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOptions, at: &str) {
+    let want = oracle(prefix, options);
+    if format!("{got:?}") == want {
+        return;
+    }
+    let refused = matches!(
+        read_header_with(prefix, &options.clone().with_strict(false)),
+        Err(error) if !matches!(error, Error::Incomplete(_))
+    );
+    let held = refused && !held::closes(prefix);
+    match got {
+        Ok(Some(_)) if held => {}
+        Ok(None) if held && !prefix.starts_with(&[0xFF, 0x4F]) => {}
+        _ => panic!("{at}: {got:?}, where read_header_with gives {want}"),
+    }
 }
 
 fuzz_target!(|input: &[u8]| {
@@ -147,13 +175,17 @@ fuzz_target!(|input: &[u8]| {
                 _ => checked(decoder.set_max_quality_layers(Some(1 + u16::from(arg % 3)))),
             };
         }
-        let want = oracle(&data[..fed], decoder.options());
-        let got = format!("{:?}", checked(decoder.header()));
-        assert_eq!(got, want, "at {fed} of {}", data.len());
+        let got = checked(decoder.header());
+        check(
+            &got,
+            &data[..fed],
+            decoder.options(),
+            &format!("at {fed} of {}", data.len()),
+        );
         if r % 5 == 0 {
             assert_eq!(
                 format!("{:?}", checked(decoder.header())),
-                want,
+                format!("{got:?}"),
                 "again at {fed}"
             );
         }
