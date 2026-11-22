@@ -66,3 +66,25 @@ fn a_cut_through_tile_1s_only_tile_part_is_reported_by_how_much_is_there() {
         assert_eq!(got, want, "tile 1's tile-part cut at {present} of {PART}");
     }
 }
+
+/// The rule is the tile's first tile-part, not its only one: with `TNsot` 2
+/// and the first tile-part cut in its header, the tile is still missing.
+#[test]
+fn a_tile_whose_first_of_two_tile_parts_is_cut_in_its_header_is_missing() {
+    let one = synth::empty_tiles([16, 8, 0, 0, 8, 8, 0, 0], 0, 3, &[], &[1, 1], 0);
+    let tile_1 = one.len() - 2 - PART;
+    let mut bytes = one[..tile_1].to_vec();
+    bytes.extend(synth::tile_part(1, 0, 2, &[], &[0]));
+    bytes.extend(synth::tile_part(1, 1, 2, &[], &[0]));
+    for present in [12, 13] {
+        assert_eq!(
+            entries(&bytes[..tile_1 + present]),
+            vec![
+                truncated(present, true),
+                MISSING_EOC.into(),
+                MISSING_TILE_1.into()
+            ],
+            "cut at {present} of {PART}"
+        );
+    }
+}

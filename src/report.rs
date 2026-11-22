@@ -159,11 +159,13 @@ impl DecodeReport {
 pub enum ReportEntry {
     /// No tile-part of these tiles was read: none is there, or the input
     /// ends inside the header of the first one, before its `SOD` marker is
-    /// whole. In that case a [`TruncatedTilePart`](Self::TruncatedTilePart)
-    /// entry names the tile-part too, once its `SOT` is whole. Their
-    /// samples are 0 in the output, after the DC level shift, as `opj_decompress -allow-partial`
-    /// writes them: 0 for an unsigned component, not its mid-gray, and 0 for
-    /// a signed one. A JP2 palette then maps them as any other index 0.
+    /// whole. When the input ends inside its header, a
+    /// [`TruncatedTilePart`](Self::TruncatedTilePart) entry names the
+    /// tile-part too, once its `SOT` is whole. These tiles' samples are 0
+    /// in the output, after the DC level shift, as
+    /// `opj_decompress -allow-partial` writes them: 0 for an unsigned
+    /// component, not its mid-gray, and 0 for a signed one. A JP2 palette
+    /// then maps them as any other index 0.
     #[non_exhaustive]
     MissingTiles {
         /// The tiles, a run of consecutive tile indices.
@@ -210,8 +212,11 @@ pub enum ReportEntry {
     /// no entry names them, and the tile has one tile-part fewer, which a
     /// [`TilePartCountMismatch`](Self::TilePartCountMismatch),
     /// [`MissingPackets`](Self::MissingPackets) or, when it was the tile's
-    /// only one, [`MissingTiles`](Self::MissingTiles) entry shows where it
-    /// is due. From the whole `SOT` on, this entry is given.
+    /// first one, [`MissingTiles`](Self::MissingTiles) entry shows where it
+    /// is due. From the whole `SOT` on, this entry is given. While the input
+    /// ends inside the header, none of the tile-part is read, so when it is
+    /// the tile's first one the tile also has a
+    /// [`MissingTiles`](Self::MissingTiles) entry.
     #[non_exhaustive]
     TruncatedTilePart {
         /// The tile.
