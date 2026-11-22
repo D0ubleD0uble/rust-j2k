@@ -251,6 +251,11 @@ pub(crate) struct AfterCodestream<'a> {
     /// `XLBox` is below 16, or a box OpenJPEG reads that runs past the end of
     /// the file. It comes after every box in `boxes`.
     pub(crate) fault: Option<Error>,
+    /// Whether the input ends inside the box the walk ended on, so that more
+    /// bytes can still change that box: the fault is a box that runs past the
+    /// end of the input, or, with no fault, the last box in `boxes` has
+    /// `LBox` 0 and runs to the end.
+    pub(crate) open: bool,
 }
 
 /// Walk the bytes after the codestream the way OpenJPEG does after decoding
@@ -268,6 +273,7 @@ pub(crate) struct AfterCodestream<'a> {
 /// passes through.
 pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
     let mut boxes = Vec::new();
+    let mut open = false;
     let fault = loop {
         let [a, b, c, d, t0, t1, t2, t3, ..] = *rest else {
             break None;
@@ -300,6 +306,7 @@ pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
         }
         let Some(payload) = rest.get(header..length as usize) else {
             if READ_BY_OPENJPEG.contains(&&kind) {
+                open = true;
                 break Some(Error::file_format(format!(
                     "box `{}` after the codestream is {length} bytes but only {} remain in \
                      the file",
@@ -310,9 +317,11 @@ pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
             break None;
         };
         boxes.push(Jp2Box { kind, payload });
+        // A box of length 0 takes the rest of the input, so it is the last.
+        open = lbox == 0;
         // `length >= header >= 8`, so every step moves at least 8 bytes and
         // the walk ends.
         rest = rest.get(length as usize..).unwrap_or_default();
     };
-    AfterCodestream { boxes, fault }
+    AfterCodestream { boxes, fault, open }
 }

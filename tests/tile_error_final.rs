@@ -292,11 +292,6 @@ impl Track {
 /// or, where the file does not close, may wait on it; `finish` gives what
 /// `decode_with` gives under `options`.
 fn check_streams(bytes: &[u8], options: &DecodeOptions, name: &str) {
-    check_streams_to(bytes, bytes.len(), options, name);
-}
-
-/// [`check_streams`], with the bytes from `at_once` on fed in one piece.
-fn check_streams_to(bytes: &[u8], at_once: usize, options: &DecodeOptions, name: &str) {
     let lenient = options.clone().with_strict(false);
     let whole = error_of(&decode_with(bytes, &lenient));
     assert!(whole.is_some(), "{name}: the whole file is refused");
@@ -305,7 +300,7 @@ fn check_streams_to(bytes: &[u8], at_once: usize, options: &DecodeOptions, name:
         phase.as_ref() == Some(&failed) || (!held::closes(bytes) && phase == &Some(Phase::Ok))
     };
     let finished = error_of(&decode_with(bytes, options));
-    for split in 1..at_once.min(bytes.len() - 1) + 1 {
+    for split in 1..bytes.len() {
         let context = format!("{name}, split at {split}");
         let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
         let mut track = Track::default();
@@ -324,12 +319,10 @@ fn check_streams_to(bytes: &[u8], at_once: usize, options: &DecodeOptions, name:
     let context = format!("{name}, a byte at a time");
     let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
     let mut track = Track::default();
-    for byte in &bytes[..at_once] {
+    for byte in bytes {
         decoder.feed(std::slice::from_ref(byte));
         track.check(&mut decoder, &context);
     }
-    decoder.feed(&bytes[at_once..]);
-    track.check(&mut decoder, &context);
     assert_eq!(error_of(&decoder.finish()), finished, "{context}: finish");
 }
 
@@ -558,10 +551,9 @@ fn a_jp2_file_never_closes() {
             } else {
                 assert!(whole.starts_with(gives), "{name}: {whole}");
             }
-            // A box after the codestream that the input ends inside is
-            // refused as cut short, not waited for, so each such box is
-            // fed whole.
-            check_streams_to(&bytes, in_jp2(&codestream, &[]).len(), &lenient, &name);
+            // A box after the codestream that the input ends inside waits
+            // too, so the stream can be cut anywhere.
+            check_streams(&bytes, &lenient, &name);
             // Fed whole, the refine gives the box's fault, or waits on the
             // tile's error.
             let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");

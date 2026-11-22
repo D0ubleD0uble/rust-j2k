@@ -166,6 +166,12 @@ use crate::{
 /// it waits until the bytes fed close the tile-parts with an `EOC`; a JP2
 /// file never closes, as boxes can follow the codestream, so there only
 /// `finish` reports it, and a fault of the tile-parts waits the same way.
+/// So does, in a JP2 file, a fault in a box the bytes fed end inside, which
+/// more bytes can complete or change: a box cut short after the codestream,
+/// or a box of length 0, which runs to the end of the input. A refusal of
+/// the sRGB step waits as well, as a box still to come after the codestream
+/// can be at fault, which `decode_with` checks first. A fault in a box the
+/// bytes fed hold whole is final.
 /// A caller
 /// who raises the packet work limit to the factor a refusal names, as
 /// [`DecodeOptions::raised_for`] does, and feeds the file to a new decoder,
@@ -339,7 +345,12 @@ impl IncrementalDecoder {
     /// refusal once they do, unless a later tile-part's fault comes first.
     /// In a JP2 file, which never closes, this holds back every error of
     /// the tile-parts and the tiles but a refusal more bytes lift, and
-    /// [`finish`](Self::finish) reports it.
+    /// [`finish`](Self::finish) reports it. It holds back the errors
+    /// `refine` waits on in a JP2 file's boxes too: a fault in a box after
+    /// the codestream that the bytes fed end inside, and a refusal of the
+    /// sRGB step, for which it gives the header with the channels as coded.
+    /// A fault in a box of length 0 before the codestream, whose contents
+    /// are still coming, gives `Ok(None)`.
     ///
     /// Each call parses the main header again (its `PPM` data included), so
     /// a call costs the main header plus the tile-parts fed since. For the
@@ -919,6 +930,13 @@ pub enum Waiting {
     /// a component the image does not have: every error from the tile-parts
     /// on waits there.
     ///
+    /// In a JP2 file it can also be an error of the boxes that more bytes can
+    /// replace, met before any tile-part is parsed: a fault in a box the
+    /// bytes fed end inside, cut short after the codestream or of length 0
+    /// (which runs to the end of the input), or a refusal of the sRGB step,
+    /// which a fault in a box still to come after the codestream comes
+    /// before.
+    ///
     /// A codestream closes once the bytes fed reach the `EOC` after its
     /// last tile-part. Then `refine` returns the error `decode_with` gives,
     /// this one or a fault, and every later refine returns it again. A last
@@ -933,7 +951,7 @@ pub enum Waiting {
     /// no longer reads the one that failed. A caller that stops here gives
     /// up on such a file.
     /// [`header`](IncrementalDecoder::header) holds a tile refusal back
-    /// while `refine` waits on it.
+    /// while `refine` waits on it, and an error of the boxes.
     #[non_exhaustive]
     TileError {
         /// The error, as `decode_with` gives it.

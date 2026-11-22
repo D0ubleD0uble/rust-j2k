@@ -44,8 +44,9 @@ pub(crate) fn read_header_kept(
 /// tile-parts have not closed with an `EOC`
 /// ([`codestream::Codestream::closed`]). A JP2 file never closes, as boxes
 /// can follow the codestream and the decode checks them first: every error
-/// of its tile-parts is held. Past that, it gives what [`read_header`]
-/// gives.
+/// of its tile-parts is held, and so is an error of its boxes that more bytes
+/// can replace ([`read_jp2_prefix`]). Past that, it gives what
+/// [`read_header`] gives.
 pub(crate) fn read_header_streamed(
     bytes: &[u8],
     options: &DecodeOptions,
@@ -69,23 +70,39 @@ fn read_header_from(
     check_options(options)?;
     let reduction = options.resolution_reduction;
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
-        let prefix = read_jp2_prefix(bytes, options)?;
+        let prefix = match read_jp2_prefix(bytes, options, hold) {
+            Ok(prefix) => prefix,
+            // A fault in a box before the codestream that more bytes can
+            // change: the main header is not in, and may never be.
+            Err(fault) if fault.open => {
+                return Err(Error::incomplete(format!(
+                    "the input ends inside a box of length 0 before the codestream, at \
+                     fault so far: {}",
+                    fault.error
+                )));
+            }
+            Err(fault) => return Err(fault.error),
+        };
         // Where the codestream starts in the input, which keys what is kept.
         let start = prefix
             .codestream
             .as_ptr()
             .addr()
             .wrapping_sub(bytes.as_ptr().addr());
-        let checked = check_geometry(
-            prefix.codestream,
-            &prefix.parsed,
-            &prefix.selection,
-            reduction,
-            samples::cap(&options.sample_limit, bytes.len()),
-            options.strict,
-            Hold::Never,
-            kept.map(|kept| (kept, start)),
-        );
+        // An error held back comes before those of the tile-parts.
+        let checked = match prefix.held.clone() {
+            Some(held) => Err(held),
+            None => check_geometry(
+                prefix.codestream,
+                &prefix.parsed,
+                &prefix.selection,
+                reduction,
+                samples::cap(&options.sample_limit, bytes.len()),
+                options.strict,
+                Hold::Never,
+                kept.map(|kept| (kept, start)),
+            ),
+        };
         // Boxes can follow the codestream, and the decode checks them before
         // the tile-parts, so a JP2 file never closes. A refusal more bytes
         // lift is given, as in a codestream.
@@ -1048,6 +1065,8 @@ pub(crate) fn decode_metered(
 /// on `ledger` when it is an error and the tile-parts have not `closed`: a
 /// later tile-part may hold a fault the decode gives first, so a refine
 /// waits on the error ([`Waiting::TileError`](crate::Waiting::TileError)).
+/// A JP2 file's error of the boxes that more bytes can replace is noted the
+/// same way, as never `closed`.
 fn held_unless<T>(
     closed: bool,
     ledger: Option<&incremental::Ledger>,
@@ -1157,6 +1176,10 @@ struct Jp2Prefix<'a> {
     srgb: Option<jp2::SrgbPlan>,
     /// The area and components the decode returns.
     selection: window::Selection,
+    /// For a stream that may still grow, the first error of the read that a
+    /// later box can replace ([`read_jp2_prefix`]), held back. It is `None`
+    /// for a read of the whole input, which returns that error instead.
+    held: Option<Error>,
 }
 
 /// Read a JP2 file up to its tile data, in OpenJPEG's order, all of it
@@ -1178,8 +1201,32 @@ struct Jp2Prefix<'a> {
 /// refuses sRGB output of three or more components before the reduction and
 /// the selection, while here the sRGB step is planned last, from the color
 /// space and the channels the plans give.
-fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Prefix<'a>> {
-    let file = jp2::parse(bytes, &options.packet_work_limit)?;
+///
+/// With `streamed`, `bytes` are a stream that may still grow, and an error
+/// that more bytes can replace is held:
+///
+/// - A fault in a box the input ends inside, before the codestream or after
+///   it ([`jp2::BoxFault::open`]), as more bytes can complete the box or
+///   change what it holds. Before the codestream there is no prefix to give,
+///   so the fault comes back open; after it, it is held in
+///   [`Jp2Prefix::held`].
+/// - A refusal of the sRGB step. It comes after the header boxes after the
+///   codestream, and a box yet to come there can be at fault, which comes
+///   first.
+///
+/// The faults before these, and those of whole boxes, are final, as more
+/// bytes change neither the boxes they are in nor the ones before them.
+/// The metadata fails only on an internal inconsistency, so it is not held.
+fn read_jp2_prefix<'a>(
+    bytes: &'a [u8],
+    options: &DecodeOptions,
+    streamed: bool,
+) -> std::result::Result<Jp2Prefix<'a>, jp2::BoxFault> {
+    let file =
+        jp2::parse_boxes(bytes, &options.packet_work_limit).map_err(|fault| jp2::BoxFault {
+            open: streamed && fault.open,
+            ..fault
+        })?;
     jp2::check_box_layout(&file)?;
     let parsed = codestream::parse_header(file.codestream)?;
     let siz = &parsed.header.siz;
@@ -1203,7 +1250,13 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
         raw_channels,
         jp2::is_jph(&file.file_type),
     )?;
-    jp2::check_after_codestream(&file, raw_channels)?;
+    let mut held = match jp2::check_after_codestream(&file, raw_channels) {
+        Err(fault) if streamed && fault.open => Some(fault.error),
+        checked => {
+            checked.map_err(|fault| fault.error)?;
+            None
+        }
+    };
     let mut metadata = jp2::metadata(&file, &plans, siz)?;
     if selection.subset {
         metadata.channels = pick(metadata.channels, &selection.order);
@@ -1211,28 +1264,43 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
     let srgb = match options.color {
         ColorOutput::AsCoded => None,
         ColorOutput::Srgb => {
-            let plan = jp2::plan_srgb(
+            let planned = jp2::plan_srgb(
                 &metadata,
                 &plans,
                 &selection.area,
                 options.resolution_reduction,
                 cap,
-            )?;
-            // Chroma replication keys on the parity of the area's origin on
-            // the reference grid (the full-resolution one, whatever the
-            // reduction), so on part of the image it would not give the crop
-            // of the whole image's conversion. An area equal to the image
-            // (a window clipped to it, or the only tile) is the whole image.
-            if plan.replicates_chroma() && selection.area.image_rect() != siz.image_rect() {
-                return Err(Error::unsupported(
-                    "sRGB output from sub-sampled sYCC chroma on an area smaller than the \
-                     image, under `DecodeOptions::region`",
-                ));
+            )
+            .and_then(|plan| {
+                // Chroma replication keys on the parity of the area's origin
+                // on the reference grid (the full-resolution one, whatever
+                // the reduction), so on part of the image it would not give
+                // the crop of the whole image's conversion. An area equal to
+                // the image (a window clipped to it, or the only tile) is the
+                // whole image.
+                if plan.replicates_chroma() && selection.area.image_rect() != siz.image_rect() {
+                    return Err(Error::unsupported(
+                        "sRGB output from sub-sampled sYCC chroma on an area smaller than the \
+                         image, under `DecodeOptions::region`",
+                    ));
+                }
+                Ok(plan)
+            });
+            match planned {
+                Ok(plan) => {
+                    // A converted image is sRGB (or gray) and carries no
+                    // profile, as OpenJPEG reports it.
+                    plan.describe(&mut metadata);
+                    Some(plan)
+                }
+                // Only the first error is held: it is the one the decode
+                // gives.
+                Err(error) if streamed => {
+                    held.get_or_insert(error);
+                    None
+                }
+                Err(error) => return Err(error.into()),
             }
-            // A converted image is sRGB (or gray) and carries no profile, as
-            // OpenJPEG reports it.
-            plan.describe(&mut metadata);
-            Some(plan)
         }
     };
     Ok(Jp2Prefix {
@@ -1242,6 +1310,7 @@ fn read_jp2_prefix<'a>(bytes: &'a [u8], options: &DecodeOptions) -> Result<Jp2Pr
         metadata,
         srgb,
         selection,
+        held,
     })
 }
 
@@ -1252,7 +1321,15 @@ fn decode_jp2(
     options: &DecodeOptions,
     ledger: Option<&incremental::Ledger>,
 ) -> Result<Image> {
-    let prefix = read_jp2_prefix(bytes, options)?;
+    // A refine reads a stream that may still grow, and holds an error that
+    // more bytes can replace.
+    let prefix = match read_jp2_prefix(bytes, options, ledger.is_some()) {
+        Ok(prefix) => prefix,
+        Err(fault) => return held_unless(!fault.open, ledger, Err(fault.error)),
+    };
+    if let Some(error) = prefix.held {
+        return held_unless(false, ledger, Err(error));
+    }
     // Boxes can follow the codestream, and their faults come before those of
     // the tile-parts, so a JP2 file never closes.
     let decoded = || {
