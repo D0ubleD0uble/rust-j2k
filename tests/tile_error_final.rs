@@ -529,7 +529,11 @@ fn a_jp2_file_never_closes() {
             DecodeOptions::default(),
         ),
         // The header read refuses this tile, so `header` must hold it.
-        ("AtMost, the main COD", at_most_one_tile(true, &[]), at_most()),
+        (
+            "AtMost, the main COD",
+            at_most_one_tile(true, &[]),
+            at_most(),
+        ),
     ] {
         let lenient = options.clone().with_strict(false);
         let tiles = error_of(&decode_with(&codestream, &lenient)).expect("an error");
