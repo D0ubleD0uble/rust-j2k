@@ -769,38 +769,30 @@ impl Default for DecodeOptions {
 /// [`DecodeOptions::sample_limit`], is a [`SampleLimit`].
 ///
 /// Each bound scales with the size of the file, so a small file cannot ask for
-/// minutes of work, and a file of up to 64 MiB is held to the sample limit's
-/// floor: samples that peak at about 2.7 GiB for a square tile and several GiB
-/// for a tall, narrow one, and at most about 6.4 GiB in all. Past 64 MiB the sample limit grows with the file (see
-/// [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)).
-/// A valid file can still go past a bound, when it codes many samples in very
-/// few bytes or is very large. The decode then fails with [`Error::Limit`]. Its
-/// [`LimitDetail::kind`] names the option, and [`LimitDetail::retry_with`]
-/// gives a [`Raise`], a [`Raised`](Raise::Raised) factor, which the message
-/// names too. [`Raise`] says how far to trust the factor.
+/// minutes of work. A valid file can still go past a bound, when it codes many
+/// samples in very few bytes. The decode then fails with [`Error::Limit`]. Its
+/// [`LimitDetail::kind`] names the option, and [`LimitDetail::retry_with`] may
+/// give a [`Raise`] to retry with: a [`Raised`](Raise::Raised) factor, which
+/// the message names too, or [`Unlimited`](Raise::Unlimited). It is `None`
+/// when no retry is shown. [`Raise`] says how far to trust the factor.
 ///
 /// Which value to pick:
 ///
 /// - For a file from a source you trust, use [`Unlimited`](WorkLimit::Unlimited).
 ///   The decode then takes as long as the file asks.
-/// - To cap the samples a decode may hold, set the sample limit to
-///   [`SampleLimit::AtMost(n)`](SampleLimit::AtMost): at most `n` samples,
-///   `4 * n` bytes of output, whatever the file's size or padding (see
-///   [`DecodeOptions::sample_limit`]). A refusal under it gives no factor.
-///   [Running a decode service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service) says what to
-///   bound besides.
-/// - For a higher work bound, use `Raised(n)` with an `n` of your own
-///   choosing, the largest cost you will accept. It is a factor of the
-///   default, which grows with the file. Read the factor from
-///   [`LimitDetail::retry_with`] to size it, or let
-///   [`DecodeOptions::raised_for`] set it: a file that needs `Raised(3)` is
-///   refused under `Raised(2)`. Do not parse the message; it is a
-///   diagnostic, not a stable format.
+/// - For a higher bound, use `Raised(n)` with an `n` of your own choosing,
+///   the largest cost you will accept. It is a factor of the default, which
+///   grows with the file. Read the factor from [`LimitDetail::retry_with`]
+///   to size it, or let [`DecodeOptions::raised_for`] set it: a file that
+///   needs `Raised(3)` is refused under `Raised(2)`. Do not parse the
+///   message; it is a diagnostic, not a stable format.
 ///
-/// Only these three limits can be changed. The other guards also end in
-/// [`Error::Limit`], and no option here raises them (see [`Error::Limit`]).
-/// A damaged file can hit a guard too, so do not lift a bound on that
-/// evidence alone.
+/// [Running a decode service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service)
+/// says what to bound besides.
+///
+/// The other guards also end in [`Error::Limit`], and no option raises them
+/// (see [`Error::Limit`]). A damaged file can hit a guard too, so do not lift
+/// a bound on that evidence alone.
 ///
 /// The `with_*_limit` builders on [`DecodeOptions`] store `Raised(1)` as
 /// `Default`, as the two set the same bound. Compared as bare values,
@@ -871,6 +863,16 @@ pub enum WorkLimit {
 /// It takes the settings of a [`WorkLimit`], and [`AtMost`](Self::AtMost), a
 /// fixed ceiling. [`Raise`] says how far to trust the factor a refusal
 /// names, and [`WorkLimit`] which setting to pick.
+///
+/// A file of up to 64 MiB is held to the limit's floor: samples that peak at
+/// about 2.7 GiB for a square tile and several GiB for a tall, narrow one, and
+/// at most about 6.4 GiB in all. Past 64 MiB the limit grows with the file (see
+/// [the sample limit](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/resource-bounds.md#the-sample-limit)).
+///
+/// To cap the samples a decode may hold, use
+/// [`AtMost(n)`](Self::AtMost): at most `n` samples, `4 * n` bytes of
+/// output, whatever the file's size or padding (see
+/// [`DecodeOptions::sample_limit`]). A refusal under it gives no factor.
 ///
 /// [`DecodeOptions::with_sample_limit`] stores `Raised(1)` as `Default`, as
 /// the two set the same limit. Compared as bare values,
