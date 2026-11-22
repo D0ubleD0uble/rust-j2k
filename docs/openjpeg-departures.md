@@ -1144,7 +1144,8 @@ The `SOT` that starts a tile-part is read the same way. Input that ends
 inside its first 12 bytes, the length of a `SOT` with `Lsot` 10, ends the
 codestream before that tile-part: no entry names the tile-part, and the
 report has `MissingEoc`. OpenJPEG 2.5.0 refuses such a file ("Stream too
-short"), even under `-allow-partial`. A `SOT` whose `Lsot` is not 10 is
+short", or "Failed to decode tile" when only the marker code is in), even
+under `-allow-partial`. A `SOT` whose `Lsot` is not 10 is
 refused as soon as the input holds `Lsot`, with `strict` on or off, with the
 error the whole segment gives (`Error::Marker`). That error depends on
 `Lsot` alone, so the refusal also holds for an `Lsot` that runs past its
