@@ -147,7 +147,9 @@ decode reads, still has to match, with `strict` on and off: where the
 header read refuses a tile it finds that fault with a walk of its own that
 keeps no tile record. Each input of 64 KiB or less also goes through
 `rust_j2k::fuzz::tile_parts_walks_agree`, which checks that walk's error
-against the decode's parse of the tile-parts directly, under both settings.
+against the decode's parse of the tile-parts directly, under both settings,
+on the input and on up to 15 of its prefixes that end in the tile-parts, so
+a whole seed also tests the walks on input that ends early.
 A decode costs far more than the header, so once the header reads, inputs
 over 64 KiB or images over 2^16 samples are not decoded. For those inputs the
 target checks `read_header` alone: it does not compare a successful header
@@ -480,9 +482,11 @@ python3 scripts/gen-jp2-fuzz-seeds.py
 cargo +nightly fuzz run jp2_boxes -- -dict=fuzz/jp2.dict -max_total_time=300
 
 # The header target, seeded with the small synthetic codestreams and JP2 files,
-# and the header seeds of tile-part and refusal shapes.
+# the header seeds of tile-part and refusal shapes, and the `PPM` and `PPT`
+# files, whose prefixes reach the tile-part walks' handling of a cut.
 mkdir -p fuzz/corpus/header
-cp tests/fixtures/*.j2k tests/fixtures/jp2_*.jp2 tests/fixtures/header/* fuzz/corpus/header/
+cp tests/fixtures/*.j2k tests/fixtures/jp2_*.jp2 tests/fixtures/header/* \
+  tests/fixtures/packed_overrun/*.j2k fuzz/corpus/header/
 cargo +nightly fuzz run header -- -dict=fuzz/jp2.dict -max_total_time=300
 
 # The ICC target, seeded with the profiles of the ICC oracle cases (the

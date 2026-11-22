@@ -14,6 +14,13 @@ whole, the header needs more bits than that byte holds.
 - `ppm_short.j2k`: as `ppt_short.j2k`, with the header in a `PPM` marker.
 - `ppt_whole.j2k` and `ppm_whole.j2k`: the header whole, `C4 FF 00`. They
   are the controls: OpenJPEG decodes each to 176.
+- `ppm_two_parts.j2k`: as `ppm_whole.j2k` with two layers, in two
+  tile-parts. The `PPM` carries `C4 FF 00` for the first and `00` (an empty
+  packet) for the second. The first tile-part holds a `COM` that sizes it
+  so the prefixes `rust_j2k::fuzz::tile_parts_walks_agree` cuts end inside
+  its header, inside its data and one byte after it: input that ends before
+  the last tile-part, with `PPM` chunks left over. OpenJPEG decodes it to
+  176.
 
 The bits these headers need are not in the codestream, so the decoder
 refuses each one, with `strict` on or off. The script also runs OpenJPEG
@@ -46,21 +53,21 @@ def segment(code: int, body: bytes) -> bytes:
     return struct.pack(">HH", code, len(body) + 2) + body
 
 
-def main_header() -> bytes:
+def main_header(layers: int = 1) -> bytes:
     """SOC, SIZ, COD and QCD for the 1 x 1 image."""
     siz = segment(0xFF51, struct.pack(">HIIIIIIIIH", 0, 1, 1, 0, 0, 1, 1, 0, 0, 1) + bytes([7, 1, 1]))
-    # Scod 0; LRCP, one layer, no MCT; no level, 64 x 64 blocks, style 0, 5/3.
-    cod = segment(0xFF52, bytes([0, 0, 0, 1, 0, 0, 4, 4, 0, 1]))
+    # Scod 0; LRCP, `layers` layers, no MCT; no level, 64 x 64 blocks, style 0, 5/3.
+    cod = segment(0xFF52, bytes([0, 0]) + struct.pack(">H", layers) + bytes([0, 0, 4, 4, 0, 1]))
     # No quantization, two guard bits less one; exponent 9 for the one band.
     qcd = segment(0xFF5C, bytes([0x20, 9 << 3]))
     return b"\xff\x4f" + siz + cod + qcd
 
 
-def tile_part(extra: bytes) -> bytes:
-    """SOT for tile 0, part 0 of 1, then `extra`, SOD and the body."""
-    psot = 12 + len(extra) + 2 + len(BODY)
-    sot = segment(0xFF90, struct.pack(">HIBB", 0, psot, 0, 1))
-    return sot + extra + b"\xff\x93" + BODY
+def tile_part(extra: bytes, part: int = 0, parts: int = 1, body: bytes = BODY) -> bytes:
+    """SOT for tile 0, `part` of `parts`, then `extra`, SOD and `body`."""
+    psot = 12 + len(extra) + 2 + len(body)
+    sot = segment(0xFF90, struct.pack(">HIBB", 0, psot, part, parts))
+    return sot + extra + b"\xff\x93" + body
 
 
 def ppt(header: bytes) -> bytes:
@@ -74,12 +81,25 @@ def ppm(header: bytes) -> bytes:
     return main_header() + marker + tile_part(b"") + b"\xff\xd9"
 
 
+def ppm_two_parts() -> bytes:
+    """Two layers in two tile-parts, each packet header a `PPM` chunk."""
+    chunks = [bytes([0xC4, 0xFF, 0x00]), bytes([0x00])]
+    body = bytes([0]) + b"".join(struct.pack(">I", len(c)) + c for c in chunks)
+    # Rcme 1 (Latin text) and four bytes: the first tile-part is 31 bytes, and
+    # the 47 after the main header are cut at 47 * k // 16, so the cut for
+    # k = 9 and 10 ends in its data and the one for 11 a byte after it.
+    com = segment(0xFF64, struct.pack(">H", 1) + b"cuts")
+    parts = tile_part(com, 0, 2) + tile_part(b"", 1, 2, b"")
+    return main_header(2) + segment(0xFF60, body) + parts + b"\xff\xd9"
+
+
 FIXTURES = {
     "ppt_short.j2k": (ppt(bytes([0xC4])), 128),
     "ppt_ff_nostuff.j2k": (ppt(bytes([0xC4, 0xFF])), None),
     "ppm_short.j2k": (ppm(bytes([0xC4])), 128),
     "ppt_whole.j2k": (ppt(bytes([0xC4, 0xFF, 0x00])), 176),
     "ppm_whole.j2k": (ppm(bytes([0xC4, 0xFF, 0x00])), 176),
+    "ppm_two_parts.j2k": (ppm_two_parts(), 176),
 }
 
 
