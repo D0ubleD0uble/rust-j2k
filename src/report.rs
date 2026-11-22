@@ -213,7 +213,8 @@ pub enum ReportEntry {
     /// [`TilePartCountMismatch`](Self::TilePartCountMismatch),
     /// [`MissingPackets`](Self::MissingPackets) or, when it was the tile's
     /// first one, [`MissingTiles`](Self::MissingTiles) entry shows where it
-    /// is due. From the whole `SOT` on, this entry is given. While the input
+    /// is due. From the whole `SOT` on, this entry is given. (A `SOT` whose
+    /// `Lsot` is not 10 is refused once the input holds `Lsot`.) While the input
     /// ends inside the header, none of the tile-part is read, so when it is
     /// the tile's first one the tile also has a
     /// [`MissingTiles`](Self::MissingTiles) entry.

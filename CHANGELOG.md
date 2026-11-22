@@ -258,18 +258,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- With `strict` off, input that ends inside a `SOT` marker segment longer
-  than 12 bytes (`Lsot` over 10) ends the codestream there, with
-  `MissingEoc` in the report, as input that ends in its first 12 bytes
-  does. It was refused as `Error::Codestream` ("truncated marker
-  segment"), which more bytes turn into the `Error::Marker` for the
-  segment's trailing bytes, so `IncrementalDecoder::refine` could stop on
-  an error the whole file does not give. With `strict` on such input is
-  still refused as truncated. In a JP2 file, a `SOT` segment that runs
-  past its tile-part's `Psot` is now read from the whole `jp2c` box, as
-  in a raw codestream, and gives the same error; it was read from the
-  codestream cut at that `Psot` and refused as truncated. OpenJPEG 2.5
-  refuses any `SOT` whose `Lsot` is not 10 (#646).
+- A `SOT` marker segment whose `Lsot` is not 10 is refused as soon as the
+  input holds `Lsot`, with `strict` on and off, with the `Error::Marker`
+  the whole segment gives: a length below 2, a body too short for the
+  fields, or "`SOT` segment has N unexpected trailing byte(s)". With
+  `strict` off, input that ended inside a longer `SOT`, past its first 12
+  bytes, was refused as `Error::Codestream` ("truncated marker segment"),
+  which more bytes turn into the `Marker` error, so
+  `IncrementalDecoder::refine` could stop on an error the whole file does
+  not give. An `Lsot` that runs past the end of the file, even one that
+  ends in an `EOC`, gave that `Codestream` error and now gives the
+  `Marker` one. A cut before `Lsot`, or inside a `SOT` of `Lsot` 10, still
+  ends the codestream with `strict` off. OpenJPEG 2.5.0 refuses any `SOT`
+  whose `Lsot` is not 10 (#646).
 - Input under 8 bytes that does not open with `SOC` is `Error::Incomplete`
   while its bytes from 4 on may still give the JP2 signature box's type
   (`jP  `), as such input is read as a JP2 file whatever its first 4

@@ -331,6 +331,23 @@ fn an_odd_lsot_is_refused_once_the_input_holds_it() {
     }
 }
 
+/// A whole file whose `Lsot` of 65535 runs past its end is refused, with
+/// `strict` on and off, though its `Psot` chain reaches an `EOC`: it used
+/// to decode with `strict` off, as the input cut short.
+#[test]
+fn a_sot_longer_than_the_file_is_refused() {
+    for bytes in [first_l65535(), later_l65535()] {
+        for strict in [true, false] {
+            let options = DecodeOptions::default().with_strict(strict);
+            assert_eq!(
+                error_of(&decode_with(&bytes, &options)).as_deref(),
+                Some("Marker(\"`SOT` segment has 65525 unexpected trailing byte(s)\")"),
+                "strict {strict}"
+            );
+        }
+    }
+}
+
 /// A cut inside a `SOT` of `Lsot` 10 still ends the codestream with
 /// `strict` off, as it did.
 #[test]

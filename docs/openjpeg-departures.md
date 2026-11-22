@@ -1140,6 +1140,19 @@ Trusting the closing `EOC` here would let a prefix fail where the whole file
 does not. The report then has no `MissingEoc`, since the input ends in
 `FF D9`.
 
+The `SOT` that starts a tile-part is read the same way. Input that ends
+inside its first 12 bytes, the length of a `SOT` with `Lsot` 10, ends the
+codestream before that tile-part: no entry names the tile-part, and the
+report has `MissingEoc`. OpenJPEG 2.5.0 refuses such a file ("Stream too
+short"), even under `-allow-partial`. A `SOT` whose `Lsot` is not 10 is
+refused as soon as the input holds `Lsot`, with `strict` on or off, with the
+error the whole segment gives (`Error::Marker`). That error depends on
+`Lsot` alone, so the refusal also holds for an `Lsot` that runs past its
+`Psot`, or past the end of an input that ends in an `EOC`. OpenJPEG refuses
+such a whole file too ("Error reading SOT marker", or "Marker size
+inconsistent with stream length" where `Lsot` runs past the end).
+`tests/long_sot_cut.rs` checks these on every prefix.
+
 `tests/tile_part_header_cut.rs` checks each case, on prefixes of a tiled
 fixture with a fault put in its last tile-part (`Psot` 0) and in a middle
 one (`Psot` past the end). `tests/tile_part_header_past_psot.rs` checks a
