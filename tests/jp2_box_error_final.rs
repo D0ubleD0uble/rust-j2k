@@ -296,7 +296,8 @@ fn check_waits(index: usize) {
 }
 
 /// A box the input holds whole whose contents are at fault, before or after
-/// the codestream, is final at once: `refine` returns its error and `header`
+/// the codestream, or a box cut where no byte still to come can fault its
+/// length, is final at once: `refine` returns its error and `header`
 /// too, and more bytes do not change it.
 #[test]
 fn a_whole_box_at_fault_is_final() {
@@ -310,6 +311,10 @@ fn a_whole_box_at_fault_is_final() {
         (
             "a colr too short in the jp2h",
             synth::jp2_file(&[ihdr, synth::bx(b"colr", &[1, 0])], &[], &one, &[]),
+        ),
+        (
+            "a box after the signature whose XLBox is past 2^56 so far",
+            [&synth::JP2_SIGNATURE[..], &[0, 0, 0, 1], b"xxxx", &[1]].concat(),
         ),
     ] {
         let lenient = DecodeOptions::default().with_strict(false);
