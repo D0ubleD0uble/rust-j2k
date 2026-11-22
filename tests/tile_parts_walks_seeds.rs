@@ -24,7 +24,9 @@ fn files(dir: &Path, keep: impl Fn(&str) -> bool) -> Vec<PathBuf> {
 
 /// The `header` target's seeds: `tests/fixtures/*.j2k`,
 /// `tests/fixtures/jp2_*.jp2`, `tests/fixtures/header/*` and
-/// `tests/fixtures/packed_overrun/*.j2k`.
+/// `tests/fixtures/packed_overrun/*.j2k`. Keep this list the same as the
+/// `header` recipe in `fuzz/README.md` and the seeds the CI fuzz smoke
+/// copies for `header`.
 fn header_seeds() -> Vec<PathBuf> {
     let root = fixtures();
     let mut seeds = files(&root, |name| {

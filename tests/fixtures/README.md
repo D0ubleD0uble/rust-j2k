@@ -469,8 +469,10 @@ a 1x1 image, one 8-bit component, no decomposition level, one packet whose
 header is packed in a `PPT` or `PPM` marker, and a body of seven 0x00
 bytes. `ppm_two_parts.j2k` adds an empty second layer in a second
 tile-part, and a `COM` that sizes the first so that the prefixes
-`tests/tile_parts_walks_seeds.rs` cuts end in and just after it. The script runs `opj_decompress` (OpenJPEG 2.5.0) on each file and
-checks the result in the table.
+`rust_j2k::fuzz::tile_parts_walks_agree` cuts end in it and just after it
+(`tests/tile_parts_walks_seeds.rs` runs that check on it). The script runs
+`opj_decompress` (OpenJPEG 2.5.0) on each file and checks the result in the
+table.
 
 | File | Size | SHA-256 | Packed header | `opj_decompress` |
 | ---- | ---- | ------- | ------------- | ---------------- |

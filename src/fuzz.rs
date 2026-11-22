@@ -309,10 +309,20 @@ pub fn tile_parts_walks_agree(data: &[u8]) {
     // The walk kept from call to call on prefixes that grow, as
     // `IncrementalDecoder::header` keeps it, gives on each what a walk from
     // the start gives, and so does a call with `strict` on after them. It
-    // gives the main header it read from the prefix.
+    // gives the main header it read from the prefix. The main header of a
+    // prefix that holds the first `SOT` marker code reads as the whole
+    // input's does, so only a prefix that ends before it is skipped.
+    let main_header_len = parsed.main_header_len();
     let mut kept = None;
     let agree = |prefix: &[u8], strict: bool, kept: &mut Option<codestream::KeptWalk>| {
-        let parsed = codestream::parse_header(prefix).ok()?;
+        let parsed = match codestream::parse_header(prefix) {
+            Ok(parsed) => parsed,
+            Err(_) if prefix.len() < main_header_len + 2 => return None,
+            Err(error) => panic!(
+                "the main header of {} bytes does not read: {error:?}",
+                prefix.len()
+            ),
+        };
         let resumed = codestream::tile_parts_fault_kept(prefix, &parsed, strict, kept);
         let afresh = codestream::tile_parts_fault(prefix, &parsed, strict);
         assert_eq!(
@@ -327,9 +337,7 @@ pub fn tile_parts_walks_agree(data: &[u8]) {
     // of input that ends early (a cut tile-part header, a `Psot` past the
     // end, a missing `EOC`) is checked on cut input made from whole seeds.
     let len = codestream.len();
-    for cut in
-        (1..=16).map(|k| parsed.main_header_len() + (len - parsed.main_header_len()) * k / 16)
-    {
+    for cut in (1..=16).map(|k| main_header_len + (len - main_header_len) * k / 16) {
         let prefix = &codestream[..cut];
         let parsed = agree(prefix, false, &mut kept);
         if let (Some(parsed), true) = (parsed, cut < len) {
