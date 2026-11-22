@@ -663,6 +663,16 @@ pub(crate) fn first_part_at<'b, 'm>(
     Some(FirstPart::new(bytes, &parsed.header, offset, &sot, pos))
 }
 
+/// Whether `bytes` end inside the `SOT` marker segment at `offset`: before
+/// its first 12 bytes, which a `SOT` of `Lsot` 10 spans, or before the
+/// `2 + Lsot` bytes a longer `Lsot` gives. With `strict` off the tile-part
+/// walks end the codestream there, so that a `SOT` more bytes may complete
+/// is judged only once the input holds it.
+fn ends_in_sot(bytes: &[u8], offset: usize) -> bool {
+    let left = bytes.len().saturating_sub(offset);
+    left < 12 || read_u16(bytes, offset + 2).is_some_and(|lsot| left < 2 + usize::from(lsot))
+}
+
 /// The `SOT` marker segment at `offset` of `bytes`, and where it ends, or
 /// `None` if none is there or it is at fault. It reads the fixed layout
 /// [`decode_sot`] admits, `Lsot` 10, directly: the walk reads a `SOT` for
@@ -1172,8 +1182,8 @@ fn walk_tiles<'a>(
     let mut part_offset = sot_offset;
     loop {
         // Not strict: input that ends inside the `SOT` marker segment ends the
-        // codestream there. `SOT` is always 12 bytes (Lsot = 10).
-        if !strict && bytes.len().saturating_sub(part_offset) < 12 {
+        // codestream there.
+        if !strict && ends_in_sot(bytes, part_offset) {
             entries.push(ReportEntry::MissingEoc);
             ended_early = true;
             break;

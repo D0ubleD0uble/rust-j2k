@@ -90,7 +90,10 @@ pub(crate) fn codestream_end(bytes: &[u8]) -> End {
             let isot = u16::from_be_bytes([bytes[at + 4], bytes[at + 5]]);
             return End::OpenLastPart(isot);
         }
-        if psot < MIN_TILE_PART {
+        // A `SOT` segment that runs past its tile-part breaks the chain: the
+        // parser reads it from the box's bytes, as from a raw codestream.
+        let lsot = u16::from_be_bytes([bytes[at + 2], bytes[at + 3]]);
+        if psot < MIN_TILE_PART || 2 + u32::from(lsot) > psot {
             return End::Unknown;
         }
         let Some(end) = usize::try_from(psot)

@@ -31,8 +31,9 @@ use std::collections::hash_map::Entry;
 use super::{
     Cursor, Error, FaultSite, Overrides, ParsedHeader, Restated, Result, both_packed_headers,
     check_first_tile_part, check_poc_budget, check_restatement, count_is_one_short,
-    count_mismatch_message, decode_sot, fault_may_be_cut, marker, part_end, read_part_header,
-    read_tile_part_header, read_u16, segment, sot_at, stated_count, two_counts_message,
+    count_mismatch_message, decode_sot, ends_in_sot, fault_may_be_cut, marker, part_end,
+    read_part_header, read_tile_part_header, read_u16, segment, sot_at, stated_count,
+    two_counts_message,
 };
 
 impl ParsedHeader {
@@ -322,7 +323,7 @@ impl Walk {
 
         loop {
             *undo = None;
-            if !strict && bytes.len().saturating_sub(*part_offset) < 12 {
+            if !strict && ends_in_sot(bytes, *part_offset) {
                 ended_early = true;
                 break;
             }
