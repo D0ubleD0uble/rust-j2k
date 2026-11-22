@@ -258,6 +258,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `IncrementalDecoder::header` holds back a tile refused by a tile cap
+  under the default or a `Raised` sample limit until the input closes, as
+  it holds one refused under `AtMost`. It returned the `Error::Limit` at
+  once, and a later tile-part's fault then replaced it in the whole file,
+  so `header` gave an error the whole file does not. It now gives the
+  header until a codestream's `EOC` is in; a JP2 file never closes, so
+  there `header` gives the header and `finish` reports the refusal.
+  `refine` still waits on it as `Waiting::SampleLimit`.
+  `read_header_with` is unchanged (#649).
 - A `SOT` marker segment whose `Lsot` is not 10 is refused as soon as the
   input holds `Lsot`, with `strict` on and off, with the `Error::Marker`
   the whole segment gives: a length below 2, a body too short for the
