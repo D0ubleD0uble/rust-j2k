@@ -28,10 +28,11 @@
 //! It does not refuse a component with no sample in the image while it
 //! reads `SIZ`, so on those files it reports the structural fault (see "A
 //! tile with no sample of a component" in `docs/openjpeg-departures.md`).
-//! It skips a Part 2 or unknown marker with a warning and keeps reading, so
-//! it reports a refused segment after the marker, such as that `COD`
-//! ("Invalid value for numresolutions : 34"), and otherwise the fault after
-//! it. This decoder differs there (see "An unknown marker in the main
+//! It skips an unknown marker, or a Part 2 marker it does not define, with a
+//! warning and keeps reading, so it reports a refused segment after the
+//! marker, such as that `COD` ("Invalid value for numresolutions : 34"),
+//! and otherwise the fault after it. It reads `MCT` itself, so a bad `MCT`
+//! body is its error. This decoder differs there (see "An unknown marker in the main
 //! header" in `docs/openjpeg-departures.md`).
 
 #[path = "support/synth.rs"]
@@ -389,8 +390,9 @@ fn a_refused_cod_is_judged_when_no_marker_precedes_it() {
 /// A Part 2 or unknown marker, then a `COD` that is refused, then a
 /// structural fault: the fault, not the `COD`'s error. The walk stops
 /// judging at the unread marker, as the segments after it may use values
-/// that the marker's part defines. OpenJPEG skips the marker and refuses
-/// the `COD`.
+/// that the marker's part defines. OpenJPEG skips an unknown
+/// marker and refuses the `COD`; it reads `MCT` itself and refuses this
+/// one's body.
 #[test]
 fn segments_after_an_unread_marker_are_not_judged_before_a_structural_fault() {
     for (marker_name, marker, _) in unread_markers() {

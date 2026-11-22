@@ -267,8 +267,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   2.5.0 also reports a `SIZ` with a zero sub-sampling factor first (#606).
   Segments after a Part 2 or unknown marker are not judged: a refused
   segment there loses to a later structural fault, or to
-  `Error::Unsupported` where the header reaches `SOT`. OpenJPEG reports
-  the refused segment (#636).
+  `Error::Unsupported` where the header reaches `SOT`. After an unknown
+  marker OpenJPEG reports the refused segment (#636).
 - A Part 2 or unknown marker in the main header is refused as
   `Error::Unsupported` only once the input holds the first `SOT` marker.
   A main header cut before then is `Error::Incomplete`, and one whose walk
