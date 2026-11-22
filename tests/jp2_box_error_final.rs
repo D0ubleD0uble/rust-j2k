@@ -35,7 +35,9 @@
 //! options, `strict` on and off.
 //!
 //! A whole box at fault stays final at once, before or after the codestream:
-//! [`a_whole_box_at_fault_is_final`].
+//! [`a_whole_box_at_fault_is_final`]. So does a fault that no byte after it
+//! can change, in a box of length 0 or a refusal of the sRGB step where no
+//! box after the codestream can still be read: [`final_shapes`].
 
 #[path = "support/synth.rs"]
 mod synth;
@@ -163,6 +165,16 @@ fn shapes() -> Vec<(&'static str, Vec<u8>, DecodeOptions)> {
             [&synth::JP2_SIGNATURE[..], &[0, 0, 0, 1], &[0; 12]].concat(),
             DecodeOptions::default(),
         ),
+        (
+            "a jp2h of length 0 with its ihdr last",
+            [
+                &synth::JP2_SIGNATURE[..],
+                &synth::ftyp_jp2(),
+                &open_box(b"jp2h", &[gray(), synth::ihdr_for(&one)].concat()),
+            ]
+            .concat(),
+            DecodeOptions::default(),
+        ),
     ]
 }
 
@@ -234,12 +246,13 @@ waits! {
     a_jp2h_of_length_0_that_ends_at_fault_waits: 7,
     an_ftyp_of_length_0_that_ends_at_fault_waits: 8,
     a_box_whose_xlbox_is_cut_waits: 9,
+    a_jp2h_of_length_0_with_its_ihdr_last_waits: 10,
 }
 
 /// The checks of [`waits!`] on shape `index` of [`shapes`].
 fn check_waits(index: usize) {
     let shapes = shapes();
-    assert_eq!(shapes.len(), 10, "a shape with no test");
+    assert_eq!(shapes.len(), 11, "a shape with no test");
     let (name, bytes, options) = shapes.into_iter().nth(index).expect("a shape");
     let lenient = options.clone().with_strict(false);
     let whole = error_of(&decode_with(&bytes, &lenient));
@@ -337,5 +350,389 @@ fn a_whole_box_at_fault_is_final() {
         for _ in 0..2 {
             assert_eq!(error_of(&decoder.refine()), Some(whole.clone()), "{name}");
         }
+    }
+}
+
+/// A `pclr` payload of one 8-bit column and one entry.
+const PCLR: [u8; 5] = [0, 1, 1, 7, 0];
+
+/// A `cmap` payload that maps component 0 through palette column 0.
+const CMAP: [u8; 4] = [0, 0, 1, 0];
+
+/// A `cdef` payload that makes component 0 the gray channel.
+const CDEF: [u8; 8] = [0, 1, 0, 0, 0, 0, 0, 1];
+
+/// The 3-component file declared CMYK of [`shapes`], which the sRGB step
+/// refuses, with its one tile-part's `Psot` set to `psot` where given, and
+/// `trailing` after the codestream.
+fn cmyk_file(psot: Option<u32>, trailing: &[u8]) -> Vec<u8> {
+    let mut three = codestream(3);
+    if let Some(psot) = psot {
+        let sot = three
+            .windows(2)
+            .position(|w| w == [0xFF, 0x90])
+            .expect("a SOT");
+        three[sot + 6..sot + 10].copy_from_slice(&psot.to_be_bytes());
+    }
+    let mut bytes = synth::jp2_file(
+        &[
+            synth::ihdr_for(&three),
+            synth::bx(b"colr", &synth::colr_enum(12)),
+        ],
+        &[],
+        &three,
+        &[],
+    );
+    bytes.extend(trailing);
+    bytes
+}
+
+/// A shape of [`final_shapes`]: its name, its bytes, the options it is
+/// decoded under, and how many bytes come after those that settle its
+/// error.
+type FinalShape = (&'static str, Vec<u8>, DecodeOptions, usize);
+
+/// Boxes of length 0 after the codestream at fault for their type and the
+/// boxes before them alone (a signature box, an `ftyp`, a second `pclr`,
+/// `cmap` or `cdef`, a `cmap` with no `pclr`), or for a whole child of a
+/// `jp2h` (a `cmap` with no `pclr`, a `colr` too short), each in a gray
+/// file, with how many bytes of it settle the fault were the box read.
+///
+/// Each is held all the same: OpenJPEG skips a box of length 0 there that
+/// runs 2^32 bytes or more, so enough bytes after it take the fault away
+/// ([`a_box_of_length_0_after_the_codestream_past_2_32_bytes_is_skipped`]).
+fn held_after_shapes() -> Vec<FinalShape> {
+    let one = codestream(1);
+    let ihdr = synth::ihdr_for(&one);
+    let pclr = synth::bx(b"pclr", &PCLR);
+    let cmap = synth::bx(b"cmap", &CMAP);
+    let after = |boxes: &[&[u8]]| gray_file(&boxes.concat());
+    let default = DecodeOptions::default;
+    vec![
+        (
+            "a signature box of length 0 after the codestream",
+            after(&[&open_box(b"jP  ", &[0x0D, 0x0A, 0x87, 0x0A])]),
+            default(),
+            4,
+        ),
+        (
+            "an ftyp of length 0 after the codestream",
+            after(&[&open_box(b"ftyp", b"jp2 \0\0\0\0jp2 ")]),
+            default(),
+            12,
+        ),
+        (
+            "a second pclr of length 0 after the codestream",
+            after(&[&pclr, &open_box(b"pclr", &PCLR)]),
+            default(),
+            PCLR.len(),
+        ),
+        (
+            "a second cmap of length 0 after the codestream",
+            after(&[&pclr, &cmap, &open_box(b"cmap", &CMAP)]),
+            default(),
+            CMAP.len(),
+        ),
+        (
+            "a second cdef of length 0 after the codestream",
+            after(&[&synth::bx(b"cdef", &CDEF), &open_box(b"cdef", &CDEF)]),
+            default(),
+            CDEF.len(),
+        ),
+        (
+            "a cmap of length 0 with no pclr after the codestream",
+            after(&[&open_box(b"cmap", &CMAP)]),
+            default(),
+            CMAP.len(),
+        ),
+        (
+            "a jp2h of length 0 after the codestream with a cmap and no pclr",
+            after(&[&open_box(b"jp2h", &[ihdr.clone(), cmap, gray()].concat())]),
+            default(),
+            gray().len(),
+        ),
+        (
+            "a jp2h of length 0 after the codestream with a colr too short",
+            after(&[&open_box(
+                b"jp2h",
+                &[ihdr, synth::bx(b"colr", &[1, 0]), gray()].concat(),
+            )]),
+            default(),
+            gray().len(),
+        ),
+    ]
+}
+
+/// Each of [`held_after_shapes`], whole: `refine` waits on `Held` with the
+/// error `decode_with` gives, and `header` gives the header. With more
+/// bytes, it stays held with the same error.
+#[test]
+fn a_fault_of_a_box_of_length_0_after_the_codestream_waits() {
+    for (name, bytes, options, _) in held_after_shapes() {
+        let lenient = options.clone().with_strict(false);
+        let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+        assert!(whole.starts_with("FileFormat"), "{name}: {whole}");
+        for strict in [false, true] {
+            let mut decoder =
+                IncrementalDecoder::new(options.clone().with_strict(strict)).expect("valid");
+            for piece in [&bytes[..], &[0; 64]] {
+                decoder.feed(piece);
+                assert!(matches!(decoder.header(), Ok(Some(_))), "{name}: header");
+                match decoder.refine() {
+                    Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
+                        assert_eq!(format!("{error:?}"), whole, "{name}");
+                    }
+                    // Too few bytes since the last decode for another.
+                    Ok(Refined::Waiting(Waiting::MoreBytes { .. })) if piece.len() == 64 => {}
+                    other => panic!("{name}, strict {strict}: {other:?}"),
+                }
+            }
+        }
+    }
+}
+
+/// Why [`held_after_shapes`] wait: with 2^32 bytes or more after the
+/// codestream, OpenJPEG skips a box of length 0 there unread, and the file
+/// decodes. The zeros are allocated lazily and only the start is written,
+/// so the test needs little memory.
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn a_box_of_length_0_after_the_codestream_past_2_32_bytes_is_skipped() {
+    let shapes = held_after_shapes();
+    for (name, bytes, options, _) in [&shapes[0], &shapes[2], &shapes[6]] {
+        let mut padded = vec![0u8; bytes.len() + (1 << 32) + 16];
+        padded[..bytes.len()].copy_from_slice(bytes);
+        let lenient = options.clone().with_strict(false);
+        assert!(decode_with(&padded, &lenient).is_ok(), "{name}");
+    }
+}
+
+/// Shapes whose error no byte after the first `len - after` can change:
+///
+/// - a `jp2h` of length 0 before the codestream whose whole `ihdr` is at
+///   fault, or whose child has a length of 4 or 0 or an `XLBox` of 8:
+///   settled by that child (its header, for a length), with a `colr` after
+///   it;
+/// - a refusal of the sRGB step where OpenJPEG reads no box after the
+///   codestream: settled by the `Psot` of 0 of its last tile-part, by the
+///   header of a `jp2c` the walk there stops at, or by the fourth byte of
+///   an `XLBox` of 2^32 there. Each has a `colr` too short after it, which
+///   would be a fault if it were read.
+fn final_shapes() -> Vec<FinalShape> {
+    let short_colr = synth::bx(b"colr", &[1, 0]);
+    let default = DecodeOptions::default;
+    // After the `Psot` of the one tile-part: `TPsot`, `TNsot`, `SOD`, 3
+    // bytes of packets and `EOC`.
+    let past_psot = 2 + 2 + 3 + 2;
+    vec![
+        (
+            "a jp2h of length 0 whose ihdr is at fault",
+            [
+                &synth::JP2_SIGNATURE[..],
+                &synth::ftyp_jp2(),
+                &open_box(
+                    b"jp2h",
+                    &[
+                        synth::bx(b"ihdr", &synth::ihdr_payload(0, 4, 1, [7, 7, 0, 0])),
+                        gray(),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat(),
+            default(),
+            gray().len(),
+        ),
+        (
+            "an sRGB refusal of a last tile-part with Psot 0",
+            cmyk_file(Some(0), &short_colr),
+            srgb(),
+            past_psot + short_colr.len(),
+        ),
+        (
+            "an sRGB refusal, then a jp2c after the codestream",
+            cmyk_file(
+                None,
+                &[synth::bx(b"jp2c", &[]), short_colr.clone()].concat(),
+            ),
+            srgb(),
+            short_colr.len(),
+        ),
+        (
+            "an sRGB refusal, then an XLBox of 2^32 after the codestream",
+            cmyk_file(
+                None,
+                &[
+                    &[0, 0, 0, 1][..],
+                    b"xxxx",
+                    &[0, 0, 0, 1, 0, 0, 0, 0],
+                    &short_colr,
+                ]
+                .concat(),
+            ),
+            srgb(),
+            4 + short_colr.len(),
+        ),
+        (
+            "a jp2h of length 0 with a child of length 4",
+            open_jp2h(&[0, 0, 0, 4, b'x', b'x', b'x', b'x']),
+            default(),
+            gray().len(),
+        ),
+        (
+            "a jp2h of length 0 with a child of length 0",
+            open_jp2h(&[0, 0, 0, 0, b'x', b'x', b'x', b'x']),
+            default(),
+            gray().len(),
+        ),
+        (
+            "a jp2h of length 0 with a child whose XLBox is 8",
+            open_jp2h(&[&[0, 0, 0, 1][..], b"xxxx", &8u64.to_be_bytes()].concat()),
+            default(),
+            gray().len(),
+        ),
+    ]
+}
+
+/// A JP2 file whose `jp2h` has length 0 and holds a matching `ihdr`,
+/// `child`, then a `colr`.
+fn open_jp2h(child: &[u8]) -> Vec<u8> {
+    let ihdr = synth::ihdr_for(&codestream(1));
+    [
+        &synth::JP2_SIGNATURE[..],
+        &synth::ftyp_jp2(),
+        &open_box(b"jp2h", &[&ihdr[..], child, &gray()].concat()),
+    ]
+    .concat()
+}
+
+/// Bytes appended to a file of [`final_shapes`]: none changes its error.
+fn suffixes() -> Vec<Vec<u8>> {
+    vec![
+        vec![0],
+        vec![0; 64],
+        b"jp2 ".to_vec(),
+        gray(),
+        synth::bx(b"colr", &[1, 0]),
+        synth::bx(b"pclr", &PCLR),
+    ]
+}
+
+/// Fed each prefix, a decoder under `strict` on and off gives the error of
+/// a shape of [`final_shapes`] at once: from the prefix that settles it on,
+/// `refine` returns the error `decode_with` gives on the whole file, and
+/// `header` the one `read_header_with` gives on it. Before, neither gives
+/// an error, and `refine` waits on `Held` with the error of the prefix, or
+/// gives what `decode_with` gives on it. The whole file and the file with
+/// any of [`suffixes`] appended give the same errors, and `finish` is
+/// `decode_with` on the prefix.
+macro_rules! final_at_once {
+    ($($test:ident: $index:expr,)*) => {$(
+        #[test]
+        fn $test() {
+            check_final($index);
+        }
+    )*};
+}
+
+final_at_once! {
+    a_whole_ihdr_at_fault_in_a_jp2h_of_length_0_is_final: 0,
+    an_srgb_refusal_with_psot_0_is_final: 1,
+    an_srgb_refusal_before_a_second_jp2c_is_final: 2,
+    an_srgb_refusal_before_an_xlbox_of_2_32_is_final: 3,
+    a_child_of_length_4_in_a_jp2h_of_length_0_is_final: 4,
+    a_child_of_length_0_in_a_jp2h_of_length_0_is_final: 5,
+    a_child_with_xlbox_8_in_a_jp2h_of_length_0_is_final: 6,
+}
+
+/// The checks of [`final_at_once!`] on shape `index` of [`final_shapes`].
+fn check_final(index: usize) {
+    let shapes = final_shapes();
+    assert_eq!(shapes.len(), 7, "a shape with no test");
+    let (name, bytes, options, after) = shapes.into_iter().nth(index).expect("a shape");
+    let settled = bytes.len() - after;
+    let lenient = options.clone().with_strict(false);
+    let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+    assert!(!whole.starts_with("Incomplete"), "{name}: {whole}");
+    let whole_header = error_of(&read_header_with(&bytes, &lenient)).expect("an error");
+    for suffix in suffixes() {
+        let longer = [&bytes[..], &suffix].concat();
+        let at = format!("{name}, then {suffix:?}");
+        assert_eq!(
+            error_of(&decode_with(&longer, &lenient)),
+            Some(whole.clone()),
+            "{at}"
+        );
+        assert_eq!(
+            error_of(&read_header_with(&longer, &lenient)),
+            Some(whole_header.clone()),
+            "{at}"
+        );
+    }
+    for strict in [false, true] {
+        let options = options.clone().with_strict(strict);
+        for len in 1..=bytes.len() {
+            let prefix = &bytes[..len];
+            let at = format!("{name}, strict {strict}, {len} of {} bytes", bytes.len());
+            let one_shot = error_of(&decode_with(prefix, &lenient));
+            let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
+            decoder.feed(prefix);
+            let header = decoder.header();
+            let refined = decoder.refine();
+            if len >= settled {
+                assert_eq!(
+                    error_of(&header),
+                    Some(whole_header.clone()),
+                    "{at}: header"
+                );
+                assert_eq!(error_of(&refined), Some(whole.clone()), "{at}: refine");
+                assert_eq!(one_shot, Some(whole.clone()), "{at}: decode_with");
+            } else {
+                assert!(header.is_ok(), "{at}: header {header:?}");
+                match refined {
+                    Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
+                        assert_eq!(Some(format!("{error:?}")), one_shot, "{at}: wait");
+                    }
+                    Ok(Refined::Waiting(Waiting::HeaderIncomplete { .. })) => {
+                        assert!(one_shot.is_some(), "{at}: no header");
+                    }
+                    Ok(Refined::Image(_)) => assert_eq!(one_shot, None, "{at}: image"),
+                    other => panic!("{at}: {other:?}"),
+                }
+            }
+            check_finish(&decoder, prefix, &options, &at);
+        }
+    }
+}
+
+/// An `ftyp` of length 0 with a brand that is not readable, and no
+/// compatibility code that is, stays held: the bytes after it are more
+/// compatibility codes. A byte more leaves the box out of whole codes, a
+/// `jp2 ` makes the file readable, and each gives another error.
+#[test]
+fn an_unsupported_brand_in_an_ftyp_of_length_0_waits() {
+    let bytes = [
+        &synth::JP2_SIGNATURE[..],
+        &open_box(b"ftyp", b"jpx \0\0\0\0jpx "),
+    ]
+    .concat();
+    let lenient = DecodeOptions::default().with_strict(false);
+    let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+    assert!(whole.starts_with("Unsupported"), "{whole}");
+    for suffix in [&[0u8][..], b"jp2 "] {
+        let longer = error_of(&decode_with(&[&bytes[..], suffix].concat(), &lenient));
+        assert!(
+            longer.as_ref().is_some_and(|e| *e != whole),
+            "{suffix:?}: {longer:?}"
+        );
+    }
+    let mut decoder = IncrementalDecoder::new(lenient).expect("valid options");
+    decoder.feed(&bytes);
+    assert!(matches!(decoder.header(), Ok(None)));
+    match decoder.refine() {
+        Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
+            assert_eq!(format!("{error:?}"), whole);
+        }
+        other => panic!("{other:?}"),
     }
 }

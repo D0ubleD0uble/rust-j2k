@@ -5,6 +5,7 @@
 //! file without it. The other `jp2h` children are kept as raw slices, in file
 //! order, for the code that interprets them.
 
+use super::BoxFault;
 use super::boxes::{Boxes, Jp2Box, type_name};
 use super::metadata::FileType;
 use crate::{Error, Result};
@@ -146,15 +147,16 @@ pub(crate) struct Jp2Header<'a> {
 }
 
 impl<'a> Jp2Header<'a> {
-    /// Read the first `jp2h` box.
-    pub(crate) fn parse(payload: &'a [u8]) -> Result<Self> {
+    /// Read the first `jp2h` box. A fault is open ([`BoxFault::open`]) where
+    /// more bytes at the end of `payload` can change it.
+    pub(crate) fn parse(payload: &'a [u8]) -> core::result::Result<Self, BoxFault> {
         Self::read(payload, None)
     }
 
     /// Read a later `jp2h` box into this header. OpenJPEG merges a second
     /// `jp2h` this way: its `ihdr` is ignored and its other children are
     /// applied, so they are appended here and meet the same checks.
-    pub(crate) fn merge(self, payload: &'a [u8]) -> Result<Self> {
+    pub(crate) fn merge(self, payload: &'a [u8]) -> core::result::Result<Self, BoxFault> {
         Self::read(payload, Some(self))
     }
 
@@ -178,14 +180,24 @@ impl<'a> Jp2Header<'a> {
     /// Walk one `jp2h` box's children. Every `jp2h` box must hold an `ihdr`
     /// of 14 bytes, anywhere among its children (OpenJPEG requires both and
     /// nothing more); only the first `ihdr` of the file is parsed.
-    fn read(payload: &'a [u8], previous: Option<Self>) -> Result<Self> {
+    ///
+    /// The children are read in order and the first fault ends the walk, so
+    /// a fault of a child held whole is final: more bytes at the end of
+    /// `payload` change neither it nor the children before it. A child cut
+    /// short by the end of `payload`, and a missing `ihdr`, which a later
+    /// child may be, are open.
+    fn read(payload: &'a [u8], previous: Option<Self>) -> core::result::Result<Self, BoxFault> {
         let mut known = previous
             .as_ref()
             .map(|header| (header.ihdr, header.ihdr_at));
         let mut has_ihdr = false;
         let mut children = previous.map(|header| header.children).unwrap_or_default();
-        for child in Boxes::children(payload, "the `jp2h` box") {
-            let child = child?;
+        let mut boxes = Boxes::children(payload, "the `jp2h` box");
+        while let Some(child) = boxes.next() {
+            let child = child.map_err(|error| BoxFault {
+                error,
+                open: boxes.cut_short(),
+            })?;
             if &child.kind == b"ihdr" {
                 has_ihdr = true;
                 if known.is_none() {
@@ -201,7 +213,10 @@ impl<'a> Jp2Header<'a> {
                 ihdr_at,
                 children,
             }),
-            _ => Err(Error::file_format("a `jp2h` box has no `ihdr` box")),
+            _ => Err(BoxFault {
+                error: Error::file_format("a `jp2h` box has no `ihdr` box"),
+                open: true,
+            }),
         }
     }
 

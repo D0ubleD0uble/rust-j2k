@@ -70,6 +70,9 @@ pub(crate) struct Boxes<'a> {
     /// Whether the input ended inside that box's `XLBox` field while it can
     /// still be below 16.
     cut_in_length: bool,
+    /// Whether the last error was of `data` ending inside the box: inside
+    /// its header, its `XLBox` or its contents.
+    cut_short: bool,
 }
 
 impl<'a> Boxes<'a> {
@@ -84,6 +87,7 @@ impl<'a> Boxes<'a> {
             last_open_ended: false,
             cut_kind: None,
             cut_in_length: false,
+            cut_short: false,
         }
     }
 
@@ -98,6 +102,7 @@ impl<'a> Boxes<'a> {
             last_open_ended: false,
             cut_kind: None,
             cut_in_length: false,
+            cut_short: false,
         }
     }
 
@@ -125,9 +130,20 @@ impl<'a> Boxes<'a> {
         self.cut_in_length
     }
 
+    /// Whether the last error was of the data ending inside the box being
+    /// read: inside its header, its `XLBox` or its contents. More bytes in
+    /// the parent change such an error. Any other fault is of the box's
+    /// length fields, held whole.
+    pub(crate) fn cut_short(&self) -> bool {
+        self.cut_short
+    }
+
     /// Read the box at `self.pos` and step past it.
     fn read(&mut self) -> Result<Jp2Box<'a>> {
         let rest = self.data.get(self.pos..).unwrap_or_default();
+        // Cleared below at a fault of a length field held whole, and once
+        // the data hold the box.
+        self.cut_short = true;
         let (lbox, kind) = match rest {
             [a, b, c, d, t0, t1, t2, t3, ..] => {
                 (u32::from_be_bytes([*a, *b, *c, *d]), [*t0, *t1, *t2, *t3])
@@ -163,6 +179,7 @@ impl<'a> Boxes<'a> {
         let (length, header): (u64, usize) = match lbox {
             0 if self.open_ended => (rest.len() as u64, 8),
             0 => {
+                self.cut_short = false;
                 return Err(Error::file_format(format!(
                     "box `{name}` in {} has length 0 (to the end of the file), which only the \
                      last box of the file may use",
@@ -186,6 +203,7 @@ impl<'a> Boxes<'a> {
                 match xlbox {
                     0..16 if codestream => (rest.len() as u64, 16),
                     0..16 => {
+                        self.cut_short = false;
                         return Err(Error::file_format(format!(
                             "box `{name}` has `XLBox` {xlbox}, shorter than its 16-byte header"
                         )));
@@ -195,6 +213,7 @@ impl<'a> Boxes<'a> {
             }
             2..=7 if codestream => (rest.len() as u64, 8),
             2..=7 => {
+                self.cut_short = false;
                 return Err(Error::file_format(format!(
                     "box `{name}` has length {lbox}, shorter than its 8-byte header"
                 )));
@@ -222,6 +241,7 @@ impl<'a> Boxes<'a> {
                 self.parent
             )));
         }
+        self.cut_short = false;
         // `length <= rest.len()`, so it fits a usize and the slices below are
         // in bounds; `header <= length` was checked per form above.
         let length = length as usize;
@@ -273,6 +293,10 @@ pub(crate) struct AfterCodestream<'a> {
     /// end of the input, or, with no fault, the last box in `boxes` has
     /// `LBox` 0 and runs to the end.
     pub(crate) open: bool,
+    /// Whether the walk stopped for good on bytes already in, so no byte
+    /// appended to the input reaches it: at a `jp2c`, or at an `XLBox` of
+    /// 2^32 or more.
+    pub(crate) ended: bool,
 }
 
 /// Walk the bytes after the codestream the way OpenJPEG does after decoding
@@ -291,28 +315,42 @@ pub(crate) struct AfterCodestream<'a> {
 pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
     let mut boxes = Vec::new();
     let mut open = false;
+    let mut ended = false;
     let fault = loop {
         let [a, b, c, d, t0, t1, t2, t3, ..] = *rest else {
             break None;
         };
         let lbox = u32::from_be_bytes([a, b, c, d]);
         let kind = [t0, t1, t2, t3];
+        // OpenJPEG reads the length first, but a `jp2c` ends the walk
+        // whatever it is.
+        if &kind == b"jp2c" {
+            ended = true;
+            break None;
+        }
         let (length, header) = match lbox {
-            // OpenJPEG cannot hold a box over 2^32 bytes; nothing that long
-            // fits in memory here either.
+            // OpenJPEG cannot hold a box over 2^32 bytes, and ends its walk
+            // there with no error. So a box of length 0 is read only while
+            // under 2^32 bytes follow, and more bytes can always take its
+            // fault away.
             0 => match u32::try_from(rest.len()) {
                 Ok(length) => (length, 8),
                 Err(_) => break None,
             },
             1 => match rest.get(8..16) {
                 Some(&[0, 0, 0, 0, l0, l1, l2, l3]) => (u32::from_be_bytes([l0, l1, l2, l3]), 16),
-                _ => break None,
+                _ => {
+                    // A nonzero byte in the high half makes `XLBox` 2^32
+                    // or more whatever follows; a cut `XLBox` with none
+                    // may still be read.
+                    ended = rest
+                        .get(8..12.min(rest.len()))
+                        .is_some_and(|high| high.iter().any(|&b| b != 0));
+                    break None;
+                }
             },
             n => (n, 8),
         };
-        if &kind == b"jp2c" {
-            break None;
-        }
         if (length as usize) < header {
             let field = if lbox == 1 { "`XLBox`" } else { "length" };
             break Some(Error::file_format(format!(
@@ -340,5 +378,10 @@ pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
         // the walk ends.
         rest = rest.get(length as usize..).unwrap_or_default();
     };
-    AfterCodestream { boxes, fault, open }
+    AfterCodestream {
+        boxes,
+        fault,
+        open,
+        ended,
+    }
 }
