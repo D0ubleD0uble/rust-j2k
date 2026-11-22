@@ -302,6 +302,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refine that waits does not build the refused tile. Errors of the image and
   the main header stay final at once. `decode_with`, `read_header_with` and
   `finish` are unchanged (#605).
+- With `strict` off, `IncrementalDecoder` no longer takes as final an error
+  of a JP2 file's boxes that more bytes can replace. A box after the
+  codestream that the bytes fed end inside was refused as cut short
+  (`FileFormat`), and a box of length 0, which runs to the end of the
+  input, was judged on the contents so far, before the codestream or after
+  it; a refusal of the sRGB step was
+  final too, though a box still to come after the codestream comes first.
+  `refine` now waits on these as `Waiting::TileError`, and `header` gives
+  the header, or `None` for a box of length 0 before the codestream, until
+  `finish`. A fault in a box the bytes fed hold whole stays final at once.
+  `decode_with`, `read_header_with` and `finish` are unchanged (#642).
 - A tile-part header is read no further than its `Psot`, where the
   tile-part ends inside the input. With `strict` off, input cut inside a
   header that runs past its `Psot` was refused as "truncated marker

@@ -25,7 +25,7 @@ does again on each refine.
   | `BoundSpent { limit, .. }` | The earlier refines spent the code-block bound the refines share, so the refine stopped decoding at a tile, the cut, whose work fits the whole bound. Decode the bytes fed now or start a new decoder. That decode can be refused for work or fail: where the whole bound refuses a later tile, the detail's `refused_at` gives it and its work, and that decode is refused there or fails first in a tile the refine did not decode. |
   | `MissingTiles { limit, .. }` | The charge for missing tiles passed the packet bound. |
   | `RepeatLimit { .. }` | The bound on the walks of tiles not kept is spent (see [Work and memory](#work-and-memory)). |
-  | `TileError { error }` | `decode_with` parses every tile-part, then fails in a tile with `error`: a reduction past the tile's own levels, a tile cap under `AtMost`, a damaged packet header, too many bit-planes. In a JP2 file it can also be a fault of the tile-parts. The input has not closed, and a later tile-part's fault would come before the error in `decode_with`. An image can still follow it, for example where a later tile-part's `POC` changes which packets are read. See [When an error in a tile is final](#when-an-error-in-a-tile-is-final). |
+  | `TileError { error }` | `decode_with` parses every tile-part, then fails in a tile with `error`: a reduction past the tile's own levels, a tile cap under `AtMost`, a damaged packet header, too many bit-planes. In a JP2 file it can also be a fault of the tile-parts, or an error of the boxes that more bytes can replace (see [Errors in a JP2 file's boxes](#errors-in-a-jp2-files-boxes)). The input has not closed, and a later tile-part's fault would come before the error in `decode_with`. An image can still follow it, for example where a later tile-part's `POC` changes which packets are read. See [When an error in a tile is final](#when-an-error-in-a-tile-is-final). |
 
   More bytes can complete the header, the bounds grow with the bytes, and
   the missing tiles shrink, so each of these is a wait, and such a limit is
@@ -172,6 +172,42 @@ as JP2 files with and without a damaged box after the codestream, in every
 two pieces and a byte at a time, and checks that `refine` and `header` each
 go from the main header cut short to images or waits to one error, the
 one-shot call's.
+
+### Errors in a JP2 file's boxes
+
+Some errors of a JP2 file's boxes can also be replaced by more bytes, and
+wait the same way:
+
+- A fault in a box the bytes fed end inside. After the codestream,
+  `decode_with` refuses a box OpenJPEG reads that runs past the end of the
+  input ("box `colr` after the codestream is 15 bytes but only 8 remain"),
+  and more bytes complete it. A box of length 0 runs to the end of the
+  input, so its contents grow with it: a `colr` of length 0 after the
+  codestream is too short on a prefix and whole on the file, and a `jp2h`
+  or `ftyp` of length 0 before the codestream can be at fault on a prefix
+  and whole on a longer one, where the file has no `jp2c`, or whole on a
+  prefix and at fault on a longer one.
+- A refusal of the sRGB step. `decode_with` checks the boxes after the
+  codestream before it plans that step, so a box at fault there, still to
+  come, replaces it.
+
+`refine` waits on these as `Waiting::TileError`, with the error
+`decode_with` gives on the bytes fed, and `finish` reports what the whole
+file gives. `header` gives the header, with the channels as coded where the
+sRGB step is refused, or `None` where the box of length 0 is before the
+codestream, as there is no main header yet. A fault in a box the bytes fed
+hold whole stays final at once, before or after the codestream: the boxes
+before it are whole too, and more bytes change none of them. OpenJPEG
+reports the same errors on the same prefixes (`opj_decompress`, with or
+without `-allow-partial`): "Invalid box size 15 for box 'colr'. Need 7
+bytes, 0 bytes remaining" for the cut `colr`, "Bad COLR header box (bad
+size)" for the short one, and "JP2H box missing" or "Expected a SOC
+marker" where a box of length 0 swallows the rest of the file, and then
+"Error with FTYP signature Box size" once an `ftyp` of length 0 is at
+fault. It does not refuse sRGB output; that
+refusal is this crate's. `tests/jp2_box_error_final.rs` feeds each shape,
+synthetic and from `jp2_real/byte_tlm_plt.jp2`, and checks every prefix
+through `header`, `refine` and `finish` with `strict` on and off.
 
 OpenJPEG takes the first error in the order of the codestream. Under
 `-r 1` it refuses the first tile-part's `COD` whose levels the reduction
