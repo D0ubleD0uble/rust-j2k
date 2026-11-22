@@ -276,7 +276,9 @@ pub(crate) fn over_tile(
                  target can address (at most {most} code-blocks a tile)"
             ),
         )
-        .refused_at(tile, count, unit);
+        // The count past the address space is the code-blocks', not the
+        // precincts' that `kind` names.
+        .refused_at(tile, blocks, crate::AmountUnit::CodeBlocks);
     }
     let other = if blocks_over {
         format!(

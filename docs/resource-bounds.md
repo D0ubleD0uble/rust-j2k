@@ -52,7 +52,8 @@ refused with `Limit` of kind `TileCodeBlocks` or `TilePrecincts`, which
 ([Code-blocks and precincts per tile](#code-blocks-and-precincts-per-tile)).
 Where the sample limit that would admit the tile is past what the target
 can address, the kind is `AddressSpace` instead, with nothing to retry with
-and the same `refused_at`. On a 32-bit target, where that is 2^29 - 1
+and a `refused_at` whose amount and unit are the count that is past the
+address space, the code-blocks or the precincts. On a 32-bit target, where that is 2^29 - 1
 samples, every tile past a cap is refused so.
 
 A few fixed guards also return `Limit`, and no option lifts them: 32 POC
