@@ -156,6 +156,11 @@ pub(crate) struct Jp2File<'a> {
     /// codestream reached, the fault's or the last whole one's (see
     /// [`boxes::AfterCodestream::open`]).
     pub(crate) after_open: bool,
+    /// Whether no byte appended to the input changes what [`after::check`]
+    /// reads: OpenJPEG never reads the boxes after the codestream, as it
+    /// steps to a last tile-part with `Psot = 0`, or its walk there stopped
+    /// for good ([`boxes::AfterCodestream::ended`]).
+    pub(crate) after_settled: bool,
 }
 
 /// A fault of the boxes, and whether more bytes can change it.
@@ -201,8 +206,13 @@ pub(crate) fn parse<'a>(bytes: &'a [u8], packet_work: &WorkLimit) -> Result<Jp2F
 /// 0 before the codestream runs to the end of the input, so the file has no
 /// `jp2c` and fails whatever follows. Where that box is the `ftyp` or a
 /// `jp2h`, whose contents are read, the error is open: more bytes in the box
-/// can bring a fault in it, or take one away and leave "no `jp2c`". Every
-/// other error here is of whole boxes, or of a cut box's type.
+/// can bring a fault in it, or take one away and leave "no `jp2c`". The
+/// exception is a fault of a whole child of such a `jp2h`, as an `ihdr` of
+/// the wrong length, which the children after it cannot change. Every fault
+/// of an `ftyp` of length 0 stays open: more bytes add compatibility codes,
+/// one of which may be `jp2 `, and a byte or three leaves the box out of
+/// whole codes. Every other error here is of whole boxes, or of a cut box's
+/// type.
 pub(crate) fn parse_boxes<'a>(
     bytes: &'a [u8],
     packet_work: &WorkLimit,
@@ -225,7 +235,7 @@ pub(crate) fn parse_boxes<'a>(
             type_name(kind)
         ))
     };
-    // A fault of the box just read: open if it has length 0.
+    // A fault of the `ftyp` box: open if it has length 0.
     let of_box = |boxes: &Boxes<'_>, error: Error| BoxFault {
         error,
         open: boxes.last_was_open_ended(),
@@ -276,7 +286,10 @@ pub(crate) fn parse_boxes<'a>(
                     None => Jp2Header::parse(item.payload),
                     Some(first) => first.merge(item.payload),
                 };
-                header = Some(merged.map_err(|error| of_box(&boxes, error))?);
+                header = Some(merged.map_err(|fault| BoxFault {
+                    open: fault.open && boxes.last_was_open_ended(),
+                    ..fault
+                })?);
             }
             b"jp2c" => {
                 let Some(header) = header else {
@@ -284,7 +297,7 @@ pub(crate) fn parse_boxes<'a>(
                 };
                 color::check_bpcc(&header)?;
                 let color = color::read(&header)?;
-                let (codestream, rest, after_read) =
+                let (codestream, rest, reads) =
                     locate_codestream(bytes, item.payload, boxes.rest(), packet_work);
                 let after = walk_after_codestream(rest);
                 // Both are ends of the file; the shorter starts later.
@@ -302,9 +315,14 @@ pub(crate) fn parse_boxes<'a>(
                     other,
                     after_codestream: after.boxes,
                     after_box,
-                    after_read,
+                    after_read: reads == AfterRead::Yes,
                     after_fault: after.fault,
                     after_open: after.open,
+                    after_settled: match reads {
+                        AfterRead::Yes => after.ended,
+                        AfterRead::Never => true,
+                        AfterRead::NotYet => false,
+                    },
                 });
             }
             _ => {
@@ -365,18 +383,20 @@ fn locate_codestream<'a>(
     payload: &'a [u8],
     rest: &'a [u8],
     packet_work: &WorkLimit,
-) -> (&'a [u8], &'a [u8], bool) {
+) -> (&'a [u8], &'a [u8], AfterRead) {
     // `payload` and `rest` are the end of `file`, back to back.
     let tail = file
         .len()
         .checked_sub(rest.len() + payload.len())
         .and_then(|start| file.get(start..));
     let Some(tail) = tail else {
-        return (payload, rest, false);
+        return (payload, rest, AfterRead::NotYet);
     };
     match after::codestream_end(tail) {
-        End::At(end) => (&tail[..end], &tail[end..], true),
-        End::OpenLastPart(_) if payload.ends_with(&[0xFF, 0xD9]) => (payload, rest, false),
+        End::At(end) => (&tail[..end], &tail[end..], AfterRead::Yes),
+        End::OpenLastPart(_) if payload.ends_with(&[0xFF, 0xD9]) => {
+            (payload, rest, AfterRead::Never)
+        }
         // The codestream parser gives a `Psot = 0` tile-part all but the last
         // two bytes of its slice, the room for an `EOC`, so a slice two bytes
         // past the box ends the tile-part at the box's end. `rest` under two
@@ -385,13 +405,29 @@ fn locate_codestream<'a>(
             if matches!(after::codestream_end(payload), End::OpenLastPart(_)) =>
         {
             match tail.get(..payload.len() + 2) {
-                Some(cut) if packets_end_at(cut, tile, packet_work) => (cut, rest, false),
-                _ => (tail, &[], false),
+                Some(cut) if packets_end_at(cut, tile, packet_work) => {
+                    (cut, rest, AfterRead::Never)
+                }
+                _ => (tail, &[], AfterRead::Never),
             }
         }
-        End::OpenLastPart(_) => (tail, &[], false),
-        End::Unknown => (payload, rest, false),
+        End::OpenLastPart(_) => (tail, &[], AfterRead::Never),
+        End::Unknown => (payload, rest, AfterRead::NotYet),
     }
+}
+
+/// Whether OpenJPEG reads the boxes after the codestream
+/// ([`locate_codestream`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterRead {
+    /// It does: every tile-part has a length, and the last ends at `EOC`.
+    Yes,
+    /// It never does, whatever bytes follow: the codestream steps to a
+    /// tile-part with `Psot = 0`, which runs to the end of the file. The
+    /// tile-parts before it are in, so no later byte moves that step.
+    Never,
+    /// Not on the bytes in: the tile-part chain is cut short or broken.
+    NotYet,
 }
 
 /// The most code-blocks, and the most precincts, [`packets_end_at`] builds the
