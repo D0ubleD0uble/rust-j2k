@@ -1217,8 +1217,9 @@ fn walk_tiles<'a>(
             // the difference reported once the walk ends.
             if strict && u16::from(sot.tile_part_index) >= stated {
                 return Err(Error::codestream(format!(
-                    "tile {index} tile-part {} of a declared {stated} tile-parts",
+                    "tile {index} tile-part {} of a declared {}",
                     sot.tile_part_index,
+                    stated_count(stated, count_correction),
                 )));
             }
             match tile.declared_parts {
@@ -1227,11 +1228,11 @@ fn walk_tiles<'a>(
                     // correction may rest on bytes past this tile-part, so
                     // a prefix that ends before them would give other
                     // counts. Every count stated so far was raised with it.
-                    let shown = if strict { 0 } else { count_correction };
-                    return Err(Error::codestream(format!(
-                        "tile {index} declares {} tile-parts in one `SOT` and {} in another",
-                        stated - shown,
-                        declared - shown,
+                    return Err(Error::codestream(two_counts_message(
+                        index,
+                        stated - count_correction,
+                        declared - count_correction,
+                        strict && count_correction != 0,
                     )));
                 }
                 _ => tile.declared_parts = Some(stated),
@@ -1474,9 +1475,11 @@ fn walk_tiles<'a>(
         if let Some(declared) = tile.declared_parts {
             if usize::from(declared) != tile.parts.len() {
                 if strict {
-                    return Err(Error::codestream(format!(
-                        "tile {index} declares {declared} tile-parts but carries {}",
-                        tile.parts.len()
+                    return Err(Error::codestream(count_mismatch_message(
+                        index,
+                        declared,
+                        count_correction,
+                        tile.parts.len(),
                     )));
                 }
                 // The count the `SOT`s state: every count held includes the
@@ -1529,6 +1532,51 @@ fn walk_tiles<'a>(
         });
     }
     Ok(found)
+}
+
+/// A tile's count of tile-parts, for an error that names the count a `SOT`
+/// states. `held` is the count the walk holds the tile to: the stated count
+/// plus `correction`, which is 1 once the `TPsot == TNsot` correction is on
+/// (see [`count_is_one_short`]). When the correction applies the text says
+/// so, as `ReportEntry::TilePartCountMismatch` does.
+pub(super) fn stated_count(held: u16, correction: u16) -> String {
+    let stated = held - correction;
+    if correction == 0 {
+        format!("{stated} tile-parts")
+    } else {
+        format!("{stated} tile-parts, {held} with the `TPsot == TNsot` correction")
+    }
+}
+
+/// The error for a tile that carries `carried` tile-parts against a count
+/// of `held` (the stated count plus `correction`).
+fn count_mismatch_message(index: usize, held: u16, correction: u16, carried: usize) -> String {
+    let comma = if correction == 0 { "" } else { "," };
+    format!(
+        "tile {index} declares {}{comma} but carries {carried}",
+        stated_count(held, correction)
+    )
+}
+
+/// The error for a tile whose `SOT`s state two counts, `later` and `earlier`.
+/// `corrected` adds that the correction holds the tile to one more of each,
+/// which the text may say only when the whole input is in hand (`strict` on).
+pub(super) fn two_counts_message(
+    index: usize,
+    later: u16,
+    earlier: u16,
+    corrected: bool,
+) -> String {
+    let mut text =
+        format!("tile {index} declares {later} tile-parts in one `SOT` and {earlier} in another");
+    if corrected {
+        text.push_str(&format!(
+            ", {} and {} with the `TPsot == TNsot` correction",
+            u32::from(later) + 1,
+            u32::from(earlier) + 1
+        ));
+    }
+    text
 }
 
 /// Whether the tile-part chain from `from` holds another part of tile `tile`

@@ -267,7 +267,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   another" gives the counts the two `SOT`s state. It gave them raised by
   one where the `TPsot == TNsot` correction applies, which can rest on
   bytes past the tile-part at fault, so the counts changed as a prefix
-  grew. With `strict` on the message is unchanged (#598).
+  grew. With `strict` on it gives the same counts and then says the raised
+  ones ("tile 0 declares 1 tile-parts in one `SOT` and 3 in another, 2 and
+  4 with the `TPsot == TNsot` correction"). The other two count errors,
+  "tile T tile-part P of a declared N tile-parts" and "tile T declares N
+  tile-parts but carries M", name the stated count too, and add the held
+  count where the correction applies (#598, #626).
 - A tile narrower than a component's `XRsiz` or shorter than its `YRsiz`,
   which holds no sample of that component, decodes as the standard
   defines it: the tile-component has no precinct and no packet, and adds

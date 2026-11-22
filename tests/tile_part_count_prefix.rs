@@ -209,18 +209,22 @@ fn a_tile_held_to_the_corrected_count_reports_the_stated_one() {
     assert_eq!(counts(&image.report.entries), [(1, 3, 2, false)]);
 }
 
-/// With `strict` on, both files are refused, the first with the corrected
-/// count.
+/// With `strict` on, both files are refused, with the count the `SOT`s state
+/// and, for the first, the count the correction holds the tile to.
 #[test]
-fn strict_refuses_with_the_count_held_to() {
-    for (bytes, count) in [(corrected_file(), 3), (uncorrected_file(), 3)] {
+fn strict_refuses_with_the_stated_count() {
+    for (bytes, text) in [
+        (
+            corrected_file(),
+            "tile 1 declares 2 tile-parts, 3 with the `TPsot == TNsot` correction, but carries 2",
+        ),
+        (
+            uncorrected_file(),
+            "tile 1 declares 3 tile-parts but carries 2",
+        ),
+    ] {
         let error = decode_with(&bytes, &options(true)).unwrap_err();
         assert!(matches!(error, Error::Codestream(_)), "{error:?}");
-        assert!(
-            error
-                .to_string()
-                .ends_with(&format!("tile 1 declares {count} tile-parts but carries 2")),
-            "{error}"
-        );
+        assert!(error.to_string().ends_with(text), "{error}");
     }
 }
