@@ -12,6 +12,11 @@
 //!   that ends before the fault is cut short (`Incomplete`). A Part 2 or
 //!   unknown marker in a header that reaches `SOT` is `Unsupported`, from
 //!   the prefix that holds the first `SOT` marker on.
+//! - The segments after a Part 2 or unknown marker are not judged: they may
+//!   use values that the marker's part defines. A `COD` with 33 levels
+//!   there gives the structural fault after it, or the marker's
+//!   `Unsupported` where the header reaches `SOT`, not the `COD`'s error.
+//!   Without the marker the `COD`'s error is given.
 //!
 //! Each is checked by `read_header_with`, `decode_with`,
 //! `IncrementalDecoder::header` and `IncrementalDecoder::refine`, with
@@ -23,8 +28,11 @@
 //! It does not refuse a component with no sample in the image while it
 //! reads `SIZ`, so on those files it reports the structural fault (see "A
 //! tile with no sample of a component" in `docs/openjpeg-departures.md`).
-//! It skips a Part 2 or unknown marker with a warning, and so reports the
-//! fault after it.
+//! It skips a Part 2 or unknown marker with a warning and keeps reading, so
+//! it reports a refused segment after the marker, such as that `COD`
+//! ("Invalid value for numresolutions : 34"), and otherwise the fault after
+//! it. This decoder differs there (see "An unknown marker in the main
+//! header" in `docs/openjpeg-departures.md`).
 
 #[path = "support/synth.rs"]
 mod synth;
@@ -342,5 +350,68 @@ fn a_refused_siz_beats_the_segment_cap() {
     for strict in [true, false] {
         assert_eq!(keyed(read_header_with(&bytes, &options(strict))), want);
         assert_eq!(keyed(decode_with(&bytes, &options(strict))), want);
+    }
+}
+
+/// A `COD` with 33 decomposition levels, which A.6.1 does not allow (the
+/// most is 32), and a `QCD` after it.
+fn bad_cod_and_qcd() -> Vec<u8> {
+    [
+        seg(0xFF52, &cod_body(1, 33, 4, 0)),
+        seg(0xFF5C, &qcd_none_body(2, &[8, 8])),
+    ]
+    .concat()
+}
+
+/// The offset where `then` starts in `codestream(siz, false, then)`.
+fn then_start(siz: &[u8]) -> usize {
+    2 + seg(0xFF51, siz).len()
+}
+
+const BAD_COD: &str = "Marker(\"`COD` sets reserved decomposition level count 33 (max 32)\")";
+
+/// Without an unread marker the `COD` with 33 levels is the error, on the
+/// whole file and on every prefix that holds it, with a structural fault or
+/// `SOT` after it. This is the control for the two tests below.
+#[test]
+fn a_refused_cod_is_judged_when_no_marker_precedes_it() {
+    let cod = bad_cod_and_qcd();
+    let start = then_start(&siz_valid());
+    let cod_end = start + seg(0xFF52, &cod_body(1, 33, 4, 0)).len();
+    for (fault_name, fault, _) in faults() {
+        let (bytes, _, _) = codestream(&siz_valid(), false, &[cod.clone(), fault].concat());
+        check_both(fault_name, &bytes, start, cod_end, BAD_COD);
+    }
+    let (bytes, _, _) = codestream(&siz_valid(), false, &cod);
+    check_both("reaching SOT", &bytes, start, cod_end, BAD_COD);
+}
+
+/// A Part 2 or unknown marker, then a `COD` that is refused, then a
+/// structural fault: the fault, not the `COD`'s error. The walk stops
+/// judging at the unread marker, as the segments after it may use values
+/// that the marker's part defines. OpenJPEG skips the marker and refuses
+/// the `COD`.
+#[test]
+fn segments_after_an_unread_marker_are_not_judged_before_a_structural_fault() {
+    for (marker_name, marker, _) in unread_markers() {
+        for (fault_name, fault, want) in faults() {
+            let name = format!("{marker_name}, bad COD, {fault_name}");
+            let then = [marker.clone(), bad_cod_and_qcd(), fault].concat();
+            let (bytes, siz_end, fault_end) = codestream(&siz_valid(), false, &then);
+            check_both(&name, &bytes, siz_end, fault_end, want);
+        }
+    }
+}
+
+/// The same where the header reaches `SOT`: `Unsupported` for the marker,
+/// from the prefix that holds the first `SOT` marker on, not the `COD`'s
+/// error.
+#[test]
+fn segments_after_an_unread_marker_are_not_judged_when_the_header_reaches_sot() {
+    for (marker_name, marker, want) in unread_markers() {
+        let name = format!("{marker_name}, bad COD");
+        let then = [marker, bad_cod_and_qcd()].concat();
+        let (bytes, siz_end, then_end) = codestream(&siz_valid(), false, &then);
+        check_both(&name, &bytes, siz_end, then_end + 2, want);
     }
 }
