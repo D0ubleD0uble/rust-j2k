@@ -1235,7 +1235,10 @@ struct Jp2Prefix<'a> {
 ///   [`Jp2Prefix::held`].
 /// - A refusal of the sRGB step. It comes after the header boxes after the
 ///   codestream, and a box yet to come there can be at fault, which comes
-///   first.
+///   first. It is final where OpenJPEG reads no box there whatever follows
+///   ([`jp2::Jp2File::after_settled`]): a last tile-part with `Psot = 0`,
+///   or a walk after the codestream stopped by a `jp2c` or an `XLBox` of
+///   2^32 or more.
 ///
 /// The faults before these, and those of whole boxes, are final, as more
 /// bytes change neither the boxes they are in nor the ones before them.
@@ -1317,8 +1320,9 @@ fn read_jp2_prefix<'a>(
                     Some(plan)
                 }
                 // Only the first error is held: it is the one the decode
-                // gives.
-                Err(error) if streamed => {
+                // gives. With no box after the codestream left to read,
+                // none can come first.
+                Err(error) if streamed && (held.is_some() || !file.after_settled) => {
                     held.get_or_insert(error);
                     None
                 }

@@ -156,7 +156,8 @@ until the input closes too, as a later fault replaces it as well; once a
 codestream closes, `header` gives it, and more bytes may still lift it. An error of the image (its samples, or a
 reduction past the main header's levels) or of the main header depends on
 no tile-part, so it stays final at once, except a refusal of the sRGB step
-in a JP2 file, which waits. In a codestream, so does a fault
+in a JP2 file, which waits while a box after the codestream can still be
+read. In a codestream, so does a fault
 of a tile-part. In a JP2 file every error from the tile-parts on, a fault
 of a tile-part included, waits as `Waiting::Held` until `finish`, as
 a damaged box after the codestream comes before it.
@@ -196,6 +197,24 @@ wait the same way:
 - A refusal of the sRGB step. `decode_with` checks the boxes after the
   codestream before it plans that step, so a box at fault there, still to
   come, replaces it.
+
+Some of these are final all the same, and are given at once:
+
+- A fault of a whole child of a `jp2h` of length 0 before the codestream,
+  such as an `ihdr` that declares a height of 0, or a child whose length
+  is shorter than its header. The children are read in order, so the
+  ones after it come too late.
+- A refusal of the sRGB step where OpenJPEG reads no box after the
+  codestream, whatever follows: its last tile-part has `Psot` 0, so it
+  runs to the end of the file, or the walk after it stops at a `jp2c` or
+  at an `XLBox` of 2^32 or more.
+
+An unsupported brand in an `ftyp` of length 0 is not final: more bytes
+add compatibility codes, and `jp2 ` among them makes the file readable,
+while a byte or three leaves the box out of whole codes. Nor is any fault
+of a box of length 0 after the codestream, even one judged on its type
+(a second `pclr`): OpenJPEG skips such a box unread once 2^32 bytes or
+more follow it, and the file then decodes.
 
 `refine` waits on these as `Waiting::Held`, with the error
 `decode_with` gives on the bytes fed, and `finish` reports what the whole

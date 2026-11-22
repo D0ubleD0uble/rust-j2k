@@ -14,7 +14,9 @@
 //! back while the input has not closed (`tests/support/held.rs`; a JP2 file
 //! never closes): it gives the header where that read gives the error, or,
 //! in a JP2 file whose box of length 0 before the codestream is at fault,
-//! `None`.
+//! `None`. In a JP2 file each needs a suffix that changes what that read
+//! gives ([`replaceable`]), but for the header on a refusal of the sRGB
+//! step.
 //!
 //! Layout: 12 control bytes, then the file.
 //!
@@ -137,44 +139,6 @@ fn codestream_start(bytes: &[u8]) -> Option<usize> {
     }
 }
 
-/// Where the top-level boxes of the JP2 file `bytes` end, before any
-/// `jp2c`, in a box of length 0, which runs to the end of the input: the
-/// offset of that box. `header()` gives `None` on every fault there, as
-/// more bytes grow the box, though a fault of a part of it held whole is
-/// final; that wait is allowed, not required, where the boxes before it
-/// leave `read_header_with` incomplete ([`check`]).
-fn open_box_at(bytes: &[u8]) -> Option<usize> {
-    let mut at = 12usize;
-    while let (Some(lbox), Some(kind)) = (u32_at(bytes, at), bytes.get(at + 4..at + 8)) {
-        if kind == b"jp2c" {
-            return None;
-        }
-        let length = match lbox {
-            0 => return Some(at),
-            1 => match u32_at(bytes, at + 12) {
-                Some(length) if length >= 16 => length,
-                _ => return None,
-            },
-            n if n >= 8 => n,
-            _ => return None,
-        };
-        at = at.checked_add(length)?;
-    }
-    None
-}
-
-/// Whether `prefix` ends inside a box of length 0 before the codestream
-/// ([`open_box_at`]), and the boxes before it, read alone, leave
-/// `read_header_with` incomplete: a fault there is not in an earlier box.
-fn open_box_waits(prefix: &[u8], lenient: &DecodeOptions) -> bool {
-    open_box_at(prefix).is_some_and(|at| {
-        matches!(
-            checked(read_header_with(&prefix[..at], lenient)),
-            Err(Error::Incomplete(_))
-        )
-    })
-}
-
 /// `prefix`, a JP2 file cut inside or just after its codestream's
 /// tile-parts, with zeros to the end of the tile-part the input ends
 /// inside, an `EOC`, then [`SHORT_COLR`]: an input on which the decode
@@ -235,9 +199,10 @@ fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
 /// the [`oracle`], allowing an error held back where more bytes can replace
 /// it: in a codestream, while its tile-parts have not closed; in a JP2
 /// file, where a suffix changes what `read_header_with` gives, or, for a
-/// refusal of the sRGB step, as the header with the channels as coded,
-/// or, inside a box of length 0 before the codestream, as `None`
-/// ([`open_box_waits`]).
+/// refusal of the sRGB step, as the header with the channels as coded. A
+/// JP2 file's `None` for an error needs such a suffix too: a fault in a
+/// box of length 0 before the codestream that more bytes do not change,
+/// such as one of a whole child of a `jp2h`, is final.
 fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOptions, at: &str) {
     let want = oracle(prefix, options);
     if format!("{got:?}") == want {
@@ -270,7 +235,7 @@ fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOpt
         };
     match got {
         Ok(Some(_)) if held => {}
-        Ok(None) if (held || refused && open_box_waits(prefix, &lenient)) && !codestream => {}
+        Ok(None) if held && !codestream => {}
         _ => panic!("{at}: {got:?}, where read_header_with gives {want}"),
     }
 }

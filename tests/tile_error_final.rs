@@ -689,30 +689,62 @@ fn a_poc_in_a_later_tile_part_can_clear_an_error_in_a_tile() {
 /// here, each with its six control bytes where the options are not the
 /// defaults (`20`, a reduction of 1). A seed that starts with `SOC` or the
 /// JP2 signature is read with all-zero control bytes.
+///
+/// The target decodes only on a refine due under the doubling rule, so a
+/// seed fails a refine that does not wait only where one is due between
+/// the tile's error and the fault after it. A comment of [`PADDING`] bytes
+/// before the fault (a `COM` in the later tile-part, or a `free` box after
+/// the codestream) puts it at more than three times the bytes before the
+/// error, where some refine is due whatever the pieces.
 fn seeds() -> Vec<(&'static str, Vec<u8>)> {
     let with_control = |control: u8, file: Vec<u8>| [vec![control, 0, 0, 0, 0, 0], file].concat();
+    let com = |later: Vec<u8>| {
+        let mut body = vec![0, 1];
+        body.resize(PADDING, b' ');
+        [synth::seg(0xFF64, &body), later].concat()
+    };
     vec![
         (
             "tile_error_reduction_then_cod.seed",
-            with_control(0x20, reduction_one_tile(&cod_one_level())),
+            with_control(0x20, reduction_one_tile(&com(cod_one_level()))),
         ),
         (
             "tile_error_lblock_then_coc.seed",
-            packet_one_tile(8, &lblock_packet(), &coc_past_the_components()),
+            packet_one_tile(8, &lblock_packet(), &com(coc_past_the_components())),
         ),
         (
             "tile_error_lblock_then_cod.seed",
-            packet_one_tile(8, &lblock_packet(), &cod_one_level()),
+            packet_one_tile(8, &lblock_packet(), &com(cod_one_level())),
         ),
         (
             "tile_error_lblock_jp2_then_colr.seed",
             in_jp2(
                 &packet_one_tile(8, &lblock_packet(), &[]),
-                &[synth::bx(b"colr", &[1, 0])],
+                &[
+                    synth::bx(b"free", &vec![0; PADDING]),
+                    synth::bx(b"colr", &[1, 0]),
+                ],
+            ),
+        ),
+        // Not a tile's error: a box after the codestream that the input
+        // ends inside, which a refine waits on until it is whole
+        // (`tests/jp2_box_error_final.rs`). The header's `colr` was read,
+        // so OpenJPEG ignores this one's contents, and the file decodes.
+        (
+            "held_box_cut_colr_jp2.seed",
+            in_jp2(
+                &packet_one_tile(8, &[0], &[]),
+                &[synth::bx(
+                    b"colr",
+                    &[synth::colr_enum(17), vec![0; PADDING]].concat(),
+                )],
             ),
         ),
     ]
 }
+
+/// The bytes of the comment [`seeds`] puts before the fault.
+const PADDING: usize = 512;
 
 /// The committed seeds under `tests/fixtures/incremental` are the ones
 /// [`seeds`] builds. `J2K_BLESS_TILE_ERROR_SEEDS=1` writes them.
