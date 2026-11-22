@@ -1491,7 +1491,8 @@ stops on a structural fault first (a length below 2, a byte that is not a
 marker, `SOC`, `SOD` or `EOC`, or more than 65536 marker segments), the
 code was most likely damage, such as a damaged first `SOT`, and that fault is reported as `Codestream` or `Marker`
 (`tests/main_header_fault_order.rs`). OpenJPEG skips the code there too, and
-reports the fault after it or decodes on.
+reports the first fault after it (a bad segment or a structural fault) or
+decodes on.
 
 Repro: add `FF7F 0002` (an unassigned code, length 2, no body) before the
 `COD` of `tests/fixtures/multicomponent_lossless.j2k`. `opj_decompress`
@@ -1506,6 +1507,17 @@ Repro: add `FF7F 0002` (an unassigned code, length 2, no body) before the
 and writes an image byte-identical to the one it writes for the unedited file.
 This decoder returns `Unsupported`: "unrecognized marker 0xFF7F in the main
 header".
+
+This decoder does not judge the marker segments after the unread marker.
+They may use values that the marker's part defines, so Part 1 rules could
+refuse a valid Part 2 file with the wrong error. A segment there that Part 1
+refuses, such as a `COD` with 33 decomposition levels, loses to a later
+structural fault, or to the `Unsupported` refusal where the header reaches
+`SOT`. After an unknown marker OpenJPEG judges it: it warns "Unknown marker", then fails with
+"Invalid value for numresolutions : 34, max value is set in openjpeg.h at 33"
+and "Error reading COD marker". The file is refused either way; only the
+error differs (`tests/main_header_fault_order.rs`). OpenJPEG reads `MCT` itself, so
+after one it reports that marker's own error first, if its body is bad.
 
 The Part 2 markers OpenJPEG does not define (`DCO`, `VMS`, `DFS`, `ADS`,
 `NLT`, `ATK`; codes in ITU-T T.801, Table A.19) get the same outcome from
