@@ -1469,13 +1469,20 @@ in `j2k.h`. It reads those four (`j2k.c:1426-1431`), and skips the other six (`D
 | OpenJPEG 2.5.0 | warns "Unknown marker", skips the segment and decodes |
 | Standard | A marker code belongs to some part of the standard; Part 1 does not say how to read one a decoder does not know |
 | Rule | 3 (an error over a wrong image) |
-| Tests and fixtures | `an_unknown_marker_in_the_main_header_is_unsupported` (`tests/openjpeg_departures_579.rs`); `unknown_marker_segments_are_walked_then_reported_unsupported` and the reject matrix (`src/codestream/tests.rs`) |
+| Tests and fixtures | `an_unknown_marker_in_the_main_header_is_unsupported` (`tests/openjpeg_departures_579.rs`); `unknown_marker_segments_are_walked_then_reported_unsupported` and the reject matrix (`src/codestream/tests.rs`); `tests/main_header_fault_order.rs` |
 | Decided | the refusal began in #84 (5ed9748); no decision recorded; entry added in #579 |
 
 A marker this decoder does not know may change what the packet data means, as
 `NLT` does, and the walk cannot tell. So it refuses, where OpenJPEG skips it
 by its length. Reserved segment-less markers
 (0xFF30 to 0xFF3F) are skipped in the main header, as A.1.3 says.
+
+The refusal waits for the main header to reach its first `SOT`. If the walk
+stops on a structural fault first (a length below 2, a byte that is not a
+marker, `SOC`, `SOD` or `EOC`), the code was most likely damage, such as a
+damaged first `SOT`, and that fault is reported as `Codestream` or `Marker`
+(`tests/main_header_fault_order.rs`). OpenJPEG skips the code there too, and
+reports the fault after it or decodes on.
 
 Repro: add `FF7F 0002` (an unassigned code, length 2, no body) before the
 `COD` of `tests/fixtures/multicomponent_lossless.j2k`. `opj_decompress`

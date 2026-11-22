@@ -2345,6 +2345,10 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     // per-tile-part chunks after the walk by `decode_ppm_chunks`.
     let mut ppm: Vec<(u8, Vec<u8>)> = Vec::new();
 
+    // A marker this decoder does not read, held until the walk is known to
+    // have reached `SOT`: see below.
+    let mut unsupported = None;
+
     for seg in &segments[1..] {
         let body = || Cursor::new(seg.body);
         if overrides.read(seg.code, || Ok(body()))? {
@@ -2433,10 +2437,11 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // multiple-component transforms, non-linearity, extra bit depths —
             // rather than reading as a bare unknown code.
             code if marker::PART2.contains(&code) => {
-                return Err(Error::unsupported(format!(
+                unsupported = Some(Error::unsupported(format!(
                     "{} is a JPEG 2000 Part 2 marker, outside the Part 1 subset",
                     marker::describe(seg.code)
                 )));
+                break;
             }
 
             // The reserved segment-less range is *defined* to carry nothing, so
@@ -2450,11 +2455,24 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // the packet data means. Guessing that it is ignorable would trade
             // a clean rejection for a silently wrong image.
             other => {
-                return Err(Error::unsupported(format!(
+                unsupported = Some(Error::unsupported(format!(
                     "unrecognized marker {other:#06X} in the main header"
                 )));
+                break;
             }
         }
+    }
+
+    // A Part 2 or unknown marker is refused only once the walk reaches the
+    // first `SOT`. Before that the header may still be cut (and the next
+    // bytes may show it damaged), and a walk that stops on a structural
+    // fault has likely lost sync, so the code was damage, not a marker: a
+    // damaged first `SOT` is stepped over as an unknown marker and the walk
+    // stops at the `SOD` after it. The tile-part header calls such a code
+    // lost sync the same way (`lost_sync`).
+    if let Some(error) = unsupported {
+        end?;
+        return Err(error);
     }
 
     // Every segment the input holds is valid. What is left needs the whole
