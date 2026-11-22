@@ -150,6 +150,7 @@ fn assert_read_as_cut(name: &str, bytes: &[u8]) {
                 tile: 8,
                 declared: 3,
                 found: 2,
+                corrected: false,
                 ..
             }
         )),

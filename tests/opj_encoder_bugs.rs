@@ -97,21 +97,34 @@ fn more_than_255_tile_parts_are_refused_in_both_modes() {
 
 /// The first 256 tile-parts and `EOC`, so `TPsot` does not wrap. Strict
 /// refuses at the 18th part, past the declared count. With strict off the
-/// count (17) is advisory: the parts are read, and the mismatch is reported
-/// beside the packets the missing 16 parts leave out.
+/// count (16 stated, 17 with the correction) is advisory: the parts are read,
+/// and the mismatch is reported beside the packets the missing 16 parts leave
+/// out.
 #[test]
 fn the_declared_count_is_advisory_with_strict_off() {
     let prefix = first_tile_parts(&read("tp_over255.j2k"), 256);
     let image = decode_with(&prefix, &DecodeOptions::default().with_strict(false)).unwrap();
-    assert!(image.report.entries.iter().any(|e| matches!(
-        e,
+    let entry = image
+        .report
+        .entries
+        .iter()
+        .find(|e| matches!(e, ReportEntry::TilePartCountMismatch { .. }))
+        .expect("a count mismatch");
+    assert!(matches!(
+        entry,
         ReportEntry::TilePartCountMismatch {
             tile: 0,
-            declared: 17,
+            declared: 16,
             found: 256,
+            corrected: true,
             ..
         }
-    )));
+    ));
+    assert_eq!(
+        entry.to_string(),
+        "tile 0 declares 16 tile-part(s), 17 with the `TPsot == TNsot` correction, and 256 \
+         were found"
+    );
 }
 
 /// Where strict refuses on the declared count. Every prefix lacks the packets
