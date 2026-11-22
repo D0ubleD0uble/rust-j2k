@@ -1478,13 +1478,20 @@ in `j2k.h`. It reads those four (`j2k.c:1426-1431`), and skips the other six (`D
 | OpenJPEG 2.5.0 | warns "Unknown marker", skips the segment and decodes |
 | Standard | A marker code belongs to some part of the standard; Part 1 does not say how to read one a decoder does not know |
 | Rule | 3 (an error over a wrong image) |
-| Tests and fixtures | `an_unknown_marker_in_the_main_header_is_unsupported` (`tests/openjpeg_departures_579.rs`); `unknown_marker_segments_are_walked_then_reported_unsupported` and the reject matrix (`src/codestream/tests.rs`) |
+| Tests and fixtures | `an_unknown_marker_in_the_main_header_is_unsupported` (`tests/openjpeg_departures_579.rs`); `unknown_marker_segments_are_walked_then_reported_unsupported` and the reject matrix (`src/codestream/tests.rs`); `tests/main_header_fault_order.rs` |
 | Decided | the refusal began in #84 (5ed9748); no decision recorded; entry added in #579 |
 
 A marker this decoder does not know may change what the packet data means, as
 `NLT` does, and the walk cannot tell. So it refuses, where OpenJPEG skips it
 by its length. Reserved segment-less markers
 (0xFF30 to 0xFF3F) are skipped in the main header, as A.1.3 says.
+
+The refusal waits for the main header to reach its first `SOT`. If the walk
+stops on a structural fault first (a length below 2, a byte that is not a
+marker, `SOC`, `SOD` or `EOC`, or more than 65536 marker segments), the
+code was most likely damage, such as a damaged first `SOT`, and that fault is reported as `Codestream` or `Marker`
+(`tests/main_header_fault_order.rs`). OpenJPEG skips the code there too, and
+reports the fault after it or decodes on.
 
 Repro: add `FF7F 0002` (an unassigned code, length 2, no body) before the
 `COD` of `tests/fixtures/multicomponent_lossless.j2k`. `opj_decompress`
@@ -1531,7 +1538,7 @@ with `YTsiz` patched to the image height.
 | OpenJPEG 2.5.0 | decodes some such files to the same image; fails others ("failed to decode image"). On random small subsampled grids it failed 153 of 184 whole decodes (2.5.0) |
 | Standard | Eq. B-12 gives `tcx0 == tcx1` or `tcy0 == tcy1`; B-15 and B.6 give such a tile-component no precinct, so no packet |
 | Rule | 1 |
-| Tests and fixtures | `tests/empty_tile_component.rs`; `tests/fixtures/empty_tile_component/opjfail_l1_lrcp.j2k`, `probe_none_l1.j2k` |
+| Tests and fixtures | `tests/empty_tile_component.rs`, `tests/main_header_fault_order.rs`; `tests/fixtures/empty_tile_component/opjfail_l1_lrcp.j2k`, `probe_none_l1.j2k` |
 | Decided | #595, 2026-11-21 |
 
 A tile narrower than a component's `XRsiz` or shorter than its `YRsiz` can
@@ -1555,7 +1562,11 @@ file, its image is this decoder's, bit for bit (the files are lossless,
   under `opj_decompress -t 0` to this decoder's image.
 
 A component with no sample in the whole image is refused with `SIZ`
-(`Error::Marker`), as OpenJPEG fails to decode it.
+(`Error::Marker`), as OpenJPEG fails to decode it. OpenJPEG finds this only
+once it decodes, so where a structural fault follows `SIZ` in the main header
+(a length below 2, a byte that is not a marker) OpenJPEG reports that fault,
+while this decoder reports the `SIZ`, as it does for every prefix that holds
+the `SIZ` (`tests/main_header_fault_order.rs`).
 
 A resolution reduction that leaves a component with no sample in the
 image is an older, separate case: this decoder returns the component 0

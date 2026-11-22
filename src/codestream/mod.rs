@@ -2242,14 +2242,21 @@ const MAX_MAIN_HEADER_SEGMENTS: usize = 1 << 16;
 ///   question, and `parse_main_header` answers it with `Unsupported`.
 ///
 /// Returns the segments in codestream order and the offset of the `SOT` that
-/// ended the header. When the input ends after `SOC` and before the first
-/// `SOT` marker is whole, the offset is [`Error::Incomplete`] instead and the
-/// segments are those the input holds in full, so the caller can judge them
-/// before it reports the cut: the walk reads only marker codes and lengths
-/// here, so running out of input means the input was cut short (or a length
-/// was damaged to reach past it, which looks the same). A non-marker where a
-/// marker must be and `SOD`/`EOC` before any tile-part are
-/// [`Error::Codestream`]; a length below 2 is [`Error::Marker`].
+/// ended the header. When the walk stops before that `SOT`, the offset is
+/// the error that stopped it instead, and the segments are those located
+/// before it, so the caller can judge them first and a damaged segment is
+/// reported on every prefix that holds it, as in the whole file:
+///
+/// - [`Error::Incomplete`] when the input ends after `SOC` and before the
+///   first `SOT` marker is whole. The walk reads only marker codes and
+///   lengths here, so running out of input means the input was cut short (or
+///   a length was damaged to reach past it, which looks the same);
+/// - [`Error::Codestream`] for a non-marker where a marker must be, `SOC`,
+///   `SOD` or `EOC` before any tile-part, and more than
+///   [`MAX_MAIN_HEADER_SEGMENTS`] segments;
+/// - [`Error::Marker`] for a length below 2.
+///
+/// Only input that is not, or not yet, `SOC` is an error of the walk itself.
 fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
     let mut cur = Cursor::at(bytes, 0);
 
@@ -2275,13 +2282,13 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
             // A second SOC, or a delimiter that belongs to a tile-part, means
             // the header is malformed rather than merely unfamiliar.
             marker::SOC | marker::SOD | marker::EOC => {
-                return Err(Error::codestream(format!(
+                break Err(Error::codestream(format!(
                     "unexpected marker {code:#06X} before any tile-part"
                 )));
             }
 
             _ if !marker::is_marker(code) => {
-                return Err(Error::codestream(format!(
+                break Err(Error::codestream(format!(
                     "expected a marker in the main header, found {code:#06X}"
                 )));
             }
@@ -2293,14 +2300,15 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
                 // conformant main header comes close, and the cap keeps a hostile
                 // input's allocation proportional to nothing but this constant.
                 if segments.len() == MAX_MAIN_HEADER_SEGMENTS {
-                    return Err(Error::codestream(format!(
+                    break Err(Error::codestream(format!(
                         "main header has more than {MAX_MAIN_HEADER_SEGMENTS} marker segments"
                     )));
                 }
                 let body = if marker::has_segment(code) {
-                    match main_header_segment(&mut cur)? {
-                        Some(body) => body,
-                        None => {
+                    match main_header_segment(&mut cur) {
+                        Err(fault) => break Err(fault),
+                        Ok(Some(body)) => body,
+                        Ok(None) => {
                             break Err(cut_short(&format!(
                                 "in its {} segment",
                                 marker::describe(code)
@@ -2345,10 +2353,10 @@ fn cut_short(place: &str) -> Error {
 /// The header is walked in full by [`walk_main_header`] first, then each
 /// located segment is interpreted in codestream order.
 fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> {
-    // A cut header is judged on the segments the input holds in full, in the
-    // order a whole one is, so a damaged segment before the cut is reported
-    // as it would be in the whole file; `end` reports the cut only once those
-    // all pass.
+    // The segments before a cut or a structural fault are judged first, in
+    // codestream order, so a damaged segment before the cut is reported as
+    // it would be in the whole file; `end` reports the cut or the fault only
+    // once those all pass. OpenJPEG reads the header in the same order.
     let (segments, end) = walk_main_header(bytes)?;
 
     // SIZ shall be the first marker segment after SOC (A.6).
@@ -2382,6 +2390,10 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     // Packed packet headers (A.7.4), collected as `(Zppm, Ippm)` and split into
     // per-tile-part chunks after the walk by `decode_ppm_chunks`.
     let mut ppm: Vec<(u8, Vec<u8>)> = Vec::new();
+
+    // A marker this decoder does not read, held until the walk is known to
+    // have reached `SOT`: see below.
+    let mut unsupported = None;
 
     for seg in &segments[1..] {
         let body = || Cursor::new(seg.body);
@@ -2471,10 +2483,11 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // multiple-component transforms, non-linearity, extra bit depths —
             // rather than reading as a bare unknown code.
             code if marker::PART2.contains(&code) => {
-                return Err(Error::unsupported(format!(
+                unsupported = Some(Error::unsupported(format!(
                     "{} is a JPEG 2000 Part 2 marker, outside the Part 1 subset",
                     marker::describe(seg.code)
                 )));
+                break;
             }
 
             // The reserved segment-less range is *defined* to carry nothing, so
@@ -2488,11 +2501,24 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
             // the packet data means. Guessing that it is ignorable would trade
             // a clean rejection for a silently wrong image.
             other => {
-                return Err(Error::unsupported(format!(
+                unsupported = Some(Error::unsupported(format!(
                     "unrecognized marker {other:#06X} in the main header"
                 )));
+                break;
             }
         }
+    }
+
+    // A Part 2 or unknown marker is refused only once the walk reaches the
+    // first `SOT`. Before that the header may still be cut (and the next
+    // bytes may show it damaged), and a walk that stops on a structural
+    // fault has likely lost sync, so the code was damage, not a marker: a
+    // damaged first `SOT` is stepped over as an unknown marker and the walk
+    // stops at the `SOD` after it. The tile-part header calls such a code
+    // lost sync the same way (`lost_sync`).
+    if let Some(error) = unsupported {
+        end?;
+        return Err(error);
     }
 
     // Every segment the input holds is valid. What is left needs the whole

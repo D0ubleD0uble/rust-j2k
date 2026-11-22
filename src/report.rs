@@ -200,6 +200,14 @@ pub enum ReportEntry {
     /// than remain, or it is 0 and the input ends inside the tile-part's
     /// header. The bytes that are there are read; of a header the input
     /// ends inside, none are.
+    ///
+    /// It is not given while the input ends inside the tile-part's 12-byte
+    /// `SOT` segment, or at its start. The tile-part is not read as begun
+    /// then, and the report is the one for the input without those bytes:
+    /// no entry names them, and the tile has one tile-part fewer, which a
+    /// [`TilePartCountMismatch`](Self::TilePartCountMismatch) or
+    /// [`MissingPackets`](Self::MissingPackets) entry shows where it is
+    /// due. From the whole `SOT` on, this entry is given.
     #[non_exhaustive]
     TruncatedTilePart {
         /// The tile.
