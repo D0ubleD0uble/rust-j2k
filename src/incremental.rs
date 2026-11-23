@@ -163,9 +163,14 @@ use crate::{
 /// packet header, too many bit-planes), waits too
 /// ([`Waiting::Held`]): `decode_with` parses every tile-part before it
 /// decodes a tile, so a later tile-part's fault comes first. In a codestream
-/// it waits until the bytes fed close the tile-parts with an `EOC`; a JP2
-/// file never closes, as boxes can follow the codestream, so there only
-/// `finish` reports it, and a fault of the tile-parts waits the same way.
+/// it waits until the bytes fed close the tile-parts with an `EOC`. In a
+/// JP2 file boxes can follow the codestream, and the decode checks them
+/// first, so it waits, and a fault of the tile-parts with it, while a box
+/// there can still be read. None can once the walk there meets a `jp2c` or
+/// an `XLBox` of 2^32 or more, or where the last tile-part has `Psot = 0`
+/// or the tile-part chain is broken on the bytes fed, as OpenJPEG then
+/// reads no box after the codestream. From there the tile-parts wait as a
+/// codestream's do.
 /// So does, in a JP2 file, a fault in a box the bytes fed end inside, which
 /// more bytes can complete or change: a box cut short after the codestream,
 /// a box of length 0, which runs to the end of the input, or a box cut
@@ -338,8 +343,8 @@ impl IncrementalDecoder {
     /// ([`TileCodeBlocks`](LimitKind::TileCodeBlocks),
     /// [`TilePrecincts`](LimitKind::TilePrecincts)) is refused here only
     /// once the tile-parts close (below), and then only bytes after the
-    /// `EOC` can lift it. In a JP2 file this does not give such a refusal;
-    /// `refine` waits on it and [`finish`](Self::finish) reports it. Under
+    /// `EOC` can lift it. In a JP2 file this gives such a refusal only once
+    /// no box after the codestream can be read (below). Under
     /// a ceiling of
     /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost) it does not grow,
     /// so a refusal of the image's samples here is final, and `refine`
@@ -353,12 +358,15 @@ impl IncrementalDecoder {
     /// ([`Waiting::Held`], or [`Waiting::SampleLimit`] for a refusal more
     /// bytes lift), and the refusal once they do, unless a later
     /// tile-part's fault comes first.
-    /// In a JP2 file, which never closes, this holds back every error of
-    /// the tile-parts and the tiles, and [`finish`](Self::finish) reports
-    /// it. It holds back the errors
+    /// In a JP2 file this holds back every error of the tile-parts and the
+    /// tiles while a box after the codestream can still be read, as its
+    /// fault comes first, and [`finish`](Self::finish) reports it. Once none
+    /// can ([`Waiting::Held`] says when), the tile-parts are held as a
+    /// codestream's are. It holds back the errors
     /// `refine` waits on in a JP2 file's boxes too: a fault in a box after
-    /// the codestream that the bytes fed end inside, and a refusal of the sRGB step while a box after the
-    /// codestream can still be read, for which it gives the header with the
+    /// the codestream that the bytes fed end inside, and a refusal of the
+    /// sRGB step while a box after the codestream can still be read, one
+    /// more bytes lift included, for which it gives the header with the
     /// channels as coded. A fault in a box before the codestream that more
     /// bytes can change, of length 0 or cut inside its `XLBox`, gives
     /// `Ok(None)`.
@@ -946,7 +954,7 @@ pub enum Waiting {
     /// as a damaged packet header or too many bit-planes. In a JP2 file it
     /// can also be a fault of the tile-parts themselves, such as a `COC` for
     /// a component the image does not have: every error from the tile-parts
-    /// on waits there.
+    /// on waits there while a box after the codestream can still be read.
     ///
     /// In a JP2 file it can also be an error of the boxes that more bytes can
     /// replace, met before any tile-part is parsed: a fault in a box the
@@ -965,9 +973,16 @@ pub enum Waiting {
     /// returns it again; where no refine decodes after that,
     /// [`finish`](IncrementalDecoder::finish) reports it. A last
     /// tile-part whose `Psot` is 0 runs to the end of the input, which may
-    /// grow, and a JP2 file can have boxes after its codestream, which the
-    /// decode checks first, so neither closes: `refine` waits until
-    /// [`finish`](IncrementalDecoder::finish) reports the error.
+    /// grow, so it does not close: `refine` waits until
+    /// [`finish`](IncrementalDecoder::finish) reports the error. A JP2 file
+    /// can have boxes after its codestream, which the decode checks first,
+    /// so it does not close while one can still be read. None can once the
+    /// walk after the codestream meets a `jp2c` or an `XLBox` of 2^32 or
+    /// more, and none ever is where the last tile-part has `Psot` 0 or the
+    /// tile-part chain is broken on the bytes fed. From there a fault of its
+    /// tile-parts is final, and an error in a tile waits until they close,
+    /// as in a codestream. A box of length 0 there is read while under 2^32 bytes follow it, so
+    /// it does not count.
     ///
     /// More bytes can replace the error with one that comes earlier in the
     /// input, and an image can still follow, for example where a later

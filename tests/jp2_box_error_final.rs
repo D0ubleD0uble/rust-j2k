@@ -37,7 +37,10 @@
 //! A whole box at fault stays final at once, before or after the codestream:
 //! [`a_whole_box_at_fault_is_final`]. So does a fault that no byte after it
 //! can change, in a box of length 0 or a refusal of the sRGB step where no
-//! box after the codestream can still be read: [`final_shapes`].
+//! box after the codestream can still be read: [`final_shapes`]. Once none
+//! can, a fault of the tile-parts is final too, as it is in a codestream:
+//! the later [`final_shapes`] and the `header_split` inputs
+//! ([`the_header_split_inputs_are_final_once_the_fault_is_in`]).
 
 #[path = "support/synth.rs"]
 mod synth;

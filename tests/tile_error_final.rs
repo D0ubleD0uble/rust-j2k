@@ -7,8 +7,9 @@
 //! that tile-part, `decode_with` gives the tile's error; on a longer one,
 //! the fault. So an [`IncrementalDecoder`] waits on such an error, as
 //! [`Waiting::Held`], and its `header` holds a tile refusal back, until
-//! the bytes fed reach the `EOC`. A JP2 file never closes, as boxes after
-//! the codestream are checked first. Fed in any two pieces or a byte at a
+//! the bytes fed reach the `EOC`. In a JP2 file boxes after the codestream
+//! are checked first, so it waits while one can still be read, and from
+//! then on as in a codestream. Fed in any two pieces or a byte at a
 //! time, each goes from the main header cut short, to images or waits, to
 //! at most one error, which is the one the one-shot call gives on the bytes
 //! fed.
@@ -501,8 +502,8 @@ fn an_error_in_a_tile_is_final_at_the_eoc() {
     }
 }
 
-/// A JP2 file never closes: boxes after the codestream are checked before
-/// the tile-parts, so a malformed one, or a `jp2h` with no `ihdr`, replaces
+/// A JP2 file whose boxes after the codestream can still be read does not
+/// close: they are checked before the tile-parts, so a malformed one, or a `jp2h` with no `ihdr`, replaces
 /// the tile's error even after the `EOC`. `refine` waits on the tile's
 /// error until such a box is in, whose fault is final, and `finish` reports
 /// what the whole file gives.
@@ -832,8 +833,9 @@ fn a_tile_cap_refusal_more_bytes_lift_waits_for_a_later_fault() {
     check_streams(&bytes, &DecodeOptions::default(), "default cap, strict");
 }
 
-/// In a JP2 file, which never closes, `header` holds the refusal back until
-/// `finish`: a box after the codestream is checked first, so a short `colr`
+/// In a JP2 file whose boxes after the codestream can still be read,
+/// `header` holds the refusal back until `finish`: such a box is checked
+/// first, so a short `colr`
 /// there replaces it even after the `EOC`.
 #[test]
 fn a_tile_cap_refusal_more_bytes_lift_waits_in_a_jp2_file() {
