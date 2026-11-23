@@ -177,6 +177,11 @@ fn shapes() -> Vec<(&'static str, Vec<u8>, DecodeOptions)> {
             DecodeOptions::default(),
         ),
         (
+            "a colr after a codestream with FF30 in its main header",
+            tile_part_file(&reserved_codestream(0), &gray()),
+            DecodeOptions::default(),
+        ),
+        (
             "a jp2h of length 0 with its ihdr last",
             [
                 &synth::JP2_SIGNATURE[..],
@@ -257,13 +262,14 @@ waits! {
     a_jp2h_of_length_0_that_ends_at_fault_waits: 7,
     an_ftyp_of_length_0_that_ends_at_fault_waits: 8,
     a_box_whose_xlbox_is_cut_waits: 9,
-    a_jp2h_of_length_0_with_its_ihdr_last_waits: 10,
+    a_cut_colr_after_a_reserved_marker_waits: 10,
+    a_jp2h_of_length_0_with_its_ihdr_last_waits: 11,
 }
 
 /// The checks of [`waits!`] on shape `index` of [`shapes`].
 fn check_waits(index: usize) {
     let shapes = shapes();
-    assert_eq!(shapes.len(), 11, "a shape with no test");
+    assert_eq!(shapes.len(), 12, "a shape with no test");
     let (name, bytes, options) = shapes.into_iter().nth(index).expect("a shape");
     let lenient = options.clone().with_strict(false);
     let whole = error_of(&decode_with(&bytes, &lenient));
@@ -331,6 +337,10 @@ fn a_whole_box_at_fault_is_final() {
         (
             "a colr too short after the codestream",
             gray_file(&synth::bx(b"colr", &[1, 0])),
+        ),
+        (
+            "a colr too short after a codestream with FF30 in its main header",
+            tile_part_file(&reserved_codestream(0), &synth::bx(b"colr", &[1, 0])),
         ),
         (
             "a colr too short in the jp2h",
@@ -653,6 +663,55 @@ fn tile_part_file(codestream: &[u8], trailing: &[u8]) -> Vec<u8> {
     let mut bytes = synth::jp2_file(&[ihdr, gray()], &[], codestream, &[]);
     bytes.extend(trailing);
     bytes
+}
+
+/// [`codestream`] of one component with the reserved marker `FF 30`, which
+/// has no segment, at the end of its main header, then a `COM` of `comment`
+/// zero bytes when `comment` is not 0.
+fn reserved_codestream(comment: usize) -> Vec<u8> {
+    let mut bytes = main_header(&[[1, 1]]);
+    bytes.extend([0xFF, 0x30]);
+    if comment > 0 {
+        bytes.extend(synth::seg(0xFF64, &vec![0; comment]));
+    }
+    bytes.extend(synth::tile_part(0, 0, 1, &[], &[0]));
+    bytes.extend([0xFF, 0xD9]);
+    bytes
+}
+
+/// `FF 30` in the main header has no segment, so the walk to the end of the
+/// codestream steps over its two bytes alone, as the codestream parser
+/// does, and reads the boxes after the codestream. Followed by `SOT`, a
+/// walk that read a length there would step past the end of the file; by a
+/// `COM` of 65531 bytes, it would land inside the comment. Either way the
+/// boxes after the codestream went unread. OpenJPEG 2.5 refuses both files
+/// with a `colr` too short after the codestream ("Bad COLR header box (bad
+/// size)"), with and without `-allow-partial`, and decodes them without it.
+#[test]
+fn a_reserved_marker_in_the_main_header_leaves_the_boxes_after_the_codestream_read() {
+    let short_colr = synth::bx(b"colr", &[1, 0]);
+    let plain = codestream(1);
+    for comment in [0, 65531] {
+        let reserved = reserved_codestream(comment);
+        for strict in [false, true] {
+            let options = DecodeOptions::default().with_strict(strict);
+            let at = format!("a COM of {comment} bytes, strict {strict}");
+            let refused = decode_with(&tile_part_file(&reserved, &short_colr), &options);
+            assert!(
+                matches!(refused, Err(Error::FileFormat(_))),
+                "{at}: {refused:?}"
+            );
+            assert_eq!(
+                error_of(&refused),
+                error_of(&decode_with(&tile_part_file(&plain, &short_colr), &options)),
+                "{at}"
+            );
+            let image = decode_with(&tile_part_file(&reserved, &[]), &options)
+                .unwrap_or_else(|error| panic!("{at}: {error:?}"));
+            let expected = decode_with(&tile_part_file(&plain, &[]), &options).expect("decodes");
+            assert_eq!(image.components, expected.components, "{at}");
+        }
+    }
 }
 
 /// A gray codestream whose one tile-part has `Psot = 0` and `00 00` where

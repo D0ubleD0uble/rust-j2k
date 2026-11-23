@@ -5962,3 +5962,29 @@ fn the_fault_walk_checks_a_restatement_for_each_tile_and_header() {
         assert!(last.starts_with(&format!("Some({error}")), "{name}: {last}");
     }
 }
+
+/// A tile-part header with a marker that has no segment, here the reserved
+/// `FF 30`, may set the coding: the step over its header takes no length
+/// after it, and leaves the header to the read that refuses it. Read as a
+/// length, the `COD` after `FF 30` is a step of 65364 bytes, which this
+/// tile-part puts on its `SOD`, so the `COD` went unseen.
+#[test]
+fn a_marker_with_no_segment_in_a_tile_part_header_may_set_the_coding() {
+    let siz = synth::siz_body([4, 4, 0, 0, 4, 4, 0, 0], &[[7, 1, 1]]);
+    let mut bytes = vec![0xFF, 0x4F];
+    bytes.extend(seg(marker::SIZ, &siz));
+    bytes.extend(seg(marker::COD, &synth::cod_body(1, 0, 4, 0)));
+    bytes.extend(seg(marker::QCD, &synth::qcd_none_body(2, &[8])));
+    let offset = bytes.len();
+    let mut header = vec![0xFF, 0x30];
+    header.extend(seg(marker::COD, &synth::cod_body(1, 1, 4, 0)));
+    let step = 2 + usize::from(marker::COD);
+    header.extend(seg(marker::COM, &vec![0; step - header.len() - 4]));
+    assert_eq!(header.len(), step);
+    bytes.extend(synth::tile_part(0, 0, 1, &header, &[0]));
+    bytes.extend(be16(marker::EOC));
+    let parsed = parse_header(&bytes).expect("the main header parses");
+    let part = first_part_at(&bytes, &parsed, offset).expect("a first tile-part");
+    assert!(part.may_set_coding());
+    assert!(matches!(part.header(), Err(Error::Unsupported(_))));
+}
