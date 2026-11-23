@@ -1225,6 +1225,54 @@ fn the_lowest_tile_a_tile_part_cod_takes_over_a_cap_is_refused() {
     }
 }
 
+/// The two-tile shape above, under a reduction of 1, with tile 0's
+/// tile-part header holding `code` (a marker with no segment, or a code
+/// that is no marker), then its `COD` of no levels, then a `COM` that ends
+/// 65364 bytes after `code`. The header read refuses `code`. A step over
+/// the header that read a length after `code` took the `COD` for a step of
+/// 65364 bytes onto `SOD`, so it found no `COD` and counted tile 0 under
+/// the main header. Then `IncrementalDecoder::header` gave the header on
+/// the prefixes that hold tile 0 but end before tile 1 is whole, where
+/// `read_header_with` refuses `code`.
+#[test]
+fn a_cod_after_a_code_with_no_segment_in_a_tile_part_header_is_not_skipped() {
+    let siz = synth::siz_body([2 * 4200, 4096, 4192, 0, 4200, 4096, 0, 0], &[[7, 1, 1]]);
+    let options = DecodeOptions::default().with_resolution_reduction(1);
+    for code in [0xFF30u16, 0xFF00] {
+        let mut own = code.to_be_bytes().to_vec();
+        own.extend(synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0)));
+        let step = 2 + 0xFF52;
+        own.extend(synth::seg(0xFF64, &vec![0; step - own.len() - 4]));
+        let bytes = [
+            vec![0xFF, 0x4F],
+            synth::seg(0xFF51, &siz),
+            synth::seg(0xFF52, &synth::cod_body(1, 1, 0, 0)),
+            synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8; 4])),
+            synth::tile_part(0, 0, 1, &own, &[]),
+            synth::tile_part(1, 0, 1, &[], &[]),
+            vec![0xFF, 0xD9],
+        ]
+        .concat();
+        // From the end of tile 0's tile-part to the end of the file.
+        for len in bytes.len() - 16..=bytes.len() {
+            let prefix = &bytes[..len];
+            let at = format!("{code:#06X}, {len} of {} bytes", bytes.len());
+            let refused = read_header_with(prefix, &options);
+            assert!(
+                matches!(&refused, Err(Error::Unsupported(_) | Error::Codestream(_))),
+                "{at}: {refused:?}"
+            );
+            let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
+            decoder.feed(prefix);
+            assert_eq!(
+                decoder.header().map(|_| ()).map_err(|e| format!("{e:?}")),
+                refused.map(|_| ()).map_err(|e| format!("{e:?}")),
+                "{at}"
+            );
+        }
+    }
+}
+
 /// Where the header read refuses a tile, the decode can refuse the file
 /// sooner, for what only decoding finds: here the packets of tile 0 with
 /// `strict` on (a byte left after its last packet), or with `strict` off the

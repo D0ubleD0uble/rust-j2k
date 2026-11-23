@@ -264,7 +264,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   has no segment, so it lost the end and skipped those boxes: a file with
   a `colr` too short after the codestream decoded, where OpenJPEG refuses
   it. The step now agrees with the codestream parser on every marker with
-  no segment (#653).
+  no segment. The same fault in a tile-part header could hide a `COD`
+  after such a marker, or after a code that is no marker. The tile's caps
+  were then counted under the main header's coding, and
+  `IncrementalDecoder::header` gave the header on a prefix where
+  `read_header_with` refuses the code (#653).
 - `IncrementalDecoder::header` holds back a tile refused by a tile cap
   under the default or a `Raised` sample limit until the input closes, as
   it holds one refused under `AtMost`. It returned the `Error::Limit` at

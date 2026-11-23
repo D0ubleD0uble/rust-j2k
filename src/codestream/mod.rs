@@ -767,9 +767,11 @@ impl<'b, 'm> FirstPart<'b, 'm> {
             match read_u16(part, at) {
                 Some(marker::SOD) => return false,
                 Some(marker::COD | marker::COC) | None => return true,
-                // A marker with no segment has no length to step by, and
-                // the tile-part header refuses each one.
-                Some(code) if !marker::has_segment(code) => return true,
+                // A code that is no marker, or a marker with no segment, has
+                // no length to step by, and the tile-part header refuses each.
+                Some(code) if !marker::is_marker(code) || !marker::has_segment(code) => {
+                    return true;
+                }
                 Some(_) => {}
             }
             let Some(length) = read_u16(part, at + 2).filter(|&length| length >= 2) else {
