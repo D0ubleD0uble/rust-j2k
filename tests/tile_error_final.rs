@@ -1011,8 +1011,9 @@ fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
             // Cut before the byte that settles it, the walk may still read
             // a box.
             let mut cut = IncrementalDecoder::new(lenient.clone()).expect("valid options");
-            cut.feed(&bytes[..bytes.len() - past - 1]);
-            assert!(!held::closes(&bytes[..bytes.len() - past - 1]), "{name}: cut");
+            let short = &bytes[..bytes.len() - past - 1];
+            cut.feed(short);
+            assert!(!held::closes(short), "{name}: cut");
             assert!(
                 matches!(cut.refine(), Ok(Refined::Waiting(Waiting::Held { .. }))),
                 "{name}: cut"
