@@ -795,3 +795,37 @@ fn the_packet_walk_skips_a_codestream_of_too_many_tiles_or_components() {
         (false, 0)
     );
 }
+
+/// The walk to the end of the codestream steps through the main header as
+/// the codestream parser does: a marker with no segment (`EPH`, the
+/// reserved `0xFF30..=0xFF3F`) is two bytes long, and `SOC`, `SOD`, `EOC`
+/// and a code that is no marker break the header on their two bytes, so
+/// the walk is `Broken` whatever follows. A walk that read a length after
+/// `FF 30` took the `SOT` after it for one and stepped past the end.
+#[test]
+fn the_walk_steps_over_a_main_header_marker_with_no_segment() {
+    use crate::jp2::after::{End, codestream_end};
+    let codestream = |code: u16| {
+        let mut bytes = vec![0xFF, 0x4F];
+        let siz = synth::siz_body([4, 4, 0, 0, 4, 4, 0, 0], &[[7, 1, 1]]);
+        bytes.extend(synth::seg(0xFF51, &siz));
+        bytes.extend(code.to_be_bytes());
+        bytes.extend(synth::tile_part(0, 0, 1, &[], &[0]));
+        bytes.extend([0xFF, 0xD9]);
+        bytes
+    };
+    for code in [0xFF30, 0xFF35, 0xFF3F, 0xFF92] {
+        let bytes = codestream(code);
+        assert_eq!(codestream_end(&bytes), End::At(bytes.len()), "{code:#06X}");
+        // Cut inside the tile-part, the end is yet to be found.
+        assert_eq!(codestream_end(&bytes[..bytes.len() - 4]), End::Unknown);
+    }
+    for code in [0xFF4F, 0xFF93, 0xFFD9, 0xFF00, 0xFFFF] {
+        let bytes = codestream(code);
+        // The code alone, then the whole codestream: a tile-part of 15 bytes
+        // and `EOC` come after it.
+        for len in [bytes.len() - 17, bytes.len()] {
+            assert_eq!(codestream_end(&bytes[..len]), End::Broken, "{code:#06X}");
+        }
+    }
+}
