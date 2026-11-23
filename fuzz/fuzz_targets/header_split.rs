@@ -151,6 +151,12 @@ enum Completion {
     /// built: the box or tile-part the input ends inside is completed, then
     /// [`SHORT_COLR`] follows, as for [`Completion::Bytes`].
     Far,
+    /// The input ends one byte into where the next `SOT` or the `EOC`
+    /// belongs, and that byte is not `0xFF`. No suffix makes a marker of
+    /// it, but the decoder reads the tile-part chain there as cut short, as
+    /// it does any marker the input ends inside, and holds an error of the
+    /// tiles, which this target allows.
+    LoneByte,
 }
 
 /// `prefix`, a JP2 file whose codestream ends at `at`, with the box after
@@ -230,6 +236,9 @@ fn completed(prefix: &[u8]) -> Option<Completion> {
         if rest.starts_with(&[0xFF, 0xD9]) {
             return after_codestream(prefix, start + at + 2);
         }
+        if rest.len() == 1 && rest[0] != 0xFF {
+            return Some(Completion::LoneByte);
+        }
         let cut = rest.len().min(MIN_SOT.len());
         let sot = [&rest[..cut], &MIN_SOT[cut..]].concat();
         if u16_at(&sot, 0)? != 0xFF90 {
@@ -265,7 +274,8 @@ fn completed(prefix: &[u8]) -> Option<Completion> {
 /// Whether more bytes can change what `read_header_with` gives on the JP2
 /// prefix `prefix`: some suffix tried here gives another answer. A fault of
 /// a box held whole, and of the boxes before it, passes none. A suffix too
-/// long to build ([`Completion::Far`]) is taken to change it, untried.
+/// long to build ([`Completion::Far`]) is taken to change it, untried, as
+/// is a lone byte where a marker belongs ([`Completion::LoneByte`]).
 fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
     let lenient = options.clone().with_strict(false);
     let answer = |bytes: &[u8]| format!("{:?}", checked(read_header_with(bytes, &lenient)));
@@ -277,7 +287,7 @@ fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
     ];
     match completed(prefix) {
         Some(Completion::Bytes(bytes)) => longer.push(bytes),
-        Some(Completion::Far) => return true,
+        Some(Completion::Far | Completion::LoneByte) => return true,
         None => {}
     }
     longer.iter().any(|bytes| answer(bytes) != base)
