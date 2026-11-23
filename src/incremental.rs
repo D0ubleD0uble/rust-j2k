@@ -175,8 +175,9 @@ use crate::{
 /// more bytes can complete or change: a box cut short after the codestream,
 /// a box of length 0, which runs to the end of the input, or a box cut
 /// inside its `XLBox`, judged on its type before its length. A refusal of
-/// the sRGB step waits as well, as a box still to come after the codestream
-/// can be at fault, which `decode_with` checks first. A fault in a box the
+/// the sRGB step waits as well, unless no box after the codestream can
+/// still be read, as a box still to come there can be at fault, which
+/// `decode_with` checks first. A fault in a box the
 /// bytes fed hold whole is final.
 /// A caller
 /// who raises the packet work limit to the factor a refusal names, as
@@ -324,7 +325,11 @@ impl IncrementalDecoder {
     /// decoder's options with `strict` off: it describes the image
     /// [`refine`](Self::refine) returns. `Ok(None)` means the bytes fed end
     /// before the first `SOT` marker, or, in a JP2 file, inside the boxes
-    /// before it, so the main header is not complete yet. An error is the
+    /// before it, so the main header is not complete yet. In a JP2 file it
+    /// can also mean that a fault of a box before the codestream is held
+    /// back, as in a `jp2h` or `ftyp` of length 0, where no main header may
+    /// ever come in: [`refine`](Self::refine) carries that error as
+    /// [`Waiting::Held`]. An error is the
     /// one `read_header_with` gives on those bytes with `strict` off, except
     /// that an error of the tile-parts may be held back while more bytes
     /// could bring a fault that comes first (see below), so it refuses a
@@ -820,7 +825,8 @@ pub enum Waiting {
     /// The main header is not whole yet: the bytes fed end before the first
     /// `SOT` marker, or, in a JP2 file, inside the boxes before it.
     /// [`header`](IncrementalDecoder::header) returns `Ok(None)` for the
-    /// same bytes.
+    /// same bytes, and also for a held fault of a box before a JP2 file's
+    /// codestream, which `refine` gives as [`Held`](Waiting::Held).
     #[non_exhaustive]
     HeaderIncomplete {},
     /// The sample limit ([`DecodeOptions::sample_limit`]) refused the image,
@@ -942,8 +948,11 @@ pub enum Waiting {
     /// still put an earlier error, or an image, in its place: a fault in a
     /// later tile-part, or in a JP2 box still to come or still arriving. In a
     /// codestream, the next refine that decodes once the `EOC` is in gives
-    /// the final answer; in a JP2
-    /// file, [`finish`](IncrementalDecoder::finish) does.
+    /// the final answer. In a JP2 file it does once that `EOC` is in and no
+    /// box after the codestream can still be read; otherwise
+    /// [`finish`](IncrementalDecoder::finish) does, under the decoder's
+    /// options: with `strict` on it can give a stricter error than this
+    /// one.
     ///
     /// `error` is the one [`decode_with`] gives with `strict` off for the
     /// bytes fed. Once every tile-part fed has parsed, it is a tile refused

@@ -430,7 +430,8 @@ enum AfterRead {
     /// It never does, whatever bytes follow: the codestream steps to a
     /// tile-part with `Psot = 0`, which runs to the end of the file, or its
     /// main header or tile-part chain is broken on bytes the input holds
-    /// ([`End::Broken`]), so it does not decode. The bytes the walk reads
+    /// ([`End::Broken`]), so OpenJPEG's walk cannot reach the boxes after
+    /// it. The bytes the walk reads
     /// to get there are in, so no later byte changes it.
     Never,
     /// Not on the bytes in: the main header or the tile-part chain is cut
