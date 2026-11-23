@@ -56,13 +56,21 @@ fn error_of<T>(result: &Result<T, Error>) -> Option<String> {
 /// A codestream of one 4 x 4 tile of `components` 8-bit components, no
 /// levels, and an empty packet each.
 fn codestream(components: usize) -> Vec<u8> {
-    let siz = synth::siz_body([4, 4, 0, 0, 4, 4, 0, 0], &vec![[7, 1, 1]; components]);
+    let mut bytes = main_header(&vec![[1, 1]; components]);
+    bytes.extend(synth::tile_part(0, 0, 1, &[], &vec![0; components]));
+    bytes.extend([0xFF, 0xD9]);
+    bytes
+}
+
+/// The main header of [`codestream`], of a component for each `XRsiz`,
+/// `YRsiz` pair of `sampling`.
+fn main_header(sampling: &[[u8; 2]]) -> Vec<u8> {
+    let components: Vec<[u8; 3]> = sampling.iter().map(|&[x, y]| [7, x, y]).collect();
+    let siz = synth::siz_body([4, 4, 0, 0, 4, 4, 0, 0], &components);
     let mut bytes = vec![0xFF, 0x4F];
     bytes.extend(synth::seg(0xFF51, &siz));
     bytes.extend(synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0)));
     bytes.extend(synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])));
-    bytes.extend(synth::tile_part(0, 0, 1, &[], &vec![0; components]));
-    bytes.extend([0xFF, 0xD9]);
     bytes
 }
 
@@ -591,7 +599,112 @@ fn final_shapes() -> Vec<FinalShape> {
             default(),
             gray().len(),
         ),
+        (
+            "a fault in a last tile-part with Psot 0",
+            tile_part_file(&psot_0_fault(), &short_colr),
+            default(),
+            3 + short_colr.len(),
+        ),
+        (
+            "a tile-part chain broken by 0xFE90",
+            tile_part_file(&broken_chain(), &short_colr),
+            default(),
+            short_colr.len(),
+        ),
+        (
+            "an sYCC file in a cut jp2c, its chain broken by 0xFF0A",
+            cut_sycc_file(),
+            srgb(),
+            4,
+        ),
+        (
+            "a fault in a tile-part header, then a jp2c after the codestream",
+            tile_part_file(
+                &coc_fault(),
+                &[synth::bx(b"jp2c", &[]), short_colr.clone()].concat(),
+            ),
+            default(),
+            short_colr.len(),
+        ),
+        (
+            "a fault in a tile-part header, then an XLBox of 2^32",
+            tile_part_file(
+                &coc_fault(),
+                &[
+                    &[0, 0, 0, 1][..],
+                    b"xxxx",
+                    &[0, 0, 0, 1, 0, 0, 0, 0],
+                    &short_colr,
+                ]
+                .concat(),
+            ),
+            default(),
+            4 + short_colr.len(),
+        ),
     ]
+}
+
+/// A gray JP2 file of `codestream`, with `trailing` after its `jp2c`.
+fn tile_part_file(codestream: &[u8], trailing: &[u8]) -> Vec<u8> {
+    let ihdr = synth::ihdr_for(codestream);
+    let mut bytes = synth::jp2_file(&[ihdr, gray()], &[], codestream, &[]);
+    bytes.extend(trailing);
+    bytes
+}
+
+/// A gray codestream whose one tile-part has `Psot = 0` and `00 00` where
+/// its header needs a marker, as in the `header_split` input
+/// `hs_crash3.bin` of [`HS_CRASH3`]. Then `SOD` and a byte.
+fn psot_0_fault() -> Vec<u8> {
+    let mut bytes = main_header(&[[1, 1]]);
+    bytes.extend(synth::sot(0, 0, 0, 1));
+    bytes.extend([0, 0, 0xFF, 0x93, 0]);
+    bytes
+}
+
+/// [`codestream`] of one component with `FE 90` in place of its `EOC`, as
+/// in `hs_crash4_fe90.bin` ([`HS_CRASH4`]).
+fn broken_chain() -> Vec<u8> {
+    let mut bytes = codestream(1);
+    bytes.truncate(bytes.len() - 2);
+    bytes.extend([0xFE, 0x90]);
+    bytes
+}
+
+/// A gray codestream whose one tile-part's header has a `COC` for
+/// component 5, which the image does not have, then an `EOC`.
+fn coc_fault() -> Vec<u8> {
+    let mut bytes = main_header(&[[1, 1]]);
+    let coc = synth::seg(0xFF53, &[5, 0, 0, 0, 0, 0, 0]);
+    bytes.extend(synth::tile_part(0, 0, 1, &coc, &[0]));
+    bytes.extend([0xFF, 0xD9]);
+    bytes
+}
+
+/// As `hs_crash5_sycc.bin` ([`HS_CRASH5`]): an sYCC file of 4:2:2 chroma
+/// whose one tile-part is followed by `FF 0A` and 4 more bytes, in a `jp2c`
+/// that claims 16 bytes more than the file holds.
+fn cut_sycc_file() -> Vec<u8> {
+    let mut codestream = main_header(&[[1, 1], [2, 1], [2, 1]]);
+    codestream.extend(synth::tile_part(0, 0, 1, &[], &[0, 0, 0]));
+    codestream.extend([0xFF, 0x0A, 0x20, 0x00, 0x01, 0x00]);
+    let mut bytes = synth::jp2_file(
+        &[
+            synth::ihdr_for(&codestream),
+            synth::bx(b"colr", &synth::colr_enum(18)),
+        ],
+        &[],
+        &[],
+        &[],
+    );
+    // The `jp2c` box `jp2_file` closed is empty: claim the codestream and
+    // 16 bytes more.
+    bytes.truncate(bytes.len() - 8);
+    let length = u32::try_from(8 + codestream.len() + 16).unwrap();
+    bytes.extend(length.to_be_bytes());
+    bytes.extend(b"jp2c");
+    bytes.extend(codestream);
+    bytes
 }
 
 /// A JP2 file whose `jp2h` has length 0 and holds a matching `ihdr`,
@@ -607,6 +720,8 @@ fn open_jp2h(child: &[u8]) -> Vec<u8> {
 }
 
 /// Bytes appended to a file of [`final_shapes`]: none changes its error.
+/// Boxes of each kind the walk after the codestream reads, at fault or
+/// not, of length 0 and with an `XLBox`, and a second `jp2c`.
 fn suffixes() -> Vec<Vec<u8>> {
     vec![
         vec![0],
@@ -615,6 +730,18 @@ fn suffixes() -> Vec<Vec<u8>> {
         gray(),
         synth::bx(b"colr", &[1, 0]),
         synth::bx(b"pclr", &PCLR),
+        synth::bx(b"cmap", &CMAP),
+        synth::bx(b"cdef", &CDEF),
+        synth::bx(b"bpcc", &[7, 7]),
+        synth::bx(b"jp2h", &[]),
+        synth::bx(b"xml ", b"<a/>"),
+        synth::JP2_SIGNATURE.to_vec(),
+        synth::ftyp_jp2(),
+        open_box(b"colr", &[1, 0]),
+        open_box(b"jp2h", &[]),
+        [&[0, 0, 0, 1][..], b"colr", &18u64.to_be_bytes(), &[1, 0]].concat(),
+        synth::bx(b"jp2c", &codestream(1)),
+        [&[0xFF, 0xD9][..], &synth::bx(b"colr", &[1, 0])].concat(),
     ]
 }
 
@@ -643,18 +770,25 @@ final_at_once! {
     a_child_of_length_4_in_a_jp2h_of_length_0_is_final: 4,
     a_child_of_length_0_in_a_jp2h_of_length_0_is_final: 5,
     a_child_with_xlbox_8_in_a_jp2h_of_length_0_is_final: 6,
+    a_fault_in_a_last_tile_part_with_psot_0_is_final: 7,
+    a_tile_part_chain_broken_on_bytes_in_is_final: 8,
+    a_chain_broken_in_a_cut_jp2c_is_final: 9,
+    a_tile_part_fault_before_a_second_jp2c_is_final: 10,
+    a_tile_part_fault_before_an_xlbox_of_2_32_is_final: 11,
 }
 
 /// The checks of [`final_at_once!`] on shape `index` of [`final_shapes`].
 fn check_final(index: usize) {
     let shapes = final_shapes();
-    assert_eq!(shapes.len(), 7, "a shape with no test");
+    assert_eq!(shapes.len(), 12, "a shape with no test");
     let (name, bytes, options, after) = shapes.into_iter().nth(index).expect("a shape");
     let settled = bytes.len() - after;
     let lenient = options.clone().with_strict(false);
     let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
     assert!(!whole.starts_with("Incomplete"), "{name}: {whole}");
-    let whole_header = error_of(&read_header_with(&bytes, &lenient)).expect("an error");
+    // The header read meets a fault of the tile-parts only where it walks
+    // them, so it may read the header of a file the decode refuses.
+    let whole_header = error_of(&read_header_with(&bytes, &lenient));
     for suffix in suffixes() {
         let longer = [&bytes[..], &suffix].concat();
         let at = format!("{name}, then {suffix:?}");
@@ -663,11 +797,13 @@ fn check_final(index: usize) {
             Some(whole.clone()),
             "{at}"
         );
-        assert_eq!(
-            error_of(&read_header_with(&longer, &lenient)),
-            Some(whole_header.clone()),
-            "{at}"
-        );
+        if whole_header.is_some() {
+            assert_eq!(
+                error_of(&read_header_with(&longer, &lenient)),
+                whole_header,
+                "{at}"
+            );
+        }
     }
     for strict in [false, true] {
         let options = options.clone().with_strict(strict);
@@ -680,11 +816,8 @@ fn check_final(index: usize) {
             let header = decoder.header();
             let refined = decoder.refine();
             if len >= settled {
-                assert_eq!(
-                    error_of(&header),
-                    Some(whole_header.clone()),
-                    "{at}: header"
-                );
+                assert_eq!(error_of(&header), whole_header, "{at}: header");
+                assert!(!matches!(header, Ok(None)), "{at}: header");
                 assert_eq!(error_of(&refined), Some(whole.clone()), "{at}: refine");
                 assert_eq!(one_shot, Some(whole.clone()), "{at}: decode_with");
             } else {
@@ -735,4 +868,218 @@ fn an_unsupported_brand_in_an_ftyp_of_length_0_waits() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+/// `hs_crash3.bin`, found by the `header_split` fuzz target, less its 12
+/// control bytes, which are zero but for the seed of the pieces and leave
+/// the options at their defaults. A JP2 file of 8400 x 4608 sYCC whose
+/// `jp2c` is cut short, with a last tile-part of `Psot = 0` and `00 00`
+/// where its header needs a marker.
+const HS_CRASH3: &str = "\
+    0000000c6a5020200d0a870a00000014667479706a703220000000006a703220\
+    0000002d6a703268000000166968647200001200000020d00003070700000000\
+    000f636f6c7201000000000012000000766a703263ff4fff51002f0000000020\
+    d0000020000000000000000e00000020d0000010000000000000000000000307\
+    0101070201070201ff52000c00000001000000000001ff5c000640404040ff90\
+    000a0000000000000000000000120001ff93000000010200020000";
+
+/// `hs_crash4_fe90.bin`, the same way: a tile-part followed by `FE 90`.
+const HS_CRASH4: &str = "\
+    0000000c6a5020200d0a870a00000014667479706a703220000000006a703220\
+    0000002d6a703268000000166968647200001200000020d00003070700000000\
+    000f636f6c7201000000000012000000766a703263ff4fff51002f0000000020\
+    d0000020000000000000000e00000020d000fe10000000000000000000000307\
+    0101070201070201ff52000c00000001000000000001ff5c000640404040ff90\
+    000a0000000000120001ff930000fffffe90200a0001000000110001ff930000\
+    00ffd9";
+
+/// `hs_crash5_sycc.bin`, the same way: a tile-part followed by `FF 0A`.
+const HS_CRASH5: &str = "\
+    0000000c6a5020200d0a870a00000014667479706a703220000000006a703220\
+    0000002d6a703268000000166968647200001200000020d00003070700000000\
+    000f636f6c7201000000000012000000766a703263ff4fff51002f0000000020\
+    d0000020000000000000000e00000020d000fe10000000000000000000000307\
+    0101070201070201ff52000c00000001000000000001ff5c000640404040ff90\
+    000a0000000000120001ff9300000000ff0a90200001000000110001ff930000\
+    00ffd9";
+
+fn from_hex(hex: &str) -> Vec<u8> {
+    let digits: Vec<u8> = hex.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    digits
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        .collect()
+}
+
+/// The `header_split` inputs of the issue, each with the bytes that end at
+/// its fault and the fault: no box after the codestream is read, as the
+/// last tile-part has `Psot = 0` or the tile-part chain is broken on bytes
+/// in, so the fault is final once it is in. Before the fix `header` gave
+/// the header there, where `read_header_with` refuses.
+///
+/// Each prefix is fed to a new decoder. Before the fault `header` gives
+/// no error. From it on `header` gives the error `read_header_with` gives
+/// on the whole file, and `refine` the one `decode_with` gives, the same
+/// as on the prefix, on the `jp2c` filled to its length and on any of
+/// [`suffixes`] appended to either. `finish` is `decode_with` on the
+/// prefix, `strict` on and off. The image is 8400 x 4608, so the calls
+/// that would decode tiles are made only from the fault on, where the
+/// parse of the tile-parts refuses first.
+#[test]
+fn the_header_split_inputs_are_final_once_the_fault_is_in() {
+    // Each with the bytes that end at its fault, and what follows them.
+    for (name, hex, at_fault, message) in [
+        (
+            "hs_crash3.bin",
+            HS_CRASH3,
+            &[0xFF, 0x90, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][..],
+            "found 0x0000",
+        ),
+        (
+            "hs_crash4_fe90.bin",
+            HS_CRASH4,
+            &[0xFE, 0x90],
+            "found 0xFE90",
+        ),
+        (
+            "hs_crash5_sycc.bin",
+            HS_CRASH5,
+            &[0xFF, 0x0A],
+            "found 0xFF0A",
+        ),
+    ] {
+        let bytes = from_hex(hex);
+        let fault = bytes
+            .windows(at_fault.len())
+            .position(|window| window == at_fault)
+            .expect("the fault")
+            + at_fault.len();
+        let lenient = DecodeOptions::default().with_strict(false);
+        let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+        assert!(whole.contains(message), "{name}: {whole}");
+        let whole_header = error_of(&read_header_with(&bytes, &lenient));
+        assert_eq!(whole_header.as_ref(), Some(&whole), "{name}");
+        // The `jp2c` box at 77 claims 118 bytes: all but 8 of `hs_crash3`'s
+        // are in, and all of each other's.
+        let filled = {
+            let mut filled = bytes.clone();
+            assert_eq!(&filled[77..85], &[0, 0, 0, 118, b'j', b'p', b'2', b'c']);
+            assert!(filled.len() <= 77 + 118, "{name}");
+            filled.resize(77 + 118, 0);
+            filled
+        };
+        for longer in
+            std::iter::once(filled.clone()).chain(suffixes().into_iter().flat_map(|suffix| {
+                [
+                    [&bytes[..], &suffix].concat(),
+                    [&filled[..], &suffix].concat(),
+                ]
+            }))
+        {
+            let at = format!("{name}, {} bytes", longer.len());
+            assert_eq!(
+                error_of(&decode_with(&longer, &lenient)),
+                Some(whole.clone()),
+                "{at}"
+            );
+            assert_eq!(
+                error_of(&read_header_with(&longer, &lenient)),
+                Some(whole.clone()),
+                "{at}"
+            );
+        }
+        for strict in [false, true] {
+            let options = DecodeOptions::default().with_strict(strict);
+            for len in 1..=bytes.len() {
+                let prefix = &bytes[..len];
+                let at = format!("{name}, strict {strict}, {len} of {} bytes", bytes.len());
+                let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
+                decoder.feed(prefix);
+                let header = decoder.header();
+                if len < fault {
+                    assert!(header.is_ok(), "{at}: header {header:?}");
+                    continue;
+                }
+                assert_eq!(error_of(&header), Some(whole.clone()), "{at}: header");
+                assert_eq!(
+                    error_of(&read_header_with(prefix, &lenient)),
+                    Some(whole.clone()),
+                    "{at}: read_header_with"
+                );
+                assert_eq!(
+                    error_of(&decode_with(prefix, &lenient)),
+                    Some(whole.clone()),
+                    "{at}: decode_with"
+                );
+                assert_eq!(
+                    error_of(&decoder.refine()),
+                    Some(whole.clone()),
+                    "{at}: refine"
+                );
+                check_finish(&decoder, prefix, &options, &at);
+            }
+        }
+    }
+}
+
+/// A refusal of the sRGB step that more bytes lift, held back from the
+/// boxes while a box after the codestream can still be read: a `colr` too
+/// short there comes first, so `header` gives the header with the channels
+/// as coded and `refine` waits, until no box there can be read. The image
+/// is 20000 x 10000 of 4:2:2 sYCC: its 4 * 10^8 samples are under the
+/// default limit, the 6 * 10^8 of the sRGB output over it.
+#[test]
+fn an_srgb_refusal_more_bytes_lift_waits_for_a_box_after_the_codestream() {
+    let siz = synth::siz_body(
+        [20000, 10000, 0, 0, 20000, 10000, 0, 0],
+        &[[7, 1, 1], [7, 2, 1], [7, 2, 1]],
+    );
+    let mut codestream = vec![0xFF, 0x4F];
+    codestream.extend(synth::seg(0xFF51, &siz));
+    codestream.extend(synth::seg(0xFF52, &synth::cod_body(1, 0, 4, 0)));
+    codestream.extend(synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])));
+    codestream.extend(synth::tile_part(0, 0, 1, &[], &[]));
+    codestream.extend([0xFF, 0xD9]);
+    let file = |trailing: &[Vec<u8>]| {
+        synth::jp2_file(
+            &[
+                synth::ihdr_for(&codestream),
+                synth::bx(b"colr", &synth::colr_enum(18)),
+            ],
+            &[],
+            &codestream,
+            trailing,
+        )
+    };
+    let lenient = srgb().with_strict(false);
+    let short_colr = synth::bx(b"colr", &[1, 0]);
+    let bytes = file(&[]);
+    let refused = error_of(&read_header_with(&bytes, &lenient)).expect("an error");
+    assert!(refused.contains("sRGB output"), "{refused}");
+    assert!(refused.contains("Raised(2)"), "{refused}");
+    let longer = file(std::slice::from_ref(&short_colr));
+    let whole = error_of(&read_header_with(&longer, &lenient)).expect("an error");
+    assert!(whole.starts_with("FileFormat"), "{whole}");
+    assert_eq!(error_of(&decode_with(&longer, &lenient)), Some(whole));
+    let as_coded = read_header_with(&bytes, &lenient.clone().with_color(ColorOutput::AsCoded));
+    let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+    decoder.feed(&bytes);
+    assert_eq!(
+        format!("{:?}", decoder.header()),
+        format!("{:?}", as_coded.map(Some))
+    );
+    assert!(matches!(
+        decoder.refine(),
+        Ok(Refined::Waiting(Waiting::SampleLimit { .. }))
+    ));
+    // Once a `jp2c` after the codestream stops the walk there, the refusal
+    // is the decode's, and `header` gives it.
+    let settled = file(&[synth::bx(b"jp2c", &[]), short_colr]);
+    let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+    decoder.feed(&settled);
+    assert_eq!(error_of(&decoder.header()), Some(refused.clone()));
+    assert_eq!(
+        error_of(&read_header_with(&settled, &lenient)),
+        Some(refused)
+    );
 }

@@ -881,3 +881,171 @@ fn a_tile_cap_refusal_more_bytes_lift_is_given_at_the_eoc() {
     );
     assert_eq!(error_of(&decoder.finish()), Some(refused));
 }
+
+/// A box after the codestream that stops OpenJPEG's walk there for good: the
+/// header of a second `jp2c`, or a box whose `XLBox` is 2^32. Nothing after
+/// it is read, so no byte appended to the file adds a box the decode checks
+/// before the tile-parts. With each, how many of its bytes come after the
+/// one that settles it: the walk stops at the `jp2c` type, and at the
+/// nonzero high half of the `XLBox`.
+fn walk_stoppers() -> Vec<(&'static str, Vec<u8>, usize)> {
+    vec![
+        ("a second jp2c", synth::bx(b"jp2c", &[]), 0),
+        (
+            "an XLBox of 2^32",
+            [&[0, 0, 0, 1][..], b"xml ", &(1u64 << 32).to_be_bytes()].concat(),
+            4,
+        ),
+    ]
+}
+
+/// Bytes appended to a JP2 file whose tile-parts' error no later byte can
+/// change: boxes of each kind the walk after the codestream reads, at fault
+/// or not, of length 0 and with an `XLBox`, and a second `jp2c`.
+fn jp2_suffixes() -> Vec<Vec<u8>> {
+    let open = |kind: &[u8; 4], payload: &[u8]| [&[0, 0, 0, 0][..], kind, payload].concat();
+    vec![
+        vec![0; 64],
+        synth::bx(b"colr", &[1, 0]),
+        synth::bx(b"colr", &synth::colr_enum(16)),
+        synth::bx(b"jp2h", &[]),
+        synth::JP2_SIGNATURE.to_vec(),
+        synth::ftyp_jp2(),
+        synth::bx(b"bpcc", &[7, 7]),
+        synth::bx(b"pclr", &[0, 1, 1, 7, 0]),
+        synth::bx(b"cmap", &[0, 0, 1, 0]),
+        synth::bx(b"cdef", &[0, 1, 0, 0, 0, 0]),
+        synth::bx(b"xml ", b"<a/>"),
+        open(b"colr", &[1, 0]),
+        open(b"jp2h", &[]),
+        [&[0, 0, 0, 1][..], b"colr", &18u64.to_be_bytes(), &[1, 0]].concat(),
+        synth::bx(b"jp2c", &[0xFF, 0x4F]),
+        [&EOC[..], &synth::bx(b"colr", &[1, 0])].concat(),
+    ]
+}
+
+/// Check that `bytes`, whose error under `options` with `strict` off is
+/// final, give that error with every [`jp2_suffixes`] appended, in the
+/// decode and, where it refuses, the header read.
+fn check_suffixes(bytes: &[u8], options: &DecodeOptions, name: &str) {
+    let lenient = options.clone().with_strict(false);
+    let whole = error_of(&decode_with(bytes, &lenient)).expect("an error");
+    let header = error_of(&read_header_with(bytes, &lenient));
+    for suffix in jp2_suffixes() {
+        let longer = [bytes, &suffix].concat();
+        let at = format!("{name}, then {suffix:02x?}");
+        assert_eq!(
+            error_of(&decode_with(&longer, &lenient)),
+            Some(whole.clone()),
+            "{at}"
+        );
+        if header.is_some() {
+            assert_eq!(
+                error_of(&read_header_with(&longer, &lenient)),
+                header,
+                "{at}"
+            );
+        }
+    }
+}
+
+/// Once a box after the codestream stops the walk there for good
+/// ([`walk_stoppers`]), no box that more bytes bring is read, so a JP2
+/// file's tile-parts are held as a codestream's are: an error in a tile is
+/// final at the `EOC`, and `refine` returns it once that box is in, as
+/// `header` does a tile the header read refuses. A box of length 0 after
+/// the codestream is read whatever follows it, while under 2^32 bytes do,
+/// so the error stays held.
+#[test]
+fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
+    for (name, codestream, options) in mended() {
+        let lenient = options.clone().with_strict(false);
+        let tiles = error_of(&decode_with(&codestream, &lenient)).expect("an error");
+        for (stopper, after, past) in walk_stoppers() {
+            let name = format!("{name} in JP2, then {stopper}");
+            let bytes = in_jp2(&codestream, std::slice::from_ref(&after));
+            assert_eq!(
+                error_of(&decode_with(&bytes, &lenient)),
+                Some(tiles.clone()),
+                "{name}"
+            );
+            check_streams(&bytes, &lenient, &name);
+            check_suffixes(&bytes, &options, &name);
+            let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+            decoder.feed(&bytes);
+            assert_eq!(error_of(&decoder.refine()), Some(tiles.clone()), "{name}");
+            assert_eq!(
+                error_of(&decoder.header()),
+                error_of(&read_header_with(&bytes, &lenient)),
+                "{name}"
+            );
+            // Cut before the byte that settles it, the walk may still read
+            // a box.
+            let mut cut = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+            cut.feed(&bytes[..bytes.len() - past - 1]);
+            assert!(
+                matches!(cut.refine(), Ok(Refined::Waiting(Waiting::Held { .. }))),
+                "{name}: cut"
+            );
+            assert!(matches!(cut.header(), Ok(Some(_))), "{name}: cut");
+        }
+        let name = format!("{name} in JP2, then a box of length 0");
+        let open = [&[0, 0, 0, 0][..], b"xml ", b"<a/>"].concat();
+        let bytes = in_jp2(&codestream, &[open]);
+        let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+        decoder.feed(&bytes);
+        match decoder.refine() {
+            Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
+                assert_eq!(format!("{error:?}"), tiles, "{name}");
+            }
+            other => panic!("{name}: {other:?}"),
+        }
+        assert!(matches!(decoder.header(), Ok(Some(_))), "{name}");
+    }
+}
+
+/// `codestream` with the `Psot` of its last tile-part set to 0 and its
+/// `EOC` dropped, so that tile-part runs to the end of the input.
+fn open_last_part(codestream: &[u8]) -> Vec<u8> {
+    let be16 = |at: usize| u16::from_be_bytes([codestream[at], codestream[at + 1]]);
+    let mut at = 2;
+    while be16(at) != 0xFF90 {
+        at += 2 + usize::from(be16(at + 2));
+    }
+    loop {
+        let psot = u32::from_be_bytes(codestream[at + 6..at + 10].try_into().unwrap());
+        let next = at + psot as usize;
+        if be16(next) == 0xFFD9 {
+            let mut open = codestream[..next].to_vec();
+            open[at + 6..at + 10].fill(0);
+            return open;
+        }
+        at = next;
+    }
+}
+
+/// OpenJPEG reads no box after a codestream whose last tile-part has
+/// `Psot = 0`, as it runs to the end of the file, so the tile-parts of such
+/// a JP2 file are held as a codestream's are. An error in a tile waits, as
+/// the tile-parts never close, until a fault of the parse of the last
+/// tile-part comes in, which is final; `header` holds a tile the header
+/// read refuses until then.
+#[test]
+fn a_fault_in_a_last_tile_part_with_psot_0_is_final_in_a_jp2_file() {
+    for (name, codestream, options, _) in faulty() {
+        let lenient = options.clone().with_strict(false);
+        let bytes = in_jp2(&open_last_part(&codestream), &[]);
+        let name = format!("{name}, Psot 0, in JP2");
+        let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+        assert!(
+            whole.starts_with("Codestream") || whole.starts_with("Marker"),
+            "{name}: {whole}"
+        );
+        check_streams(&bytes, &lenient, &name);
+        check_streams(&bytes, &options.clone().with_strict(true), &name);
+        check_suffixes(&bytes, &options, &name);
+        let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+        decoder.feed(&bytes);
+        assert_eq!(error_of(&decoder.refine()), Some(whole), "{name}");
+    }
+}

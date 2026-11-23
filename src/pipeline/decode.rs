@@ -41,10 +41,12 @@ pub(crate) fn read_header_kept(
 /// of the tile-parts may yet give way to a fault in a later one. In a
 /// codestream, a tile refusal, by the reduction or a tile cap, is held, and
 /// the header given, while the tile-parts have not closed with an `EOC`
-/// ([`codestream::Codestream::closed`]). A JP2 file never closes, as boxes
-/// can follow the codestream and the decode checks them first: every error
-/// of its tile-parts is held, and so is an error of its boxes that more bytes
-/// can replace ([`read_jp2_prefix`]). Past that, it gives what
+/// ([`codestream::Codestream::closed`]). In a JP2 file, an error of its
+/// boxes that more bytes can replace is held ([`read_jp2_prefix`]). Boxes
+/// can follow the codestream, and the decode checks them first, so every
+/// error of the tile-parts is held while a box after the codestream can
+/// still be read ([`jp2::Jp2File::after_settled`]). Once none can, the
+/// tile-parts are held as a codestream's are. Past that, it gives what
 /// [`read_header`] gives.
 pub(crate) fn read_header_streamed(
     bytes: &[u8],
@@ -88,31 +90,29 @@ fn read_header_from(
             .as_ptr()
             .addr()
             .wrapping_sub(bytes.as_ptr().addr());
-        // An error held back comes before those of the tile-parts.
-        let boxes = prefix.held.is_some();
-        let checked = match prefix.held.clone() {
-            Some(held) => Err(held),
-            None => check_geometry(
+        // An error held back from the boxes comes before those of the
+        // tile-parts. It is held whatever it is, a refusal more bytes lift
+        // included, as a fault of a box still to come after the codestream
+        // comes first.
+        if let Some(held) = &prefix.held {
+            if !hold {
+                return Err(held.clone());
+            }
+        } else if !hold || prefix.settled {
+            // Once no box after the codestream can be read, the codestream
+            // grows as a raw one does, and its tile-parts are held as a raw
+            // one's are. Before that, a fault of such a box comes first, so
+            // every error of the tile-parts is held, and they are not walked.
+            check_geometry(
                 prefix.codestream,
                 &prefix.parsed,
                 &prefix.selection,
                 reduction,
                 samples::cap(&options.sample_limit, bytes.len()),
                 options.strict,
-                Hold::Never,
+                if hold { Hold::UntilClosed } else { Hold::Never },
                 kept.map(|kept| (kept, start)),
-            ),
-        };
-        // Boxes can follow the codestream, and the decode checks them before
-        // the tile-parts, so a JP2 file never closes, and a tile refusal is
-        // held, one more bytes lift included, as a later fault replaces it.
-        // A refusal more bytes lift held back from the boxes is given.
-        match checked {
-            Err(Error::Limit(limit)) if hold && boxes && incremental::lifts_with_bytes(&limit) => {
-                return Err(Error::Limit(limit));
-            }
-            Err(_) if hold => {}
-            checked => checked?,
+            )?;
         }
         let area = &prefix.selection.area;
         let (width, height) = area.image_extent_at(reduction);
@@ -1065,7 +1065,8 @@ pub(crate) fn decode_metered(
 /// later tile-part may hold a fault the decode gives first, so a refine
 /// waits on the error ([`Waiting::Held`](crate::Waiting::Held)).
 /// A JP2 file's error of the boxes that more bytes can replace is noted the
-/// same way, as never `closed`.
+/// same way, as never `closed`, and so is an error of its tile-parts while
+/// a box after the codestream can still be read.
 fn held_unless<T>(
     closed: bool,
     ledger: Option<&incremental::Ledger>,
@@ -1203,6 +1204,9 @@ struct Jp2Prefix<'a> {
     /// later box can replace ([`read_jp2_prefix`]), held back. It is `None`
     /// for a read of the whole input, which returns that error instead.
     held: Option<Error>,
+    /// Whether no box after the codestream can still be read, whatever
+    /// bytes follow ([`jp2::Jp2File::after_settled`]).
+    settled: bool,
 }
 
 /// Read a JP2 file up to its tile data, in OpenJPEG's order, all of it
@@ -1338,6 +1342,7 @@ fn read_jp2_prefix<'a>(
         srgb,
         selection,
         held,
+        settled: file.after_settled,
     })
 }
 
@@ -1358,9 +1363,17 @@ fn decode_jp2(
         return held_unless(false, ledger, Err(error));
     }
     // Boxes can follow the codestream, and their faults come before those of
-    // the tile-parts, so a JP2 file never closes.
+    // the tile-parts, so while one can still be read every error here is
+    // held. Once none can, the codestream grows as a raw one does
+    // ([`jp2::Jp2File::after_settled`]), and its errors are held as a raw
+    // one's are: a fault of the parse of the tile-parts is final, and an
+    // error past it is held until they close.
+    let cs = match codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict) {
+        Ok(cs) => cs,
+        Err(fault) => return held_unless(prefix.settled, ledger, Err(fault)),
+    };
+    let closed = prefix.settled && cs.closed;
     let decoded = || {
-        let cs = codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict)?;
         let cap = samples::cap(&options.sample_limit, bytes.len());
         let image = decode_codestream(cs, options, &prefix.selection, cap, ledger)?;
         // A subset is planned raw, so the plans would pass it through, but
@@ -1379,7 +1392,7 @@ fn decode_jp2(
             ..image
         })
     };
-    held_unless(false, ledger, decoded())
+    held_unless(closed, ledger, decoded())
 }
 
 /// Decode a parsed codestream into the area and components `selection`
