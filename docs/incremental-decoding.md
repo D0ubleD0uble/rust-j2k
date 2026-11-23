@@ -25,7 +25,7 @@ does again on each refine.
   | `BoundSpent { limit, .. }` | The earlier refines spent the code-block bound the refines share, so the refine stopped decoding at a tile, the cut, whose work fits the whole bound. Decode the bytes fed now or start a new decoder. That decode can be refused for work or fail: where the whole bound refuses a later tile, the detail's `refused_at` gives it and its work, and that decode is refused there or fails first in a tile the refine did not decode. |
   | `MissingTiles { limit, .. }` | The charge for missing tiles passed the packet bound. |
   | `RepeatLimit { .. }` | The bound on the walks of tiles not kept is spent (see [Work and memory](#work-and-memory)). |
-  | `Held { error }` | The decode of the bytes fed fails with `error`, but more bytes can still put an earlier error, or an image, in its place: a fault in a later tile-part, or in a JP2 box still to come or still arriving. `error` is a tile error met once every tile-part has parsed (a reduction past the tile's own levels, a tile cap under `AtMost`, a damaged packet header, too many bit-planes), in a JP2 file also a fault of the tile-parts, or an error of the boxes that more bytes can replace (see [Errors in a JP2 file's boxes](#errors-in-a-jp2-files-boxes)). In a codestream, the next refine that decodes once the `EOC` is in gives the final answer; in a JP2 file, `finish` does. An image can still follow it, for example where a later tile-part's `POC` changes which packets are read. See [When an error in a tile is final](#when-an-error-in-a-tile-is-final). |
+  | `Held { error }` | The decode of the bytes fed fails with `error`, but more bytes can still put an earlier error, or an image, in its place: a fault in a later tile-part, or in a JP2 box still to come or still arriving. `error` is a tile error met once every tile-part has parsed (a reduction past the tile's own levels, a tile cap under `AtMost`, a damaged packet header, too many bit-planes), in a JP2 file also a fault of the tile-parts, or an error of the boxes that more bytes can replace (see [Errors in a JP2 file's boxes](#errors-in-a-jp2-files-boxes)). In a codestream, the next refine that decodes once the `EOC` is in gives the final answer. In a JP2 file it does once that `EOC` is in and no box after the codestream can still be read; otherwise `finish` does, under the decoder's options, so with `strict` on it can give a stricter error than `error`. An image can still follow it, for example where a later tile-part's `POC` changes which packets are read. See [When an error in a tile is final](#when-an-error-in-a-tile-is-final). |
 
   More bytes can complete the header, the bounds grow with the bytes, and
   the missing tiles shrink, so each of these is a wait, and such a limit is
@@ -128,11 +128,21 @@ tile that restates its `COD` with other values, or a `COC` for a component
 the image does not have. So such an error is final only once the input
 closes. A codestream closes when the chain of `SOT`s steps by nonzero
 `Psot`s to an `EOC` in the bytes fed; past that, more bytes change no
-tile-part. A JP2 file never closes: the decode checks the boxes after the
-codestream before it parses the tile-parts, so a damaged box that follows
-the codestream comes before every error of the tiles. A last tile-part whose
-`Psot` is 0 runs to the end of the input, which may still grow, so such a
-codestream never closes either.
+tile-part. A last tile-part whose `Psot` is 0 runs to the end of the
+input, which may still grow, so such a codestream never closes.
+
+In a JP2 file the decode checks the boxes after the codestream before it
+parses the tile-parts, so a damaged box that follows the codestream comes
+before every error of the tiles, a fault of the tile-parts included. So
+each such error waits while a box after the codestream can still be read.
+None can once OpenJPEG's walk there meets a `jp2c` or an `XLBox` of 2^32
+or more, and none ever is where the last tile-part has `Psot` 0, which runs
+to the end of the file, or where the tile-part chain is broken on the bytes
+fed, so that OpenJPEG's walk cannot reach the boxes after it. A box of length 0 after the
+codestream is still read while under 2^32 bytes follow it, so it does not
+end the wait. Once no box there can be read, the tile-parts are held as a
+codestream's are: a fault of the tile-parts is final, and an error in a
+tile waits until they close.
 
 Until the input closes, `refine` waits on the error as `Waiting::Held`,
 which carries the error `decode_with` gives on the bytes fed, and `header`
@@ -147,7 +157,8 @@ packet that failed is no longer read. A
 caller that stops on a `Held` gives up on such a file. A caller that
 stopped on such an error from
 `refine` now waits for it: a tile cap refusal under `AtMost`, for one, comes
-at the `EOC` in a codestream and from `finish` in a JP2 file.
+at the `EOC` in a codestream, and in a JP2 file at the `EOC` once no box
+after the codestream can be read, or else from `finish`.
 
 The rule covers every error the decode meets once it has parsed the
 tile-parts. A refusal under the default or a `Raised` limit waits anyway,
@@ -160,7 +171,8 @@ at once, except a refusal of the sRGB step in a JP2 file, which waits
 while a box after the codestream can still be read. In a codestream, so
 does a fault of a tile-part. In a JP2 file every error from the
 tile-parts on, a fault of a tile-part included, waits as `Waiting::Held`
-until `finish`, as a damaged box after the codestream comes before it.
+while a box after the codestream can still be read, as a damaged one
+comes before it, and is then held as in a codestream.
 `finish`, `decode_with` and `read_header_with` are not changed, nor is
 anything with `strict` on, as `refine` and `header` always read with it
 off.
@@ -196,7 +208,9 @@ wait the same way:
   first.
 - A refusal of the sRGB step. `decode_with` checks the boxes after the
   codestream before it plans that step, so a box at fault there, still to
-  come, replaces it.
+  come, replaces it. That holds for a refusal more bytes lift too: `header`
+  gives the header for it, and `refine` waits on it as
+  `Waiting::SampleLimit`.
 
 Some of these are final all the same, and are given at once:
 
@@ -218,7 +232,8 @@ more follow it, and the file then decodes.
 
 `refine` waits on these as `Waiting::Held`, with the error
 `decode_with` gives on the bytes fed, and `finish` reports what the whole
-file gives. `header` gives the header, with the channels as coded where the
+file gives under the decoder's options: with `strict` on, that can be a
+stricter error. `header` gives the header, with the channels as coded where the
 sRGB step is refused, or `None` where the box of length 0 is before the
 codestream, as there is no main header yet. A fault in a box the bytes fed
 hold whole stays final at once, before or after the codestream: the boxes

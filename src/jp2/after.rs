@@ -49,9 +49,16 @@ pub(crate) enum End {
     /// A tile-part with `Psot = 0`, of the tile with this index (`Isot`),
     /// runs to the end of the file.
     OpenLastPart(u16),
-    /// The main header or the tile-part chain is broken or cut short: the
-    /// codestream parser rejects it, or `read_header` reads only its header.
+    /// The main header or the tile-part chain is cut short: the codestream
+    /// parser rejects it, or `read_header` reads only its header. More bytes
+    /// can take the walk on.
     Unknown,
+    /// The main header or the tile-part chain is broken on bytes the input
+    /// holds: a marker or length no codestream has there, or a `Psot` that
+    /// steps to a marker that is neither `SOT` nor `EOC`. The walk reads
+    /// those bytes the same whatever follows, so no byte appended to the
+    /// input finds the end.
+    Broken,
 }
 
 /// Find where the codestream at the start of `bytes` ends by stepping over the
@@ -64,20 +71,22 @@ pub(crate) fn codestream_end(bytes: &[u8]) -> End {
             .get(at..at.checked_add(2)?)
             .map(|b| u16::from_be_bytes([b[0], b[1]]))
     };
-    if marker(0) != Some(SOC) {
-        return End::Unknown;
+    match marker(0) {
+        Some(SOC) => {}
+        Some(_) => return End::Broken,
+        None => return End::Unknown,
     }
     let mut at = 2usize;
     loop {
         match marker(at) {
             Some(SOT) => break,
-            Some(code) if code >> 8 == 0xFF => {
-                let Some(length) = marker(at + 2).filter(|&length| length >= 2) else {
-                    return End::Unknown;
-                };
-                at += 2 + usize::from(length);
-            }
-            _ => return End::Unknown,
+            Some(code) if code >> 8 == 0xFF => match marker(at + 2) {
+                Some(length) if length >= 2 => at += 2 + usize::from(length),
+                Some(_) => return End::Broken,
+                None => return End::Unknown,
+            },
+            Some(_) => return End::Broken,
+            None => return End::Unknown,
         }
     }
     loop {
@@ -91,18 +100,20 @@ pub(crate) fn codestream_end(bytes: &[u8]) -> End {
             return End::OpenLastPart(isot);
         }
         if psot < MIN_TILE_PART {
-            return End::Unknown;
+            return End::Broken;
         }
+        // A step past the address space reaches no byte of any input.
         let Some(end) = usize::try_from(psot)
             .ok()
             .and_then(|psot| at.checked_add(psot))
         else {
-            return End::Unknown;
+            return End::Broken;
         };
         match marker(end) {
             Some(EOC) => return End::At(end + 2),
             Some(SOT) => at = end,
-            _ => return End::Unknown,
+            Some(_) => return End::Broken,
+            None => return End::Unknown,
         }
     }
 }

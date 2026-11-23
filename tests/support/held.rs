@@ -3,9 +3,10 @@
 //! a tile, so an error met after that parse gives way to a fault in a later
 //! tile-part. `refine` waits on such an error (`Waiting::Held`) and
 //! `header` gives the header, until the input closes: a codestream whose
-//! chain of `SOT`s steps by nonzero `Psot`s to an `EOC` the input holds. A
-//! JP2 file never closes, as boxes can follow the codestream and the decode
-//! checks them first.
+//! chain of `SOT`s steps by nonzero `Psot`s to an `EOC` the input holds.
+//! The oracle takes a JP2 file as never closed, as boxes can follow the
+//! codestream and the decode checks them first: that allows a hold
+//! wherever the decoder may hold, and checks the error it holds on.
 //!
 //! This file has no dependency but `rust_j2k`. It does not say which errors
 //! are held: an oracle allows a held error only where the input has not

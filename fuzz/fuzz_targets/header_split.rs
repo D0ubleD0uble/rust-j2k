@@ -11,8 +11,8 @@
 //! (`tests/incremental_header.rs`) uses the default limits only.
 //!
 //! The exception is an error more bytes can replace, which `header()` holds
-//! back while the input has not closed (`tests/support/held.rs`; a JP2 file
-//! never closes): it gives the header where that read gives the error, or,
+//! back while the input has not closed (`tests/support/held.rs`, which takes
+//! a JP2 file as never closed): it gives the header where that read gives the error, or,
 //! in a JP2 file whose box of length 0 before the codestream is at fault,
 //! `None`. In a JP2 file each needs a suffix that changes what that read
 //! gives ([`replaceable`]), but for the header on a refusal of the sRGB

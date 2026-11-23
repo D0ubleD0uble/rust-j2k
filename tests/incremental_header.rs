@@ -442,8 +442,8 @@ fn each_header_of_a_jp2_file_is_the_read_of_its_prefix() {
     );
     let whole = in_jp2(&codestream, &[]);
     let seen = check_tiled("jp2", &whole, 21);
-    // The read refuses a tile, which `header` holds back: a JP2 file never
-    // closes, as a box after the codestream can be at fault.
+    // The read refuses a tile, which `header` holds back: a box after the
+    // codestream can still be read, and be at fault.
     assert!(seen.last().is_some_and(|s| s.starts_with("Ok(Some(")));
     let lenient = DecodeOptions::default().with_strict(false);
     assert!(matches!(

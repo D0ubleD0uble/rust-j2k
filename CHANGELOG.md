@@ -263,10 +263,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it holds one refused under `AtMost`. It returned the `Error::Limit` at
   once, and a later tile-part's fault then replaced it in the whole file,
   so `header` gave an error the whole file does not. It now gives the
-  header until a codestream's `EOC` is in; a JP2 file never closes, so
-  there `header` gives the header and `finish` reports the refusal.
-  `refine` still waits on it as `Waiting::SampleLimit`.
-  `read_header_with` is unchanged (#649).
+  header until a codestream's `EOC` is in, and in a JP2 file until that
+  `EOC` is in and no box after the codestream can be read. `refine` still
+  waits on it as `Waiting::SampleLimit`. `read_header_with` is unchanged
+  (#649, #651).
+- `IncrementalDecoder::refine` and `header` give a JP2 file's fault of the
+  tile-parts once no byte can change it, where they held it until
+  `finish`. Boxes after the codestream are checked first, so the fault
+  waits while one can still be read. None can where the last tile-part has
+  `Psot` 0, where the tile-part chain is broken on the bytes fed (such as
+  a tile-part followed by `FE 90`), or once the walk after the codestream
+  meets a `jp2c` or an `XLBox` of 2^32 or more. From there the tile-parts
+  are held as a codestream's are, so an error in a tile is given at the
+  `EOC`. A box of length 0 after the codestream still holds them. `header`
+  also gave a refusal of the sRGB step that more bytes lift while a box
+  after the codestream could still replace it; it now gives the header
+  with the channels as coded, as for any other refusal of that step
+  (#651).
 - A `SOT` marker segment whose `Lsot` is not 10 is refused as soon as the
   input holds `Lsot`, with `strict` on and off, with the `Error::Marker`
   the whole segment gives: a length below 2, a body too short for the

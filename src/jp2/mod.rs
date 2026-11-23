@@ -158,8 +158,12 @@ pub(crate) struct Jp2File<'a> {
     pub(crate) after_open: bool,
     /// Whether no byte appended to the input changes what [`after::check`]
     /// reads: OpenJPEG never reads the boxes after the codestream, as it
-    /// steps to a last tile-part with `Psot = 0`, or its walk there stopped
-    /// for good ([`boxes::AfterCodestream::ended`]).
+    /// steps to a last tile-part with `Psot = 0` or the tile-part chain is
+    /// broken on bytes in, or its walk there stopped for good
+    /// ([`boxes::AfterCodestream::ended`]). Then the
+    /// [`codestream`](Self::codestream) of a longer input starts with this
+    /// one, as a raw codestream's does: it is fixed, or it runs to the end
+    /// of the input.
     pub(crate) after_settled: bool,
 }
 
@@ -412,6 +416,7 @@ fn locate_codestream<'a>(
             }
         }
         End::OpenLastPart(_) => (tail, &[], AfterRead::Never),
+        End::Broken => (payload, rest, AfterRead::Never),
         End::Unknown => (payload, rest, AfterRead::NotYet),
     }
 }
@@ -423,10 +428,14 @@ enum AfterRead {
     /// It does: every tile-part has a length, and the last ends at `EOC`.
     Yes,
     /// It never does, whatever bytes follow: the codestream steps to a
-    /// tile-part with `Psot = 0`, which runs to the end of the file. The
-    /// tile-parts before it are in, so no later byte moves that step.
+    /// tile-part with `Psot = 0`, which runs to the end of the file, or its
+    /// main header or tile-part chain is broken on bytes the input holds
+    /// ([`End::Broken`]), so OpenJPEG's walk cannot reach the boxes after
+    /// it. The bytes the walk reads
+    /// to get there are in, so no later byte changes it.
     Never,
-    /// Not on the bytes in: the tile-part chain is cut short or broken.
+    /// Not on the bytes in: the main header or the tile-part chain is cut
+    /// short.
     NotYet,
 }
 

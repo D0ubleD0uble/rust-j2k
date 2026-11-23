@@ -26,8 +26,8 @@
 //! wait's `refused_at` gives: a refine cut short by what was spent does not
 //! decode the tiles it counts, and waits there. `Held` comes only
 //! where the one-shot decode gives that error and the bytes fed have not
-//! closed (a codestream whose tile-parts step to an `EOC`; a JP2 file never
-//! does), as a later tile-part or JP2 box may bring a fault that comes
+//! closed (a codestream whose tile-parts step to an `EOC`; the oracle takes
+//! a JP2 file as never closed), as a later tile-part or JP2 box may bring a fault that comes
 //! first. The probe below is
 //! checked by the same rule. An error is final: once a refine gives one,
 //! with no change of options since, the decode of the whole input gives it
