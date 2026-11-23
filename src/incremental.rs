@@ -330,12 +330,17 @@ impl IncrementalDecoder {
     /// `strict` checks, such as a tile with no tile-part.
     /// [`read_header`](crate::read_header)`(decoder.bytes())` reads the
     /// header without the decoder's options. The default sample limit grows
-    /// with the bytes fed, so a sample-limit [`Error::Limit`] here, of kind
-    /// [`Samples`](LimitKind::Samples),
-    /// [`TileCodeBlocks`](LimitKind::TileCodeBlocks) or
-    /// [`TilePrecincts`](LimitKind::TilePrecincts), can turn into a header
-    /// once more bytes come in; [`refine`](Self::refine) waits
-    /// on it instead ([`Waiting::SampleLimit`]). Under a ceiling of
+    /// with the bytes fed, so a refusal of the image's samples here
+    /// ([`Error::Limit`] of kind [`Samples`](LimitKind::Samples)) can turn
+    /// into a header once more bytes come in; [`refine`](Self::refine) waits
+    /// on it instead ([`Waiting::SampleLimit`]). A tile over the
+    /// code-blocks or precincts that limit allows a tile
+    /// ([`TileCodeBlocks`](LimitKind::TileCodeBlocks),
+    /// [`TilePrecincts`](LimitKind::TilePrecincts)) is refused here only
+    /// once the tile-parts close (below), and then only bytes after the
+    /// `EOC` can lift it. In a JP2 file this does not give such a refusal;
+    /// `refine` waits on it and [`finish`](Self::finish) reports it. Under
+    /// a ceiling of
     /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost) it does not grow,
     /// so a refusal of the image's samples here is final, and `refine`
     /// returns it as an error too, except a refusal of the sRGB step in a
