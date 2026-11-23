@@ -151,14 +151,16 @@ at the `EOC` in a codestream and from `finish` in a JP2 file.
 
 The rule covers every error the decode meets once it has parsed the
 tile-parts. A refusal under the default or a `Raised` limit waits anyway,
-as `Waiting::SampleLimit`. An error of the image (its samples, or a
-reduction past the main header's levels) or of the main header depends on
-no tile-part, so it stays final at once, except a refusal of the sRGB step
-in a JP2 file, which waits while a box after the codestream can still be
-read. In a codestream, so does a fault
-of a tile-part. In a JP2 file every error from the tile-parts on, a fault
-of a tile-part included, waits as `Waiting::Held` until `finish`, as
-a damaged box after the codestream comes before it.
+as `Waiting::SampleLimit`, and `header` holds a tile's such refusal back
+until the input closes too, as a later fault replaces it as well; once a
+codestream closes, `header` gives it, and more bytes may still lift it. An
+error of the image (its samples, or a reduction past the main header's
+levels) or of the main header depends on no tile-part, so it stays final
+at once, except a refusal of the sRGB step in a JP2 file, which waits
+while a box after the codestream can still be read. In a codestream, so
+does a fault of a tile-part. In a JP2 file every error from the
+tile-parts on, a fault of a tile-part included, waits as `Waiting::Held`
+until `finish`, as a damaged box after the codestream comes before it.
 `finish`, `decode_with` and `read_header_with` are not changed, nor is
 anything with `strict` on, as `refine` and `header` always read with it
 off.

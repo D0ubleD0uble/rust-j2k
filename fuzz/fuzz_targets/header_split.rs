@@ -302,7 +302,10 @@ fuzz_target!(|input: &[u8]| {
             &format!("at {fed} of {}", data.len()),
         );
         // An error is final: more bytes do not change it, so it is what
-        // `read_header_with` gives on the whole input.
+        // `read_header_with` gives on the whole input. A tile-cap refusal
+        // more bytes lift, given once the input closes, can still be lifted
+        // by bytes after the `EOC` (about 128 MiB for the tile of #649),
+        // which is past the fuzz input size limit.
         if let Err(error) = &got {
             let whole = checked(read_header_with(
                 data,

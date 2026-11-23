@@ -14,6 +14,8 @@
 //! counts); refusing them is the departure "a `TNsot` that differs between
 //! a tile's parts" in `docs/openjpeg-departures.md`.
 
+#[path = "support/held.rs"]
+mod held;
 #[path = "support/synth.rs"]
 mod synth;
 
@@ -93,7 +95,8 @@ fn cases() -> Vec<(&'static str, Vec<u8>, &'static str, &'static str)> {
 /// is passed over: an `IncrementalDecoder` waits on it, as the limit grows
 /// with the bytes fed. `read_header_with`'s error is the decode's,
 /// `IncrementalDecoder::header` fed a byte at a time agrees with
-/// `read_header_with`, and the two tile-part walks agree on each prefix.
+/// `read_header_with` but where it holds a tile refusal back, and the two
+/// tile-part walks agree on each prefix.
 #[test]
 fn every_prefix_from_the_first_refusal_gives_one_message() {
     for (name, bytes, want, _) in cases() {
@@ -127,11 +130,19 @@ fn every_prefix_from_the_first_refusal_gives_one_message() {
                 Err(Error::Incomplete(_)) => Ok(None),
                 Err(error) => Err(error),
             };
-            assert_eq!(
-                format!("{:?}", decoder.header()),
-                format!("{header:?}"),
-                "{name}, {length}"
-            );
+            // `header` holds a tile refusal back until the input closes, as
+            // a later tile-part's fault replaces it.
+            let got = decoder.header();
+            if !(matches!(header, Err(Error::Limit(_)))
+                && matches!(got, Ok(Some(_)))
+                && !held::closes(prefix))
+            {
+                assert_eq!(
+                    format!("{got:?}"),
+                    format!("{header:?}"),
+                    "{name}, {length}"
+                );
+            }
         }
         assert!(ok, "{name}: no prefix decoded");
         assert_eq!(failed.as_deref(), Some(want), "{name}");
