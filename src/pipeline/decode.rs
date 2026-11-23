@@ -101,8 +101,10 @@ fn read_header_from(
         } else if !hold || prefix.settled {
             // Once no box after the codestream can be read, the codestream
             // grows as a raw one does, and its tile-parts are held as a raw
-            // one's are. Before that, a fault of such a box comes first, so
-            // every error of the tile-parts is held, and they are not walked.
+            // one's are, or not at all where it is the same whatever follows
+            // ([`jp2::Jp2File::codestream_fixed`]). Before that, a fault of
+            // such a box comes first, so every error of the tile-parts is
+            // held, and they are not walked.
             check_geometry(
                 prefix.codestream,
                 &prefix.parsed,
@@ -110,7 +112,11 @@ fn read_header_from(
                 reduction,
                 samples::cap(&options.sample_limit, bytes.len()),
                 options.strict,
-                if hold { Hold::UntilClosed } else { Hold::Never },
+                if hold && !prefix.fixed {
+                    Hold::UntilClosed
+                } else {
+                    Hold::Never
+                },
                 kept.map(|kept| (kept, start)),
             )?;
         }
@@ -1207,6 +1213,10 @@ struct Jp2Prefix<'a> {
     /// Whether no box after the codestream can still be read, whatever
     /// bytes follow ([`jp2::Jp2File::after_settled`]).
     settled: bool,
+    /// Whether the codestream the decode reads is the same whatever bytes
+    /// follow, with no box after it read ([`jp2::Jp2File::codestream_fixed`]),
+    /// so that the tile-parts' errors are final though they have not closed.
+    fixed: bool,
 }
 
 /// Read a JP2 file up to its tile data, in OpenJPEG's order, all of it
@@ -1343,6 +1353,7 @@ fn read_jp2_prefix<'a>(
         selection,
         held,
         settled: file.after_settled,
+        fixed: file.codestream_fixed,
     })
 }
 
@@ -1367,12 +1378,14 @@ fn decode_jp2(
     // held. Once none can, the codestream grows as a raw one does
     // ([`jp2::Jp2File::after_settled`]), and its errors are held as a raw
     // one's are: a fault of the parse of the tile-parts is final, and an
-    // error past it is held until they close.
+    // error past it is held until they close, or, where the codestream is
+    // the same whatever follows ([`jp2::Jp2File::codestream_fixed`]), not
+    // at all.
     let cs = match codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict) {
         Ok(cs) => cs,
         Err(fault) => return held_unless(prefix.settled, ledger, Err(fault)),
     };
-    let closed = prefix.settled && cs.closed;
+    let closed = prefix.fixed || (prefix.settled && cs.closed);
     let decoded = || {
         let cap = samples::cap(&options.sample_limit, bytes.len());
         let image = decode_codestream(cs, options, &prefix.selection, cap, ledger)?;

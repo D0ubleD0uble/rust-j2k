@@ -1144,3 +1144,90 @@ fn a_fault_in_a_last_tile_part_with_psot_0_is_final_in_a_jp2_file() {
         assert_eq!(error_of(&decoder.refine()), Some(whole), "{name}");
     }
 }
+
+/// `codestream` cut at the end of its first tile-part, with no `EOC`.
+fn first_part(codestream: &[u8]) -> Vec<u8> {
+    let sot = codestream
+        .windows(2)
+        .position(|w| w == [0xFF, 0x90])
+        .expect("an SOT");
+    let psot = u32::from_be_bytes(codestream[sot + 6..sot + 10].try_into().unwrap());
+    codestream[..sot + psot as usize].to_vec()
+}
+
+/// A JP2 file whose codestream stops at the end of a tile-part, then one
+/// byte that is not `0xFF` where the next `SOT` or the `EOC` belongs. No
+/// byte after it makes that a marker, so OpenJPEG's walk never reaches the
+/// boxes after the codestream, and the decode reads the `jp2c` box's
+/// payload, which a box of explicit length holds whole whatever follows.
+/// The tile's error (`decode_with` with `strict` off) is then final, and
+/// `refine` and `header` give it at once. The byte is past the box, or the
+/// last of its payload. In a `jp2c` box of length 0 the byte is the last
+/// of a payload that more bytes extend, and they bring a fault of the
+/// tile-parts after it, so there the error stays held; so it does where
+/// the byte is `0xFF`, which more bytes can make a marker.
+fn check_lone_byte(name: &str, codestream: &[u8], options: &DecodeOptions) {
+    let lenient = options.clone().with_strict(false);
+    let part = first_part(codestream);
+    for byte in [0x00, 0x41] {
+        let past = [in_jp2(&part, &[]), vec![byte]].concat();
+        let inside = in_jp2(&[&part[..], &[byte]].concat(), &[]);
+        for (place, bytes) in [("past the box", past), ("inside the box", inside)] {
+            let name = format!("{name}, {byte:#04x} {place}");
+            let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+            let header = error_of(&read_header_with(&bytes, &lenient));
+            let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+            decoder.feed(&bytes);
+            assert_eq!(error_of(&decoder.header()), header, "{name}: header");
+            assert_eq!(error_of(&decoder.refine()), Some(whole), "{name}: refine");
+            check_suffixes(&bytes, options, &name);
+            check_streams(&bytes, &lenient, &name);
+        }
+    }
+    // Held: the byte is the last of a `jp2c` box of length 0, or it is
+    // `0xFF`.
+    let header = in_jp2(&part, &[]);
+    let jp2c = header.len() - part.len() - 8;
+    let open = [&header[..jp2c], &[0, 0, 0, 0], b"jp2c", &part, &[0x00]].concat();
+    let ff = [in_jp2(&part, &[]), vec![0xFF]].concat();
+    for (place, bytes) in [("0x00 in a jp2c of length 0", open), ("0xff", ff)] {
+        let name = format!("{name}, {place}");
+        let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+        let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+        decoder.feed(&bytes);
+        match decoder.refine() {
+            Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
+                assert_eq!(format!("{error:?}"), whole, "{name}");
+            }
+            other => panic!("{name}: {other:?}"),
+        }
+        assert!(matches!(decoder.header(), Ok(Some(_))), "{name}");
+        // And more bytes do replace the error: after `0xFF` an `EOC`,
+        // then a `colr` box at fault; after the `0x00`, a fault of the
+        // tile-part chain.
+        let longer = [&bytes[..], &[0xD9], &synth::bx(b"colr", &[1, 0])].concat();
+        assert_ne!(
+            error_of(&decode_with(&longer, &lenient)),
+            Some(whole),
+            "{name}"
+        );
+    }
+}
+
+/// The tile's error of [`check_lone_byte`]: the packet header's Lblock
+/// indicator, which the decode meets.
+#[test]
+fn a_lone_byte_where_a_marker_belongs_settles_a_jp2_file_for_the_decode() {
+    check_lone_byte(
+        "Lblock",
+        &packet_one_tile(8, &lblock_packet(), &[]),
+        &DecodeOptions::default(),
+    );
+}
+
+/// The tile's error of [`check_lone_byte`]: a tile refused by the
+/// reduction, which the header read meets too.
+#[test]
+fn a_lone_byte_where_a_marker_belongs_settles_a_jp2_file_for_the_header() {
+    check_lone_byte("reduction, two tiles", &reduction_row(&[]), &reduced());
+}

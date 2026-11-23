@@ -149,14 +149,12 @@ enum Completion {
     Bytes(Vec<u8>),
     /// The suffix would take more than [`MOST_PADDING`] zeros, so it is not
     /// built: the box or tile-part the input ends inside is completed, then
-    /// [`SHORT_COLR`] follows, as for [`Completion::Bytes`].
-    Far,
-    /// The input ends one byte into where the next `SOT` or the `EOC`
-    /// belongs, and that byte is not `0xFF`. No suffix makes a marker of
-    /// it, but the decoder reads the tile-part chain there as cut short, as
-    /// it does any marker the input ends inside, and holds an error of the
-    /// tiles, which this target allows.
-    LoneByte,
+    /// [`SHORT_COLR`] follows, as for [`Completion::Bytes`]. What it
+    /// holds instead is the input with that box or tile-part dropped, then
+    /// an `EOC` where it is a tile-part, then [`SHORT_COLR`]. The decode
+    /// checks that box before the tile-parts, so an error read there too
+    /// comes from before the bytes dropped, and no suffix replaces it.
+    Far(Vec<u8>),
 }
 
 /// `prefix`, a JP2 file whose codestream ends at `at`, with the box after
@@ -179,7 +177,7 @@ fn after_codestream(prefix: &[u8], mut at: usize) -> Option<Completion> {
         }
         if rest.len() < length {
             if length - rest.len() > MOST_PADDING {
-                return Some(Completion::Far);
+                return Some(Completion::Far([&prefix[..at], &SHORT_COLR].concat()));
             }
             let mut bytes = prefix.to_vec();
             bytes.resize(at + length, 0);
@@ -228,6 +226,13 @@ fn completed(prefix: &[u8]) -> Option<Completion> {
     // Whether the zeros up to `end`, the end of the tile-part the input
     // ends inside, are over [`MOST_PADDING`].
     let far = |end: usize| end.saturating_sub(codestream.len()) > MOST_PADDING;
+    // The input up to the tile-part at `part`, then an `EOC` and
+    // [`SHORT_COLR`].
+    let dropped = |part: usize| {
+        Completion::Far([&prefix[..start + part], &[0xFF, 0xD9], &SHORT_COLR].concat())
+    };
+    // Where the last tile-part walked starts.
+    let mut part = at;
     let end = loop {
         let rest = codestream.get(at..).unwrap_or_default();
         if rest.is_empty() {
@@ -235,9 +240,6 @@ fn completed(prefix: &[u8]) -> Option<Completion> {
         }
         if rest.starts_with(&[0xFF, 0xD9]) {
             return after_codestream(prefix, start + at + 2);
-        }
-        if rest.len() == 1 && rest[0] != 0xFF {
-            return Some(Completion::LoneByte);
         }
         let cut = rest.len().min(MIN_SOT.len());
         let sot = [&rest[..cut], &MIN_SOT[cut..]].concat();
@@ -251,7 +253,7 @@ fn completed(prefix: &[u8]) -> Option<Completion> {
         if cut < MIN_SOT.len() {
             let end = at.checked_add(psot)?;
             if far(end) {
-                return Some(Completion::Far);
+                return Some(dropped(at));
             }
             let mut bytes = [prefix, &sot[cut..]].concat();
             bytes.resize(start + end, 0);
@@ -259,10 +261,11 @@ fn completed(prefix: &[u8]) -> Option<Completion> {
             bytes.extend(SHORT_COLR);
             return Some(Completion::Bytes(bytes));
         }
+        part = at;
         at = at.checked_add(psot)?;
     };
     if far(end) {
-        return Some(Completion::Far);
+        return Some(dropped(part));
     }
     let mut bytes = prefix.to_vec();
     bytes.resize(start + end, 0);
@@ -273,9 +276,9 @@ fn completed(prefix: &[u8]) -> Option<Completion> {
 
 /// Whether more bytes can change what `read_header_with` gives on the JP2
 /// prefix `prefix`: some suffix tried here gives another answer. A fault of
-/// a box held whole, and of the boxes before it, passes none. A suffix too
-/// long to build ([`Completion::Far`]) is taken to change it, untried, as
-/// is a lone byte where a marker belongs ([`Completion::LoneByte`]).
+/// a box held whole, and of the boxes before it, passes none. Where the
+/// suffix is too long to build ([`Completion::Far`]), the input it holds
+/// stands in for it.
 fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
     let lenient = options.clone().with_strict(false);
     let answer = |bytes: &[u8]| format!("{:?}", checked(read_header_with(bytes, &lenient)));
@@ -286,8 +289,7 @@ fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
         [prefix, &SHORT_COLR[..]].concat(),
     ];
     match completed(prefix) {
-        Some(Completion::Bytes(bytes)) => longer.push(bytes),
-        Some(Completion::Far | Completion::LoneByte) => return true,
+        Some(Completion::Bytes(bytes) | Completion::Far(bytes)) => longer.push(bytes),
         None => {}
     }
     longer.iter().any(|bytes| answer(bytes) != base)
