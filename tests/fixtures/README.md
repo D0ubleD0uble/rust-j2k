@@ -620,11 +620,13 @@ its wait gives the tile and work `decode_with` gives. It starts with `SOC`,
 so the target reads it with all-zero control bytes, and its extension keeps
 it out of the sweeps of the fixtures. Replay it with the command above.
 
-`incremental/tile_error_*.seed` are four seeds of the `incremental_decode`
-fuzz target for an error in a tile that a later tile-part's fault replaces
-(#605), and `incremental/held_box_cut_colr_jp2.seed` one for a box after
-the codestream that the input ends inside (#642). They are built by
-`seeds()` in `tests/tile_error_final.rs` (no encoder, no input image, so
+`incremental/tile_error_*.seed` are six seeds of the `incremental_decode`
+fuzz target: four for an error in a tile that a later tile-part's fault
+replaces (#605), and two (`*_jp2_then_jp2c`, `*_jp2_then_xlbox`) for a
+tile's error in a JP2 file that is final once no box after the codestream
+can be read (#654). `incremental/held_box_cut_colr_jp2.seed` is one for
+a box after the codestream that the input ends inside (#642). They are
+built by `seeds()` in `tests/tile_error_final.rs` (no encoder, no input image, so
 no license restriction), which checks that the committed bytes are its
 output; `J2K_BLESS_TILE_ERROR_SEEDS=1` writes them again. Without them the
 target did not catch a refine that never waits on such an error in 1.1M
@@ -632,8 +634,9 @@ runs. The target decodes only on a refine due under its doubling rule, so
 each seed puts 512 bytes of comment (a `COM` segment, or a `free` box or
 a long `colr`) between where the error comes and where it is replaced,
 which a due refine cannot step over. With `Ledger::hold` made to hold
-nothing, each fails on its first replay (#645); without that padding,
-only `tile_error_lblock_then_coc.seed` did.
+nothing, each #605 and #642 seed fails on its first replay (#645); without
+that padding, only `tile_error_lblock_then_coc.seed` did. The two #654
+seeds put their 512 bytes after the box that settles the file instead.
 
 - `tile_error_reduction_then_cod.seed` (649 bytes, SHA-256
   `f3f915ac8bccd8133cb15b43e4c3b691b619968df64af6fb7ee227ab712b2720`):
@@ -652,6 +655,17 @@ only `tile_error_lblock_then_coc.seed` did.
   `6b836027e224c1b10e1184376735fec3819613aadeb6d1509e926bb781dc0660`): the
   packet's codestream in a JP2 file, followed by a `free` box and a `colr`
   box too short to hold its fields.
+- `tile_error_lblock_jp2_then_jp2c.seed` (714 bytes, SHA-256
+  `88798e159c18228df83e84ace31ddeb78aa7bf3d708c9eb4fec05f6f60337b6c`):
+  the packet's codestream in a JP2 file, followed by a second `jp2c` box of
+  512 zero bytes. OpenJPEG's walk after the codestream stops at its header,
+  so the tile's error is final from there; the bytes after it are padding
+  for a due refine. With the JP2 file never settled
+  (`Jp2Prefix::settled` always false), it fails on its first replay.
+- `tile_error_lblock_jp2_then_xlbox.seed` (722 bytes, SHA-256
+  `ece98fc4f97ad3a8f8a76ee7cb5d4b04fd3aeb6470f22bfbfef00e3b1a387934`):
+  the same, followed by an `xml ` box whose `XLBox` is 2^32, then 512 zero
+  bytes. It fails on its first replay under the same mutation.
 - `held_box_cut_colr_jp2.seed` (708 bytes, SHA-256
   `474281b3d7c6475836e45b2adfc9cbfa9309f9be384cb67495a29ddf03fada36`): a
   4 x 4 tile of one empty packet in a JP2 file, followed by a `colr` of

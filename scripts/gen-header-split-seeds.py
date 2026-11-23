@@ -30,6 +30,12 @@ are the files `tests/incremental_header.rs` builds (`rescued`,
   and a row of 24 tiles of 1 x 4096, which a reduction of 1 refuses.
 - `jp2_*`: `tile40_over` inside a JP2 file, and the same with two `cdef`
   boxes (a box layout fault).
+- `jp2_*_then_jp2c`: `tile40_over` and `tile30_nolevels` inside a JP2 file,
+  then a second `jp2c` box of 512 zero bytes. OpenJPEG's walk after the
+  codestream stops at that box's header, so no box after it can be read and
+  `header()` gives an error of the tiles there, as for a codestream
+  (`tests/support/held.rs`). With the file never taken as settled, both
+  `_c0` seeds fail on replay.
 
 Each file comes behind four sets of control bytes, so the options differ:
 the defaults; a reduction of 1; tile 25 under `Unlimited`; and a window over
@@ -203,6 +209,11 @@ def main():
     over = files["rescued_tile40_over"]
     files["jp2_tile40_over"] = in_jp2(over, [])
     files["jp2_two_cdefs"] = in_jp2(over, [cdef([(0, 0, 1)])] * 2)
+    second_jp2c = box(b"jp2c", bytes(512))
+    files["jp2_tile40_over_then_jp2c"] = in_jp2(over, []) + second_jp2c
+    files["jp2_tile30_nolevels_then_jp2c"] = (
+        in_jp2(files["rescued_tile30_nolevels"], []) + second_jp2c
+    )
 
     for name, body in sorted(files.items()):
         for i, control in enumerate(CONTROLS):

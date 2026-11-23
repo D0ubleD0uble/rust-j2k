@@ -727,6 +727,31 @@ fn seeds() -> Vec<(&'static str, Vec<u8>)> {
                 ],
             ),
         ),
+        // A tile's error in a JP2 file, final once a box after the
+        // codestream stops OpenJPEG's walk there for good
+        // ([`walk_stoppers`]): a second `jp2c`, or an `XLBox` of 2^32. The
+        // bytes after the stopper are never read, so [`PADDING`] of them
+        // puts a due refine past it.
+        (
+            "tile_error_lblock_jp2_then_jp2c.seed",
+            in_jp2(
+                &packet_one_tile(8, &lblock_packet(), &[]),
+                &[synth::bx(b"jp2c", &vec![0; PADDING])],
+            ),
+        ),
+        (
+            "tile_error_lblock_jp2_then_xlbox.seed",
+            in_jp2(
+                &packet_one_tile(8, &lblock_packet(), &[]),
+                &[[
+                    &[0, 0, 0, 1][..],
+                    b"xml ",
+                    &(1u64 << 32).to_be_bytes(),
+                    &vec![0; PADDING],
+                ]
+                .concat()],
+            ),
+        ),
         // Not a tile's error: a box after the codestream that the input
         // ends inside, which a refine waits on until it is whole
         // (`tests/jp2_box_error_final.rs`). The header's `colr` was read,
@@ -971,6 +996,8 @@ fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
                 Some(tiles.clone()),
                 "{name}"
             );
+            // The oracle the fuzz targets use finds the same from the bytes.
+            assert!(held::closes(&bytes), "{name}");
             check_streams(&bytes, &lenient, &name);
             check_suffixes(&bytes, &options, &name);
             let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
@@ -984,7 +1011,9 @@ fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
             // Cut before the byte that settles it, the walk may still read
             // a box.
             let mut cut = IncrementalDecoder::new(lenient.clone()).expect("valid options");
-            cut.feed(&bytes[..bytes.len() - past - 1]);
+            let short = &bytes[..bytes.len() - past - 1];
+            cut.feed(short);
+            assert!(!held::closes(short), "{name}: cut");
             assert!(
                 matches!(cut.refine(), Ok(Refined::Waiting(Waiting::Held { .. }))),
                 "{name}: cut"
@@ -994,6 +1023,7 @@ fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
         let name = format!("{name} in JP2, then a box of length 0");
         let open = [&[0, 0, 0, 0][..], b"xml ", b"<a/>"].concat();
         let bytes = in_jp2(&codestream, &[open]);
+        assert!(!held::closes(&bytes), "{name}");
         let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
         decoder.feed(&bytes);
         match decoder.refine() {
@@ -1003,6 +1033,69 @@ fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
             other => panic!("{name}: {other:?}"),
         }
         assert!(matches!(decoder.header(), Ok(Some(_))), "{name}");
+    }
+}
+
+/// `held::closes`, the oracle the fuzz targets use, finds from the bytes
+/// what the decoder does: a refine on the whole input gives the tile's
+/// error once the input closes, and waits on it before. The shapes: a
+/// reserved marker with no segment (`0xFF30`) in the main header, which
+/// the walk steps over on its two bytes (ISO/IEC 15444-1 A.1.3); and a
+/// `jp2c` box of length 0, as OpenJPH writes one. Each is checked as a raw
+/// codestream, and in a JP2 file then a second `jp2c`, whole and cut one
+/// byte short of that box's type.
+#[test]
+fn the_oracle_agrees_with_the_decoder_on_when_a_file_closes() {
+    let plain = packet_one_tile(8, &lblock_packet(), &[]);
+    let sot = plain
+        .windows(2)
+        .position(|w| w == [0xFF, 0x90])
+        .expect("an SOT");
+    let reserved = [&plain[..sot], &[0xFF, 0x30], &plain[sot..]].concat();
+    let stopper = synth::bx(b"jp2c", &[]);
+    let lbox_0 = |codestream: &[u8]| {
+        let header = in_jp2(codestream, &[]);
+        let jp2c = header.len() - codestream.len() - 8;
+        [
+            &header[..jp2c],
+            &[0, 0, 0, 0],
+            b"jp2c",
+            codestream,
+            &stopper,
+        ]
+        .concat()
+    };
+    let mut cases = Vec::new();
+    for (name, codestream) in [("plain", &plain), ("0xFF30", &reserved)] {
+        cases.push((format!("{name}, a codestream"), codestream.clone(), true));
+        let file = in_jp2(codestream, std::slice::from_ref(&stopper));
+        cases.push((format!("{name}, JP2"), file.clone(), true));
+        cases.push((
+            format!("{name}, JP2 cut"),
+            file[..file.len() - 1].to_vec(),
+            false,
+        ));
+        let jph = lbox_0(codestream);
+        cases.push((format!("{name}, jp2c of length 0"), jph.clone(), true));
+        cases.push((
+            format!("{name}, jp2c of length 0 cut"),
+            jph[..jph.len() - 1].to_vec(),
+            false,
+        ));
+    }
+    let lenient = DecodeOptions::default().with_strict(false);
+    for (name, bytes, closed) in cases {
+        let one_shot = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+        assert!(one_shot.contains("Lblock"), "{name}: {one_shot}");
+        assert_eq!(held::closes(&bytes), closed, "{name}");
+        let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+        decoder.feed(&bytes);
+        match decoder.refine() {
+            Ok(Refined::Waiting(Waiting::Held { error, .. })) if !closed => {
+                assert_eq!(format!("{error:?}"), one_shot, "{name}");
+            }
+            refined => assert_eq!(error_of(&refined), Some(one_shot), "{name}"),
+        }
     }
 }
 
