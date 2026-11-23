@@ -139,21 +139,33 @@ fn codestream_start(bytes: &[u8]) -> Option<usize> {
     }
 }
 
-/// The most zeros [`after_codestream`] pads a box with.
+/// The most zeros [`after_codestream`] pads a box with, and [`completed`]
+/// a tile-part.
 const MOST_PADDING: usize = 1 << 16;
+
+/// A suffix after which the decode meets a box fault after the codestream.
+enum Completion {
+    /// The input with that suffix.
+    Bytes(Vec<u8>),
+    /// The suffix would take more than [`MOST_PADDING`] zeros, so it is not
+    /// built: the box or tile-part the input ends inside is completed, then
+    /// [`SHORT_COLR`] follows, as for [`Completion::Bytes`].
+    Far,
+}
 
 /// `prefix`, a JP2 file whose codestream ends at `at`, with the box after
 /// it that the input ends inside made whole, with zeros or, where its
 /// length is not in, the rest of [`SHORT_COLR`], then [`SHORT_COLR`]: a box
 /// that OpenJPEG's walk after the codestream reads, at fault. `None` where
 /// the walk reads no box past the input: it stopped at a `jp2c`, a box of
-/// length 0 or 1 (an `XLBox`), or a box shorter than its header, or the box
-/// takes more than [`MOST_PADDING`] zeros.
-fn after_codestream(prefix: &[u8], mut at: usize) -> Option<Vec<u8>> {
+/// length 0 or 1 (an `XLBox`), or a box shorter than its header.
+fn after_codestream(prefix: &[u8], mut at: usize) -> Option<Completion> {
     loop {
         let rest = prefix.get(at..)?;
         if rest.len() < 4 {
-            return Some([prefix, &SHORT_COLR[rest.len()..]].concat());
+            return Some(Completion::Bytes(
+                [prefix, &SHORT_COLR[rest.len()..]].concat(),
+            ));
         }
         let length = u32_at(rest, 0)?;
         if rest.get(4..8) == Some(&b"jp2c"[..]) || length < 8 {
@@ -161,12 +173,12 @@ fn after_codestream(prefix: &[u8], mut at: usize) -> Option<Vec<u8>> {
         }
         if rest.len() < length {
             if length - rest.len() > MOST_PADDING {
-                return None;
+                return Some(Completion::Far);
             }
             let mut bytes = prefix.to_vec();
             bytes.resize(at + length, 0);
             bytes.extend(SHORT_COLR);
-            return Some(bytes);
+            return Some(Completion::Bytes(bytes));
         }
         at += length;
     }
@@ -182,21 +194,34 @@ const MIN_SOT: [u8; 10] = [0xFF, 0x90, 0, 10, 0, 0, 0, 0, 0, 14];
 /// meets a box fault before the sRGB step and every tile. Where the input
 /// ends inside a marker or an `SOT` before the end of its `Psot`, the rest
 /// of [`MIN_SOT`] completes it; where it holds the `EOC`, the boxes after
-/// it are completed instead ([`after_codestream`]).
-fn completed(prefix: &[u8]) -> Option<Vec<u8>> {
+/// it are completed instead ([`after_codestream`]). The tile-part is not
+/// padded where it takes more than [`MOST_PADDING`] zeros
+/// ([`Completion::Far`]).
+fn completed(prefix: &[u8]) -> Option<Completion> {
     let start = codestream_start(prefix)?;
     let codestream = &prefix[start..];
     if !codestream.starts_with(&[0xFF, 0x4F]) {
         return None;
     }
+    // The main header, as `held.rs` walks it: the reserved `0xFF30` to
+    // `0xFF3F` and `EPH` have no segment.
     let mut at = 2usize;
-    while u16_at(codestream, at)? != 0xFF90 {
-        let length = u16_at(codestream, at + 2)?;
-        if length < 2 {
-            return None;
+    loop {
+        match u16_at(codestream, at)? {
+            0xFF90 => break,
+            0xFF30..=0xFF3F | 0xFF92 => at += 2,
+            _ => {
+                let length = u16_at(codestream, at + 2)?;
+                if length < 2 {
+                    return None;
+                }
+                at += 2 + length;
+            }
         }
-        at += 2 + length;
     }
+    // Whether the zeros up to `end`, the end of the tile-part the input
+    // ends inside, are over [`MOST_PADDING`].
+    let far = |end: usize| end.saturating_sub(codestream.len()) > MOST_PADDING;
     let end = loop {
         let rest = codestream.get(at..).unwrap_or_default();
         if rest.is_empty() {
@@ -215,24 +240,32 @@ fn completed(prefix: &[u8]) -> Option<Vec<u8>> {
             return None;
         }
         if cut < MIN_SOT.len() {
+            let end = at.checked_add(psot)?;
+            if far(end) {
+                return Some(Completion::Far);
+            }
             let mut bytes = [prefix, &sot[cut..]].concat();
-            bytes.resize(start + at.checked_add(psot)?, 0);
+            bytes.resize(start + end, 0);
             bytes.extend([0xFF, 0xD9]);
             bytes.extend(SHORT_COLR);
-            return Some(bytes);
+            return Some(Completion::Bytes(bytes));
         }
         at = at.checked_add(psot)?;
     };
+    if far(end) {
+        return Some(Completion::Far);
+    }
     let mut bytes = prefix.to_vec();
     bytes.resize(start + end, 0);
     bytes.extend([0xFF, 0xD9]);
     bytes.extend(SHORT_COLR);
-    Some(bytes)
+    Some(Completion::Bytes(bytes))
 }
 
 /// Whether more bytes can change what `read_header_with` gives on the JP2
 /// prefix `prefix`: some suffix tried here gives another answer. A fault of
-/// a box held whole, and of the boxes before it, passes none.
+/// a box held whole, and of the boxes before it, passes none. A suffix too
+/// long to build ([`Completion::Far`]) is taken to change it, untried.
 fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
     let lenient = options.clone().with_strict(false);
     let answer = |bytes: &[u8]| format!("{:?}", checked(read_header_with(bytes, &lenient)));
@@ -242,7 +275,11 @@ fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
         [prefix, &vec![0; 8192][..]].concat(),
         [prefix, &SHORT_COLR[..]].concat(),
     ];
-    longer.extend(completed(prefix));
+    match completed(prefix) {
+        Some(Completion::Bytes(bytes)) => longer.push(bytes),
+        Some(Completion::Far) => return true,
+        None => {}
+    }
     longer.iter().any(|bytes| answer(bytes) != base)
 }
 

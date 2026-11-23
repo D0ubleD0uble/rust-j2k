@@ -1036,6 +1036,69 @@ fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
     }
 }
 
+/// `held::closes`, the oracle the fuzz targets use, finds from the bytes
+/// what the decoder does: a refine on the whole input gives the tile's
+/// error once the input closes, and waits on it before. The shapes: a
+/// reserved marker with no segment (`0xFF30`) in the main header, which
+/// the walk steps over on its two bytes (ISO/IEC 15444-1 A.1.3); and a
+/// `jp2c` box of length 0, as OpenJPH writes one. Each is checked as a raw
+/// codestream, and in a JP2 file then a second `jp2c`, whole and cut one
+/// byte short of that box's type.
+#[test]
+fn the_oracle_agrees_with_the_decoder_on_when_a_file_closes() {
+    let plain = packet_one_tile(8, &lblock_packet(), &[]);
+    let sot = plain
+        .windows(2)
+        .position(|w| w == [0xFF, 0x90])
+        .expect("an SOT");
+    let reserved = [&plain[..sot], &[0xFF, 0x30], &plain[sot..]].concat();
+    let stopper = synth::bx(b"jp2c", &[]);
+    let lbox_0 = |codestream: &[u8]| {
+        let header = in_jp2(codestream, &[]);
+        let jp2c = header.len() - codestream.len() - 8;
+        [
+            &header[..jp2c],
+            &[0, 0, 0, 0],
+            b"jp2c",
+            codestream,
+            &stopper,
+        ]
+        .concat()
+    };
+    let mut cases = Vec::new();
+    for (name, codestream) in [("plain", &plain), ("0xFF30", &reserved)] {
+        cases.push((format!("{name}, a codestream"), codestream.clone(), true));
+        let file = in_jp2(codestream, std::slice::from_ref(&stopper));
+        cases.push((format!("{name}, JP2"), file.clone(), true));
+        cases.push((
+            format!("{name}, JP2 cut"),
+            file[..file.len() - 1].to_vec(),
+            false,
+        ));
+        let jph = lbox_0(codestream);
+        cases.push((format!("{name}, jp2c of length 0"), jph.clone(), true));
+        cases.push((
+            format!("{name}, jp2c of length 0 cut"),
+            jph[..jph.len() - 1].to_vec(),
+            false,
+        ));
+    }
+    let lenient = DecodeOptions::default().with_strict(false);
+    for (name, bytes, closed) in cases {
+        let one_shot = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+        assert!(one_shot.contains("Lblock"), "{name}: {one_shot}");
+        assert_eq!(held::closes(&bytes), closed, "{name}");
+        let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+        decoder.feed(&bytes);
+        match decoder.refine() {
+            Ok(Refined::Waiting(Waiting::Held { error, .. })) if !closed => {
+                assert_eq!(format!("{error:?}"), one_shot, "{name}");
+            }
+            refined => assert_eq!(error_of(&refined), Some(one_shot), "{name}"),
+        }
+    }
+}
+
 /// `codestream` with the `Psot` of its last tile-part set to 0 and its
 /// `EOC` dropped, so that tile-part runs to the end of the input.
 fn open_last_part(codestream: &[u8]) -> Vec<u8> {

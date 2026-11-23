@@ -55,10 +55,18 @@ fn codestream_end(bytes: &[u8]) -> Option<usize> {
     if !bytes.starts_with(&[0xFF, 0x4F]) {
         return None;
     }
-    // The main header's segments, up to the first `SOT`.
+    // The main header's markers, up to the first `SOT`. Each has a length
+    // and a segment, but those ISO/IEC 15444-1 gives none (A.1.3): the
+    // reserved `0xFF30` to `0xFF3F` and `EPH`, two bytes each. `SOC`, `SOD`
+    // and `EOC` have none either, and no main header holds them.
     let mut at = 2usize;
-    while u16_at(bytes, at)? != 0xFF90 {
-        at += 2 + usize::from(u16_at(bytes, at + 2)?);
+    loop {
+        match u16_at(bytes, at)? {
+            0xFF90 => break,
+            0xFF4F | 0xFF93 | 0xFFD9 => return None,
+            0xFF30..=0xFF3F | 0xFF92 => at += 2,
+            _ => at += 2 + usize::from(u16_at(bytes, at + 2)?),
+        }
     }
     loop {
         if u16_at(bytes, at) != Some(0xFF90) {
@@ -97,7 +105,14 @@ fn jp2_closes(bytes: &[u8]) -> bool {
 fn jp2c_payload(bytes: &[u8]) -> Option<usize> {
     let mut at = 0usize;
     loop {
-        let (length, header) = match u32_at(bytes, at)? {
+        let lbox = u32_at(bytes, at)?;
+        // OpenJPEG reads a `jp2c` box from its payload whatever its length,
+        // 0 (to the end of the file) included.
+        if bytes.get(at + 4..at + 8)? == b"jp2c" {
+            let header = if lbox == 1 { 16 } else { 8 };
+            return Some(at + header).filter(|&start| start <= bytes.len());
+        }
+        let (length, header) = match lbox {
             // A box of length 0 runs to the end of the file: nothing follows.
             0 => return None,
             1 => match (u32_at(bytes, at + 8)?, u32_at(bytes, at + 12)?) {
@@ -106,9 +121,6 @@ fn jp2c_payload(bytes: &[u8]) -> Option<usize> {
             },
             n => (n as usize, 8),
         };
-        if bytes.get(at + 4..at + 8)? == b"jp2c" {
-            return Some(at + header).filter(|&start| start <= bytes.len());
-        }
         if length < header {
             return None;
         }
