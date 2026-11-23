@@ -249,8 +249,9 @@ fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
 /// Check `got`, what `header()` gave on `prefix` under `options`, against
 /// the [`oracle`], allowing an error held back where more bytes can replace
 /// it, while the input has not closed ([`held::closes`]): in a codestream,
-/// always; in a JP2 file, where a suffix changes what `read_header_with` gives, or, for a
-/// refusal of the sRGB step, as the header with the channels as coded. A
+/// always; in a JP2 file, where a suffix changes what `read_header_with`
+/// gives, or, for a refusal of the sRGB step, as the header with the
+/// channels as coded. A
 /// JP2 file's `None` for an error needs such a suffix too: a fault in a
 /// box of length 0 before the codestream that more bytes do not change,
 /// such as one of a whole child of a `jp2h`, is final.
