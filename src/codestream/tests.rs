@@ -200,6 +200,23 @@ fn siz_not_first_is_codestream() {
     );
 }
 
+/// A reserved code with no segment before `SIZ` is refused, as A.6 puts
+/// `SIZ` first. OpenJPEG 2.5.0 skips it as an unknown marker.
+#[test]
+fn a_reserved_marker_before_siz_is_codestream() {
+    let bytes = codestream(&[
+        be16(0xFF30).to_vec(),
+        seg(marker::SIZ, &one_component()),
+        seg(marker::COD, &cod_default(1)),
+        seg(marker::QCD, &qcd_none(2, &[8; 16])),
+    ]);
+    let e = err(&bytes);
+    assert!(
+        matches!(&e, Error::Codestream(m) if m.message() == "`SIZ` must be the first marker after `SOC`"),
+        "{e:?}"
+    );
+}
+
 /// A SIZ whose length promises more than the input holds: the input ends
 /// inside the main header, so more bytes may still complete it.
 #[test]
@@ -5961,4 +5978,41 @@ fn the_fault_walk_checks_a_restatement_for_each_tile_and_header() {
         let last = format!("{last:?}");
         assert!(last.starts_with(&format!("Some({error}")), "{name}: {last}");
     }
+}
+
+/// A tile-part header with a marker that has no segment, such as the
+/// reserved `FF 30`, or a code that is no marker, such as `FF 00`, may set
+/// the coding: the step over its header takes no length after it, and
+/// leaves the header to the read that refuses it. Read as a length, the
+/// `COD` after the code is a step of 65364 bytes, which this tile-part puts
+/// on its `SOD`, so the `COD` went unseen.
+#[test]
+fn a_marker_with_no_segment_in_a_tile_part_header_may_set_the_coding() {
+    for code in [0xFF30, 0xFF00] {
+        let (part, header) = hidden_cod(code);
+        assert!(part, "{code:#06X}");
+        assert!(header, "{code:#06X}");
+    }
+}
+
+/// Whether the first tile-part of a codestream whose tile-part header holds
+/// `code`, then a `COD` hidden from a step that reads a length after
+/// `code`, may set the coding, and whether its header read is refused.
+fn hidden_cod(code: u16) -> (bool, bool) {
+    let siz = synth::siz_body([4, 4, 0, 0, 4, 4, 0, 0], &[[7, 1, 1]]);
+    let mut bytes = vec![0xFF, 0x4F];
+    bytes.extend(seg(marker::SIZ, &siz));
+    bytes.extend(seg(marker::COD, &synth::cod_body(1, 0, 4, 0)));
+    bytes.extend(seg(marker::QCD, &synth::qcd_none_body(2, &[8])));
+    let offset = bytes.len();
+    let mut header = be16(code).to_vec();
+    header.extend(seg(marker::COD, &synth::cod_body(1, 1, 4, 0)));
+    let step = 2 + usize::from(marker::COD);
+    header.extend(seg(marker::COM, &vec![0; step - header.len() - 4]));
+    assert_eq!(header.len(), step);
+    bytes.extend(synth::tile_part(0, 0, 1, &header, &[0]));
+    bytes.extend(be16(marker::EOC));
+    let parsed = parse_header(&bytes).expect("the main header parses");
+    let part = first_part_at(&bytes, &parsed, offset).expect("a first tile-part");
+    (part.may_set_coding(), part.header().is_err())
 }

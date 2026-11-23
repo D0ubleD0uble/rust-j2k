@@ -33,7 +33,7 @@
 use super::boxes::{Boxes, Jp2Box};
 use super::{BoxFault, Jp2File};
 use super::{channels, color, palette};
-use crate::codestream::markers::marker::{EOC, SOC, SOT};
+use crate::codestream::markers::marker::{EOC, SOC, SOD, SOT, has_segment, is_marker};
 use crate::{Error, Result};
 
 /// The fewest bytes a tile-part can span: `SOT` and its 10-byte segment,
@@ -64,7 +64,7 @@ pub(crate) enum End {
 /// Find where the codestream at the start of `bytes` ends by stepping over the
 /// main header's marker segments and then the tile-parts by their `Psot`. This
 /// reads only marker and segment lengths; the codestream parser checks the
-/// rest. Each step moves at least 4 bytes, so the walk is linear in the input.
+/// rest. Each step moves at least 2 bytes, so the walk is linear in the input.
 pub(crate) fn codestream_end(bytes: &[u8]) -> End {
     let marker = |at: usize| {
         bytes
@@ -76,16 +76,22 @@ pub(crate) fn codestream_end(bytes: &[u8]) -> End {
         Some(_) => return End::Broken,
         None => return End::Unknown,
     }
+    // The main header is stepped through as the codestream parser walks it:
+    // `SOC`, `SOD`, `EOC` and a code that is no marker are refused there on
+    // their two bytes, and a marker with no segment (`EPH` and the reserved
+    // `0xFF30..=0xFF3F`) is two bytes long.
     let mut at = 2usize;
     loop {
         match marker(at) {
             Some(SOT) => break,
-            Some(code) if code >> 8 == 0xFF => match marker(at + 2) {
+            Some(SOC | SOD | EOC) => return End::Broken,
+            Some(code) if !is_marker(code) => return End::Broken,
+            Some(code) if !has_segment(code) => at += 2,
+            Some(_) => match marker(at + 2) {
                 Some(length) if length >= 2 => at += 2 + usize::from(length),
                 Some(_) => return End::Broken,
                 None => return End::Unknown,
             },
-            Some(_) => return End::Broken,
             None => return End::Unknown,
         }
     }
