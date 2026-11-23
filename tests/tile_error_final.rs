@@ -727,6 +727,31 @@ fn seeds() -> Vec<(&'static str, Vec<u8>)> {
                 ],
             ),
         ),
+        // A tile's error in a JP2 file, final once a box after the
+        // codestream stops OpenJPEG's walk there for good
+        // ([`walk_stoppers`]): a second `jp2c`, or an `XLBox` of 2^32. The
+        // bytes after the stopper are never read, so [`PADDING`] of them
+        // puts a due refine past it.
+        (
+            "tile_error_lblock_jp2_then_jp2c.seed",
+            in_jp2(
+                &packet_one_tile(8, &lblock_packet(), &[]),
+                &[synth::bx(b"jp2c", &vec![0; PADDING])],
+            ),
+        ),
+        (
+            "tile_error_lblock_jp2_then_xlbox.seed",
+            in_jp2(
+                &packet_one_tile(8, &lblock_packet(), &[]),
+                &[[
+                    &[0, 0, 0, 1][..],
+                    b"xml ",
+                    &(1u64 << 32).to_be_bytes(),
+                    &vec![0; PADDING],
+                ]
+                .concat()],
+            ),
+        ),
         // Not a tile's error: a box after the codestream that the input
         // ends inside, which a refine waits on until it is whole
         // (`tests/jp2_box_error_final.rs`). The header's `colr` was read,
@@ -971,6 +996,8 @@ fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
                 Some(tiles.clone()),
                 "{name}"
             );
+            // The oracle the fuzz targets use finds the same from the bytes.
+            assert!(held::closes(&bytes), "{name}");
             check_streams(&bytes, &lenient, &name);
             check_suffixes(&bytes, &options, &name);
             let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
@@ -985,6 +1012,7 @@ fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
             // a box.
             let mut cut = IncrementalDecoder::new(lenient.clone()).expect("valid options");
             cut.feed(&bytes[..bytes.len() - past - 1]);
+            assert!(!held::closes(&bytes[..bytes.len() - past - 1]), "{name}: cut");
             assert!(
                 matches!(cut.refine(), Ok(Refined::Waiting(Waiting::Held { .. }))),
                 "{name}: cut"
@@ -994,6 +1022,7 @@ fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
         let name = format!("{name} in JP2, then a box of length 0");
         let open = [&[0, 0, 0, 0][..], b"xml ", b"<a/>"].concat();
         let bytes = in_jp2(&codestream, &[open]);
+        assert!(!held::closes(&bytes), "{name}");
         let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
         decoder.feed(&bytes);
         match decoder.refine() {

@@ -11,12 +11,12 @@
 //! (`tests/incremental_header.rs`) uses the default limits only.
 //!
 //! The exception is an error more bytes can replace, which `header()` holds
-//! back while the input has not closed (`tests/support/held.rs`, which takes
-//! a JP2 file as never closed): it gives the header where that read gives the error, or,
-//! in a JP2 file whose box of length 0 before the codestream is at fault,
-//! `None`. In a JP2 file each needs a suffix that changes what that read
-//! gives ([`replaceable`]), but for the header on a refusal of the sRGB
-//! step.
+//! back while the input has not closed (`tests/support/held.rs`: in a JP2
+//! file, while its codestream has not closed or a box after it can still be
+//! read): it gives the header where that read gives the error, or, in a JP2
+//! file whose box of length 0 before the codestream is at fault, `None`. In
+//! a JP2 file each also needs a suffix that changes what that read gives
+//! ([`replaceable`]), but for the header on a refusal of the sRGB step.
 //!
 //! Layout: 12 control bytes, then the file.
 //!
@@ -197,8 +197,8 @@ fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
 
 /// Check `got`, what `header()` gave on `prefix` under `options`, against
 /// the [`oracle`], allowing an error held back where more bytes can replace
-/// it: in a codestream, while its tile-parts have not closed; in a JP2
-/// file, where a suffix changes what `read_header_with` gives, or, for a
+/// it, while the input has not closed ([`held::closes`]): in a codestream,
+/// always; in a JP2 file, where a suffix changes what `read_header_with` gives, or, for a
 /// refusal of the sRGB step, as the header with the channels as coded. A
 /// JP2 file's `None` for an error needs such a suffix too: a fault in a
 /// box of length 0 before the codestream that more bytes do not change,
@@ -228,11 +228,8 @@ fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOpt
                 )
     };
     let held = refused
-        && if codestream {
-            !held::closes(prefix)
-        } else {
-            replaceable(prefix, options) || as_coded()
-        };
+        && !held::closes(prefix)
+        && (codestream || replaceable(prefix, options) || as_coded());
     match got {
         Ok(Some(_)) if held => {}
         Ok(None) if held && !codestream => {}
