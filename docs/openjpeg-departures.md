@@ -1503,9 +1503,9 @@ by its length. Reserved segment-less markers
 Two codes that OpenJPEG also skips as unknown are refused here as
 `Codestream`, for where they are rather than for what they are:
 
-- `EPH` in the main header: "`EPH` is not permitted in the main header".
-  Table A.2 puts it in the packet data, and it is refused there as `PPT`
-  and `SOP` are (`packet_markers_in_the_main_header_are_codestream`).
+- `EPH` in the main header: "`EPH` (0xFF92) is not permitted in the main
+  header". Table A.2 puts it in the packet data, and it is refused there as
+  `PPT` and `SOP` are (`packet_markers_in_the_main_header_are_codestream`).
 - A reserved 0xFF30 to 0xFF3F code before `SIZ`: "`SIZ` must be the first
   marker after `SOC`", as A.6 requires
   (`a_reserved_marker_before_siz_is_codestream`).
