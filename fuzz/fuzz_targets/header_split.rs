@@ -139,10 +139,50 @@ fn codestream_start(bytes: &[u8]) -> Option<usize> {
     }
 }
 
+/// The most zeros [`after_codestream`] pads a box with.
+const MOST_PADDING: usize = 1 << 16;
+
+/// `prefix`, a JP2 file whose codestream ends at `at`, with the box after
+/// it that the input ends inside made whole, with zeros or, where its
+/// length is not in, the rest of [`SHORT_COLR`], then [`SHORT_COLR`]: a box
+/// that OpenJPEG's walk after the codestream reads, at fault. `None` where
+/// the walk reads no box past the input: it stopped at a `jp2c`, a box of
+/// length 0 or 1 (an `XLBox`), or a box shorter than its header, or the box
+/// takes more than [`MOST_PADDING`] zeros.
+fn after_codestream(prefix: &[u8], mut at: usize) -> Option<Vec<u8>> {
+    loop {
+        let rest = prefix.get(at..)?;
+        if rest.len() < 4 {
+            return Some([prefix, &SHORT_COLR[rest.len()..]].concat());
+        }
+        let length = u32_at(rest, 0)?;
+        if rest.get(4..8) == Some(&b"jp2c"[..]) || length < 8 {
+            return None;
+        }
+        if rest.len() < length {
+            if length - rest.len() > MOST_PADDING {
+                return None;
+            }
+            let mut bytes = prefix.to_vec();
+            bytes.resize(at + length, 0);
+            bytes.extend(SHORT_COLR);
+            return Some(bytes);
+        }
+        at += length;
+    }
+}
+
+/// The fewest bytes of an `SOT` segment and the start of its tile-part:
+/// `Lsot` 10, tile 0, and `Psot` 14, a tile-part with no data.
+const MIN_SOT: [u8; 10] = [0xFF, 0x90, 0, 10, 0, 0, 0, 0, 0, 14];
+
 /// `prefix`, a JP2 file cut inside or just after its codestream's
 /// tile-parts, with zeros to the end of the tile-part the input ends
 /// inside, an `EOC`, then [`SHORT_COLR`]: an input on which the decode
-/// meets a box fault before the sRGB step and every tile.
+/// meets a box fault before the sRGB step and every tile. Where the input
+/// ends inside a marker or an `SOT` before the end of its `Psot`, the rest
+/// of [`MIN_SOT`] completes it; where it holds the `EOC`, the boxes after
+/// it are completed instead ([`after_codestream`]).
 fn completed(prefix: &[u8]) -> Option<Vec<u8>> {
     let start = codestream_start(prefix)?;
     let codestream = &prefix[start..];
@@ -158,17 +198,28 @@ fn completed(prefix: &[u8]) -> Option<Vec<u8>> {
         at += 2 + length;
     }
     let end = loop {
-        match u16_at(codestream, at) {
-            None if at >= codestream.len() => break at,
-            Some(0xFF90) => {}
-            Some(0xFFD9) => {
-                return Some([prefix, &SHORT_COLR[..]].concat());
-            }
-            _ => return None,
+        let rest = codestream.get(at..).unwrap_or_default();
+        if rest.is_empty() {
+            break at;
         }
-        let psot = u32_at(codestream, at + 6)?;
+        if rest.starts_with(&[0xFF, 0xD9]) {
+            return after_codestream(prefix, start + at + 2);
+        }
+        let cut = rest.len().min(MIN_SOT.len());
+        let sot = [&rest[..cut], &MIN_SOT[cut..]].concat();
+        if u16_at(&sot, 0)? != 0xFF90 {
+            return None;
+        }
+        let psot = u32_at(&sot, 6)?;
         if psot < 14 {
             return None;
+        }
+        if cut < MIN_SOT.len() {
+            let mut bytes = [prefix, &sot[cut..]].concat();
+            bytes.resize(start + at.checked_add(psot)?, 0);
+            bytes.extend([0xFF, 0xD9]);
+            bytes.extend(SHORT_COLR);
+            return Some(bytes);
         }
         at = at.checked_add(psot)?;
     };
