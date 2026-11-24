@@ -330,15 +330,18 @@ fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOpt
                     .map(Some)
                 )
     };
+    // Held as the header, never as `None`, which in a JP2 file is a fault
+    // of a box of length 0 before the codestream.
     let liftable = || {
-        matches!(
-            read_header_with(prefix, &lenient),
-            Err(Error::Limit(limit))
-                if matches!(
-                    limit.kind(),
-                    LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
-                ) && matches!(limit.retry_with(), Some(Raise::Raised(_) | Raise::Unlimited))
-        )
+        matches!(got, Ok(Some(_)))
+            && matches!(
+                read_header_with(prefix, &lenient),
+                Err(Error::Limit(limit))
+                    if matches!(
+                        limit.kind(),
+                        LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
+                    ) && matches!(limit.retry_with(), Some(Raise::Raised(_) | Raise::Unlimited))
+            )
     };
     let held = refused
         && !held::closes(prefix)
