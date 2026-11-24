@@ -49,8 +49,8 @@ mod held;
 mod inconsistent;
 use inconsistent::checked;
 use rust_j2k::{
-    read_header_with, ColorOutput, DecodeOptions, Error, Header, IncrementalDecoder, Region,
-    SampleLimit, Window,
+    read_header_with, ColorOutput, DecodeOptions, Error, Header, IncrementalDecoder, LimitKind,
+    Raise, Region, SampleLimit, Window,
 };
 
 /// splitmix64: the same stream on every platform, from a seed in the input.
@@ -300,7 +300,9 @@ fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
 /// it, while the input has not closed ([`held::closes`]): in a codestream,
 /// always; in a JP2 file, where a suffix changes what `read_header_with`
 /// gives, or, for a refusal of the sRGB step, as the header with the
-/// channels as coded. A
+/// channels as coded, or for a tile cap that grows with the input, which
+/// more bytes lift (`refine` waits on it as `Waiting::SampleLimit`;
+/// past the fuzz input size, so no suffix here tries it). A
 /// JP2 file's `None` for an error needs such a suffix too: a fault in a
 /// box of length 0 before the codestream that more bytes do not change,
 /// such as one of a whole child of a `jp2h`, is final.
@@ -328,9 +330,19 @@ fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOpt
                     .map(Some)
                 )
     };
+    let liftable = || {
+        matches!(
+            read_header_with(prefix, &lenient),
+            Err(Error::Limit(limit))
+                if matches!(
+                    limit.kind(),
+                    LimitKind::Samples | LimitKind::TileCodeBlocks | LimitKind::TilePrecincts
+                ) && matches!(limit.retry_with(), Some(Raise::Raised(_) | Raise::Unlimited))
+        )
+    };
     let held = refused
         && !held::closes(prefix)
-        && (codestream || replaceable(prefix, options) || as_coded());
+        && (codestream || replaceable(prefix, options) || as_coded() || liftable());
     match got {
         Ok(Some(_)) if held => {}
         Ok(None) if held && !codestream => {}

@@ -351,7 +351,8 @@ impl IncrementalDecoder {
     /// [`TilePrecincts`](LimitKind::TilePrecincts)) is refused here only
     /// once the tile-parts close (below), and then only bytes after the
     /// `EOC` can lift it. In a JP2 file this gives such a refusal only once
-    /// no box after the codestream can be read (below). Under
+    /// no box after the codestream can be read and the tile-parts close
+    /// (below). Under
     /// a ceiling of
     /// [`SampleLimit::AtMost`](crate::SampleLimit::AtMost) it does not grow,
     /// so a refusal of the image's samples here is final, and `refine`
@@ -369,7 +370,11 @@ impl IncrementalDecoder {
     /// tiles while a box after the codestream can still be read, as its
     /// fault comes first, and [`finish`](Self::finish) reports it. Once none
     /// can ([`Waiting::Held`] says when), the tile-parts are held as a
-    /// codestream's are. It holds back the errors
+    /// codestream's are, but where the tile-part chain is broken on the
+    /// bytes fed and the `jp2c` box's length ends the box within them:
+    /// the codestream is then the same whatever follows, so only a tile
+    /// refusal more bytes lift is held, and every other error is given at
+    /// once. It holds back the errors
     /// `refine` waits on in a JP2 file's boxes too: a fault in a box after
     /// the codestream that the bytes fed end inside, and a refusal of the
     /// sRGB step while a box after the codestream can still be read, one
