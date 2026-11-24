@@ -55,7 +55,8 @@ pub(crate) enum End {
     Unknown,
     /// The main header or the tile-part chain is broken on bytes the input
     /// holds: a marker or length no codestream has there, or a `Psot` that
-    /// steps to a marker that is neither `SOT` nor `EOC`. The walk reads
+    /// steps to a marker that is neither `SOT` nor `EOC`, or to the input's
+    /// last byte where that byte is not `0xFF`. The walk reads
     /// those bytes the same whatever follows, so no byte appended to the
     /// input finds the end.
     Broken,
@@ -119,6 +120,9 @@ pub(crate) fn codestream_end(bytes: &[u8]) -> End {
             Some(EOC) => return End::At(end + 2),
             Some(SOT) => at = end,
             Some(_) => return End::Broken,
+            // One byte in that is not `0xFF` starts no marker, whatever
+            // byte follows it.
+            None if bytes.get(end).is_some_and(|&byte| byte != 0xFF) => return End::Broken,
             None => return End::Unknown,
         }
     }

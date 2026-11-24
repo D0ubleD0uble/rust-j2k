@@ -64,6 +64,9 @@ pub(crate) struct Boxes<'a> {
     done: bool,
     /// Whether the last box read had `LBox == 0`.
     last_open_ended: bool,
+    /// Whether the last box read ends where its header says, within
+    /// `data` (see [`last_was_whole`](Self::last_was_whole)).
+    last_whole: bool,
     /// The type of the box being read when the input ended inside it, once
     /// its type field was read.
     cut_kind: Option<[u8; 4]>,
@@ -85,6 +88,7 @@ impl<'a> Boxes<'a> {
             parent: "the file",
             done: false,
             last_open_ended: false,
+            last_whole: false,
             cut_kind: None,
             cut_in_length: false,
             cut_short: false,
@@ -100,6 +104,7 @@ impl<'a> Boxes<'a> {
             parent,
             done: false,
             last_open_ended: false,
+            last_whole: false,
             cut_kind: None,
             cut_in_length: false,
             cut_short: false,
@@ -114,6 +119,14 @@ impl<'a> Boxes<'a> {
     /// Whether the last box read had length 0, running to the end of the file.
     pub(crate) fn last_was_open_ended(&self) -> bool {
         self.last_open_ended
+    }
+
+    /// Whether the last box read ends where its header says, within the
+    /// data: its length is neither 0 nor, for a `jp2c`, one read as running
+    /// to the end of the file, and the data hold all of it. Then no byte
+    /// appended to the data changes its contents.
+    pub(crate) fn last_was_whole(&self) -> bool {
+        self.last_whole
     }
 
     /// The type of the top-level box the input ended inside, when the last
@@ -175,9 +188,10 @@ impl<'a> Boxes<'a> {
 
         // The box's total length (header included) and its header length. A
         // codestream box too short for its own header runs to the end of the
-        // file, like one of length 0.
-        let (length, header): (u64, usize) = match lbox {
-            0 if self.open_ended => (rest.len() as u64, 8),
+        // file, like one of length 0. `declared` is whether the length is
+        // the one the header gives.
+        let (length, header, declared): (u64, usize, bool) = match lbox {
+            0 if self.open_ended => (rest.len() as u64, 8, false),
             0 => {
                 self.cut_short = false;
                 return Err(Error::file_format(format!(
@@ -201,28 +215,29 @@ impl<'a> Boxes<'a> {
                 be.copy_from_slice(xl);
                 let xlbox = u64::from_be_bytes(be);
                 match xlbox {
-                    0..16 if codestream => (rest.len() as u64, 16),
+                    0..16 if codestream => (rest.len() as u64, 16, false),
                     0..16 => {
                         self.cut_short = false;
                         return Err(Error::file_format(format!(
                             "box `{name}` has `XLBox` {xlbox}, shorter than its 16-byte header"
                         )));
                     }
-                    _ => (xlbox, 16),
+                    _ => (xlbox, 16, true),
                 }
             }
-            2..=7 if codestream => (rest.len() as u64, 8),
+            2..=7 if codestream => (rest.len() as u64, 8, false),
             2..=7 => {
                 self.cut_short = false;
                 return Err(Error::file_format(format!(
                     "box `{name}` has length {lbox}, shorter than its 8-byte header"
                 )));
             }
-            n => (u64::from(n), 8),
+            n => (u64::from(n), 8, true),
         };
 
         // OpenJPEG reads a codestream to its end whatever its box says, so a
         // top-level `jp2c` that runs past the end of the file is clamped.
+        self.last_whole = declared && length <= rest.len() as u64;
         let length = if codestream {
             length.min(rest.len() as u64)
         } else {

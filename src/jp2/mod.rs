@@ -165,6 +165,13 @@ pub(crate) struct Jp2File<'a> {
     /// one, as a raw codestream's does: it is fixed, or it runs to the end
     /// of the input.
     pub(crate) after_settled: bool,
+    /// Whether the decode reads the same codestream, and nothing after it,
+    /// whatever bytes follow: the tile-part chain is broken on bytes in
+    /// ([`after::End::Broken`]), so the codestream is the `jp2c` box's
+    /// payload, and the box ends where its header says, within the input
+    /// ([`boxes::Boxes::last_was_whole`]). Then the decode's answer is
+    /// final, as a raw codestream's is once it closes.
+    pub(crate) codestream_fixed: bool,
 }
 
 /// A fault of the boxes, and whether more bytes can change it.
@@ -301,6 +308,7 @@ pub(crate) fn parse_boxes<'a>(
                 };
                 color::check_bpcc(&header)?;
                 let color = color::read(&header)?;
+                let whole = boxes.last_was_whole();
                 let (codestream, rest, reads) =
                     locate_codestream(bytes, item.payload, boxes.rest(), packet_work);
                 let after = walk_after_codestream(rest);
@@ -324,9 +332,10 @@ pub(crate) fn parse_boxes<'a>(
                     after_open: after.open,
                     after_settled: match reads {
                         AfterRead::Yes => after.ended,
-                        AfterRead::Never => true,
+                        AfterRead::Never | AfterRead::Broken => true,
                         AfterRead::NotYet => false,
                     },
+                    codestream_fixed: reads == AfterRead::Broken && whole,
                 });
             }
             _ => {
@@ -416,7 +425,7 @@ fn locate_codestream<'a>(
             }
         }
         End::OpenLastPart(_) => (tail, &[], AfterRead::Never),
-        End::Broken => (payload, rest, AfterRead::Never),
+        End::Broken => (payload, rest, AfterRead::Broken),
         End::Unknown => (payload, rest, AfterRead::NotYet),
     }
 }
@@ -428,12 +437,15 @@ enum AfterRead {
     /// It does: every tile-part has a length, and the last ends at `EOC`.
     Yes,
     /// It never does, whatever bytes follow: the codestream steps to a
-    /// tile-part with `Psot = 0`, which runs to the end of the file, or its
-    /// main header or tile-part chain is broken on bytes the input holds
-    /// ([`End::Broken`]), so OpenJPEG's walk cannot reach the boxes after
-    /// it. The bytes the walk reads
-    /// to get there are in, so no later byte changes it.
+    /// tile-part with `Psot = 0`, which runs to the end of the file. The
+    /// bytes the walk reads to get there are in, so no later byte changes
+    /// it.
     Never,
+    /// It never does, whatever bytes follow: the main header or the
+    /// tile-part chain is broken on bytes the input holds ([`End::Broken`]),
+    /// so OpenJPEG's walk cannot reach the boxes after it. The codestream is
+    /// the `jp2c` box's payload.
+    Broken,
     /// Not on the bytes in: the main header or the tile-part chain is cut
     /// short.
     NotYet,

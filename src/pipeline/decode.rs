@@ -46,7 +46,9 @@ pub(crate) fn read_header_kept(
 /// can follow the codestream, and the decode checks them first, so every
 /// error of the tile-parts is held while a box after the codestream can
 /// still be read ([`jp2::Jp2File::after_settled`]). Once none can, the
-/// tile-parts are held as a codestream's are. Past that, it gives what
+/// tile-parts are held as a codestream's are, or, where the codestream is
+/// the same whatever follows ([`jp2::Jp2File::codestream_fixed`]), only a
+/// tile refusal more bytes lift is. Past that, it gives what
 /// [`read_header`] gives.
 pub(crate) fn read_header_streamed(
     bytes: &[u8],
@@ -101,8 +103,11 @@ fn read_header_from(
         } else if !hold || prefix.settled {
             // Once no box after the codestream can be read, the codestream
             // grows as a raw one does, and its tile-parts are held as a raw
-            // one's are. Before that, a fault of such a box comes first, so
-            // every error of the tile-parts is held, and they are not walked.
+            // one's are, or, where it is the same whatever follows, only a
+            // tile refusal more bytes lift is
+            // ([`jp2::Jp2File::codestream_fixed`]). Before that, a fault of
+            // such a box comes first, so every error of the tile-parts is
+            // held, and they are not walked.
             check_geometry(
                 prefix.codestream,
                 &prefix.parsed,
@@ -110,7 +115,11 @@ fn read_header_from(
                 reduction,
                 samples::cap(&options.sample_limit, bytes.len()),
                 options.strict,
-                if hold { Hold::UntilClosed } else { Hold::Never },
+                match (hold, prefix.fixed) {
+                    (false, _) => Hold::Never,
+                    (true, false) => Hold::UntilClosed,
+                    (true, true) => Hold::Liftable,
+                },
                 kept.map(|kept| (kept, start)),
             )?;
         }
@@ -231,7 +240,8 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 ///
 /// With [`Hold::UntilClosed`], a refusal with no fault in the tile-parts is
 /// held while the walk of the tile-parts has not closed (see
-/// [`read_header_streamed`]), one more bytes lift included.
+/// [`read_header_streamed`]), one more bytes lift included. With
+/// [`Hold::Liftable`], only a refusal more bytes lift is held.
 ///
 /// `kept` is what an earlier call on the start of the same input left, with
 /// where the codestream `bytes` starts in that input (see [`HeaderCache`]).
@@ -283,6 +293,11 @@ fn check_geometry(
             // A later tile-part may yet hold a fault, which comes first,
             // whether or not more bytes would lift the refusal.
             None if hold == Hold::UntilClosed && !faults.closed => Ok(()),
+            None if hold == Hold::Liftable
+                && matches!(&error, Error::Limit(limit) if incremental::lifts_with_bytes(limit)) =>
+            {
+                Ok(())
+            }
             None => Err(error),
         },
         Err(error) => Err(error),
@@ -300,6 +315,11 @@ enum Hold {
     Never,
     /// It holds a tile refusal until the tile-parts close.
     UntilClosed,
+    /// It holds only a tile refusal more bytes lift, a cap that grows with
+    /// the input ([`incremental::lifts_with_bytes`]), as `refine` waits on
+    /// it: the tile-parts never close, and no byte changes them
+    /// ([`jp2::Jp2File::codestream_fixed`]).
+    Liftable,
 }
 
 /// The walk of the tile-parts for the decode's error for them
@@ -1207,6 +1227,10 @@ struct Jp2Prefix<'a> {
     /// Whether no box after the codestream can still be read, whatever
     /// bytes follow ([`jp2::Jp2File::after_settled`]).
     settled: bool,
+    /// Whether the codestream the decode reads is the same whatever bytes
+    /// follow, with no box after it read ([`jp2::Jp2File::codestream_fixed`]),
+    /// so that the tile-parts' errors are final though they have not closed.
+    fixed: bool,
 }
 
 /// Read a JP2 file up to its tile data, in OpenJPEG's order, all of it
@@ -1343,6 +1367,7 @@ fn read_jp2_prefix<'a>(
         selection,
         held,
         settled: file.after_settled,
+        fixed: file.codestream_fixed,
     })
 }
 
@@ -1367,12 +1392,14 @@ fn decode_jp2(
     // held. Once none can, the codestream grows as a raw one does
     // ([`jp2::Jp2File::after_settled`]), and its errors are held as a raw
     // one's are: a fault of the parse of the tile-parts is final, and an
-    // error past it is held until they close.
+    // error past it is held until they close, or, where the codestream is
+    // the same whatever follows ([`jp2::Jp2File::codestream_fixed`]), not
+    // at all.
     let cs = match codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict) {
         Ok(cs) => cs,
         Err(fault) => return held_unless(prefix.settled, ledger, Err(fault)),
     };
-    let closed = prefix.settled && cs.closed;
+    let closed = prefix.fixed || (prefix.settled && cs.closed);
     let decoded = || {
         let cap = samples::cap(&options.sample_limit, bytes.len());
         let image = decode_codestream(cs, options, &prefix.selection, cap, ledger)?;

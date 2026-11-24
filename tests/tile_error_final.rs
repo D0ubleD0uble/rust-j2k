@@ -41,7 +41,7 @@ mod held;
 mod synth;
 
 use rust_j2k::{
-    DecodeOptions, Error, IncrementalDecoder, Refined, SampleLimit, Waiting, decode_with,
+    DecodeOptions, Error, IncrementalDecoder, Raise, Refined, SampleLimit, Waiting, decode_with,
     read_header_with,
 };
 
@@ -1142,5 +1142,187 @@ fn a_fault_in_a_last_tile_part_with_psot_0_is_final_in_a_jp2_file() {
         let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
         decoder.feed(&bytes);
         assert_eq!(error_of(&decoder.refine()), Some(whole), "{name}");
+    }
+}
+
+/// `codestream` cut at the end of its first tile-part, with no `EOC`.
+fn first_part(codestream: &[u8]) -> Vec<u8> {
+    let sot = codestream
+        .windows(2)
+        .position(|w| w == [0xFF, 0x90])
+        .expect("an SOT");
+    let psot = u32::from_be_bytes(codestream[sot + 6..sot + 10].try_into().unwrap());
+    codestream[..sot + psot as usize].to_vec()
+}
+
+/// A JP2 file whose codestream stops at the end of a tile-part, then one
+/// byte that is not `0xFF` where the next `SOT` or the `EOC` belongs. No
+/// byte after it makes that a marker, so OpenJPEG's walk never reaches the
+/// boxes after the codestream, and the decode reads the `jp2c` box's
+/// payload, which a box of explicit length holds whole whatever follows.
+/// The tile's error (`decode_with` with `strict` off) is then final, and
+/// `refine` and `header` give it at once. The byte is past the box, or the
+/// last of its payload, with an `LBox` or an `XLBox`. In a `jp2c` box that
+/// runs to the end of the file (`LBox` 0, or a length too short for the
+/// box's header, which OpenJPEG reads so) or that the input ends inside,
+/// the byte is the last of a payload that more bytes extend, and they
+/// bring a fault of the tile-parts after it, so there the error stays
+/// held; so it does where the byte is `0xFF`, which more bytes can make a
+/// marker.
+fn check_lone_byte(name: &str, codestream: &[u8], options: &DecodeOptions) {
+    let lenient = options.clone().with_strict(false);
+    let part = first_part(codestream);
+    // The file with the `jp2c` box header `jp2c` (its `LBox`, `TBox` and
+    // any `XLBox`), then `payload`.
+    let plain = in_jp2(&part, &[]);
+    let boxes = &plain[..plain.len() - part.len() - 8];
+    let with_jp2c = |jp2c: &[u8], payload: &[u8]| [boxes, jp2c, payload].concat();
+    let lbox = |length: u32| [&length.to_be_bytes()[..], b"jp2c"].concat();
+    let xlbox = |length: u64| [&lbox(1)[..], &length.to_be_bytes()].concat();
+    let length = part.len() as u64 + 16;
+    for byte in [0x00, 0x41] {
+        let past = [in_jp2(&part, &[]), vec![byte]].concat();
+        let inside = in_jp2(&[&part[..], &[byte]].concat(), &[]);
+        let long = [&part[..], &[byte]].concat();
+        for (place, bytes) in [
+            ("past the box", past),
+            ("inside the box", inside),
+            (
+                "past a box with an XLBox",
+                [with_jp2c(&xlbox(length), &part), vec![byte]].concat(),
+            ),
+            (
+                "inside a box with an XLBox",
+                with_jp2c(&xlbox(length + 1), &long),
+            ),
+        ] {
+            let name = format!("{name}, {byte:#04x} {place}");
+            let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+            let header = error_of(&read_header_with(&bytes, &lenient));
+            let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+            decoder.feed(&bytes);
+            assert_eq!(error_of(&decoder.header()), header, "{name}: header");
+            assert_eq!(error_of(&decoder.refine()), Some(whole), "{name}: refine");
+            check_suffixes(&bytes, options, &name);
+            check_streams(&bytes, &lenient, &name);
+        }
+    }
+    // Held: the byte is the last of a `jp2c` box that runs to the end of
+    // the file (`LBox` 0, an `LBox` of 2 to 7 or an `XLBox` below 16,
+    // too short for the box's own header) or one the input ends inside, or
+    // it is `0xFF`.
+    let long = [&part[..], &[0x00]].concat();
+    let mut held = vec![
+        (
+            "0x00 in a jp2c of length 0".to_string(),
+            with_jp2c(&lbox(0), &long),
+        ),
+        (
+            "0x00 in a jp2c the input ends inside".to_string(),
+            with_jp2c(&lbox(part.len() as u32 + 10), &long),
+        ),
+        (
+            "0x00 in a jp2c with an XLBox the input ends inside".to_string(),
+            with_jp2c(&xlbox(length + 2), &long),
+        ),
+        (
+            "0xff".to_string(),
+            [in_jp2(&part, &[]), vec![0xFF]].concat(),
+        ),
+    ];
+    for length in [2, 7] {
+        held.push((
+            format!("0x00 in a jp2c of LBox {length}"),
+            with_jp2c(&lbox(length), &long),
+        ));
+    }
+    for length in [0, 8, 15] {
+        held.push((
+            format!("0x00 in a jp2c of XLBox {length}"),
+            with_jp2c(&xlbox(length), &long),
+        ));
+    }
+    for (place, bytes) in held {
+        let name = format!("{name}, {place}");
+        let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+        let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+        decoder.feed(&bytes);
+        match decoder.refine() {
+            Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
+                assert_eq!(format!("{error:?}"), whole, "{name}");
+            }
+            other => panic!("{name}: {other:?}"),
+        }
+        assert!(matches!(decoder.header(), Ok(Some(_))), "{name}");
+        // And more bytes do replace the error: after `0xFF` an `EOC`,
+        // then a `colr` box at fault; after the `0x00`, a fault of the
+        // tile-part chain.
+        let longer = [&bytes[..], &[0xD9], &synth::bx(b"colr", &[1, 0])].concat();
+        assert_ne!(
+            error_of(&decode_with(&longer, &lenient)),
+            Some(whole),
+            "{name}"
+        );
+    }
+}
+
+/// The tile's error of [`check_lone_byte`]: the packet header's Lblock
+/// indicator, which the decode meets.
+#[test]
+fn a_lone_byte_where_a_marker_belongs_settles_a_jp2_file_for_the_decode() {
+    check_lone_byte(
+        "Lblock",
+        &packet_one_tile(8, &lblock_packet(), &[]),
+        &DecodeOptions::default(),
+    );
+}
+
+/// The tile's error of [`check_lone_byte`]: a tile refused by the
+/// reduction, which the header read meets too.
+#[test]
+fn a_lone_byte_where_a_marker_belongs_settles_a_jp2_file_for_the_header() {
+    check_lone_byte("reduction, two tiles", &reduction_row(&[]), &reduced());
+}
+
+/// Where the codestream is the same whatever follows, as in
+/// [`check_lone_byte`], a tile refused by a cap more bytes lift is still
+/// held: `header` gives the header and `refine` waits as
+/// [`Waiting::SampleLimit`]. The default sample limit is 2^29 samples, or 8
+/// a byte of input when that is more, and a tile's caps grow with it, so an
+/// input `n` times 64 MiB long reads as under `SampleLimit::Raised(n)`.
+/// The `Raised` factor the refusal names stands in for those bytes here:
+/// under it the header read admits the tile.
+#[test]
+fn a_tile_cap_refusal_more_bytes_lift_waits_where_a_jp2_codestream_is_fixed() {
+    let part = default_cap_row(&[]);
+    let past = [in_jp2(&part, &[]), vec![0x00]].concat();
+    let inside = in_jp2(&[&part[..], &[0x00]].concat(), &[]);
+    let lenient = DecodeOptions::default().with_strict(false);
+    for (place, bytes) in [("past the box", past), ("inside the box", inside)] {
+        let factor = match read_header_with(&bytes, &lenient) {
+            Err(Error::Limit(limit)) => match limit.retry_with() {
+                Some(Raise::Raised(factor)) => factor,
+                other => panic!("{place}: {other:?}"),
+            },
+            other => panic!("{place}: {other:?}"),
+        };
+        let raised = lenient
+            .clone()
+            .with_sample_limit(SampleLimit::Raised(factor));
+        assert!(read_header_with(&bytes, &raised).is_ok(), "{place}");
+        let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+        decoder.feed(&bytes);
+        assert!(
+            matches!(decoder.header(), Ok(Some(_))),
+            "{place}: {:?}",
+            decoder.header()
+        );
+        assert!(
+            matches!(
+                decoder.refine(),
+                Ok(Refined::Waiting(Waiting::SampleLimit { .. }))
+            ),
+            "{place}"
+        );
     }
 }
