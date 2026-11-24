@@ -46,7 +46,9 @@ pub(crate) fn read_header_kept(
 /// can follow the codestream, and the decode checks them first, so every
 /// error of the tile-parts is held while a box after the codestream can
 /// still be read ([`jp2::Jp2File::after_settled`]). Once none can, the
-/// tile-parts are held as a codestream's are. Past that, it gives what
+/// tile-parts are held as a codestream's are, or not at all where the
+/// codestream is the same whatever follows
+/// ([`jp2::Jp2File::codestream_fixed`]). Past that, it gives what
 /// [`read_header`] gives.
 pub(crate) fn read_header_streamed(
     bytes: &[u8],

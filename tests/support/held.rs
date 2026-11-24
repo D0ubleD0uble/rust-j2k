@@ -16,6 +16,13 @@
 //! more of: fewer than 8 bytes, a box the input ends inside, or a box of
 //! length 0, which runs to the end of the file.
 //!
+//! The decoder also gives a JP2 file's error at once where the tile-part
+//! chain is broken on bytes in and the `jp2c` box's length ends the box
+//! within the input, as it then reads the same codestream whatever
+//! follows. This file does not count such a file as closed, so the
+//! oracles allow a hold there that the decoder no longer makes; the
+//! `header_split` target checks that no suffix changes the error.
+//!
 //! This file has no dependency but `rust_j2k`. It does not say which errors
 //! are held: an oracle allows a held error only where the input has not
 //! closed, and checks it against the error the one-shot call gives.

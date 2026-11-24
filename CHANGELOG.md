@@ -258,6 +258,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `IncrementalDecoder::refine` and `header` give a JP2 file's error in a
+  tile at once where its tile-part chain stops on one byte that is not
+  `0xFF`, such as a tile-part that ends with the `jp2c` box, then a `00`.
+  No byte after it makes an `SOT` or an `EOC`, so OpenJPEG reads no box
+  after the codestream, and the decode reads the `jp2c` box's contents
+  whatever follows. They held the error for good. Where the `jp2c` box
+  has length 0, or the input ends inside it, more bytes still extend the
+  codestream, and the error stays held (#657).
 - A JP2 file whose main header holds a reserved marker 0xFF30 to 0xFF3F
   has the boxes after its codestream read, as OpenJPEG reads them. The
   step to the codestream's end read a length after such a marker, which

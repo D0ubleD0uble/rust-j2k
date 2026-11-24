@@ -170,7 +170,9 @@ use crate::{
 /// an `XLBox` of 2^32 or more, or where the last tile-part has `Psot = 0`
 /// or the tile-part chain is broken on the bytes fed, as OpenJPEG then
 /// reads no box after the codestream. From there the tile-parts wait as a
-/// codestream's do.
+/// codestream's do, but where the chain is broken on the bytes fed and the
+/// `jp2c` box's length ends the box within them: the decode then reads
+/// that box's contents whatever follows, so the error is final.
 /// So does, in a JP2 file, a fault in a box the bytes fed end inside, which
 /// more bytes can complete or change: a box cut short after the codestream,
 /// a box of length 0, which runs to the end of the input, or a box cut
@@ -990,8 +992,11 @@ pub enum Waiting {
     /// more, and none ever is where the last tile-part has `Psot` 0 or the
     /// tile-part chain is broken on the bytes fed. From there a fault of its
     /// tile-parts is final, and an error in a tile waits until they close,
-    /// as in a codestream. A box of length 0 there is read while under 2^32 bytes follow it, so
-    /// it does not count.
+    /// as in a codestream. Where the chain is broken on the bytes fed, and
+    /// the `jp2c` box's length ends it within them, the decode reads that
+    /// box's contents whatever follows, so the file closes there. A box of
+    /// length 0 there is read while under 2^32 bytes follow it, so it does
+    /// not count.
     ///
     /// More bytes can replace the error with one that comes earlier in the
     /// input, and an image can still follow, for example where a later

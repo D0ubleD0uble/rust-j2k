@@ -1162,8 +1162,9 @@ fn first_part(codestream: &[u8]) -> Vec<u8> {
 /// payload, which a box of explicit length holds whole whatever follows.
 /// The tile's error (`decode_with` with `strict` off) is then final, and
 /// `refine` and `header` give it at once. The byte is past the box, or the
-/// last of its payload. In a `jp2c` box of length 0 the byte is the last
-/// of a payload that more bytes extend, and they bring a fault of the
+/// last of its payload. In a `jp2c` box of length 0, or one the input ends
+/// inside, the byte is the last of a payload that more bytes extend, and
+/// they bring a fault of the
 /// tile-parts after it, so there the error stays held; so it does where
 /// the byte is `0xFF`, which more bytes can make a marker.
 fn check_lone_byte(name: &str, codestream: &[u8], options: &DecodeOptions) {
@@ -1184,13 +1185,19 @@ fn check_lone_byte(name: &str, codestream: &[u8], options: &DecodeOptions) {
             check_streams(&bytes, &lenient, &name);
         }
     }
-    // Held: the byte is the last of a `jp2c` box of length 0, or it is
-    // `0xFF`.
+    // Held: the byte is the last of a `jp2c` box of length 0 or one the
+    // input ends inside, or it is `0xFF`.
     let header = in_jp2(&part, &[]);
     let jp2c = header.len() - part.len() - 8;
     let open = [&header[..jp2c], &[0, 0, 0, 0], b"jp2c", &part, &[0x00]].concat();
+    let mut cut = in_jp2(&[&part[..], &[0x00, 0x00]].concat(), &[]);
+    cut.pop();
     let ff = [in_jp2(&part, &[]), vec![0xFF]].concat();
-    for (place, bytes) in [("0x00 in a jp2c of length 0", open), ("0xff", ff)] {
+    for (place, bytes) in [
+        ("0x00 in a jp2c of length 0", open),
+        ("0x00 in a jp2c the input ends inside", cut),
+        ("0xff", ff),
+    ] {
         let name = format!("{name}, {place}");
         let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
         let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");

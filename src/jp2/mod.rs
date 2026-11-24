@@ -441,9 +441,10 @@ enum AfterRead {
     /// bytes the walk reads to get there are in, so no later byte changes
     /// it.
     Never,
-    /// It never does, as for [`Never`](Self::Never), as the main header or
-    /// the tile-part chain is broken on bytes the input holds
-    /// ([`End::Broken`]). The codestream is the `jp2c` box's payload.
+    /// It never does, whatever bytes follow: the main header or the
+    /// tile-part chain is broken on bytes the input holds ([`End::Broken`]),
+    /// so OpenJPEG's walk cannot reach the boxes after it. The codestream is
+    /// the `jp2c` box's payload.
     Broken,
     /// Not on the bytes in: the main header or the tile-part chain is cut
     /// short.
