@@ -219,7 +219,7 @@ pub(crate) mod window;
 // They exist only under the private `__fuzz` feature, which the fuzz workspace
 // and this crate's own dev-dependency turn on, so a build with default
 // features does not export them.
-#[cfg(feature = "__fuzz")]
+#[cfg(any(test, feature = "__fuzz"))]
 #[doc(hidden)]
 pub mod fuzz;
 
@@ -706,7 +706,7 @@ pub struct DecodeOptions {
     sample_limit: SampleLimit,
     strict: bool,
     /// The fuzz targets' cap on the code-block work bound, set only by
-    /// [`fuzz::with_code_block_work_cap`]; `None` everywhere else.
+    /// `fuzz::with_code_block_work_cap`; `None` everywhere else.
     pub(crate) code_block_work_cap: Option<u64>,
 }
 

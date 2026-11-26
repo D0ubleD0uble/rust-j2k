@@ -1297,6 +1297,7 @@ fn last_tile_without_levels() -> Vec<u8> {
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// Check that a refine of `bytes` under `options`, refused only for what
 /// earlier refines spent of the code-block bound, waits on `BoundSpent`
 /// where `decode_with` with `strict` off gives `expected`, an error in a
@@ -1347,6 +1348,7 @@ fn a_refine_refused_for_what_was_spent_waits_where_a_later_tile_fails() {
     check_later_tiles_wait(&bytes, &options, error);
 }
 
+#[cfg(feature = "__fuzz")]
 /// The `incremental/spent_bound_tier1_then_eph*.j2k` files, HT files the
 /// `incremental_decode` fuzz target found (#485): `decode_with` fails in
 /// the block decoding of one tile (an HT suffix length `Scup` out of
@@ -1413,6 +1415,7 @@ fn segsym_tiles_flipped() -> Vec<u8> {
 /// The byte `segsym_tiles_flipped` flips, from the encoder's output.
 const SEGSYM_FLIPPED_AT: usize = 200;
 
+#[cfg(feature = "__fuzz")]
 /// The code-block work a refine with nothing spent spends on `bytes` under
 /// `options`, and the bound it has.
 fn fresh_block_work(bytes: &[u8], options: &DecodeOptions) -> (u64, u64) {
@@ -1423,6 +1426,7 @@ fn fresh_block_work(bytes: &[u8], options: &DecodeOptions) -> (u64, u64) {
     (work, bound.unwrap())
 }
 
+#[cfg(feature = "__fuzz")]
 /// A refine refused for what earlier refines spent counts the later tiles'
 /// work without decoding them. Where that count passes the whole bound,
 /// `decode_with` still decodes the tiles before the one refused first, so
@@ -1483,6 +1487,7 @@ fn a_refine_refused_by_the_whole_bound_after_a_cut_waits_on_bound_spent() {
     assert_eq!(checked, 2 * 2 * (4640_u64.div_ceil(37) + 4));
 }
 
+#[cfg(feature = "__fuzz")]
 /// Where the count after a cut passes the whole bound and `decode_with`
 /// is refused by that bound too, the wait names the same tile and work as
 /// that refusal. On `segsym_tiles_flipped` with the byte flipped back, a
@@ -1528,6 +1533,7 @@ fn a_count_refused_where_decode_with_is_names_its_tile_and_work() {
     check_waiting("segsym_tiles", &why, &bytes, &options);
 }
 
+#[cfg(feature = "__fuzz")]
 /// The seed `incremental/t1bomb_row_128_8.seed` reaches the same path under
 /// the fuzz target's cap of 2^22: with all the bound spent, a refine is cut
 /// at tile 0 and its count passes the whole bound at tile 2, where
@@ -1556,6 +1562,7 @@ fn the_t1bomb_row_seed_counts_past_the_whole_bound_where_decode_with_is_refused(
     check_waiting("t1bomb_row_128_8", &why, &bytes, &options);
 }
 
+#[cfg(feature = "__fuzz")]
 /// The seed `incremental/bound_spent_stands_in_for_a_tile_cap_refusal.seed`
 /// is refused by `decode_with` at tile 1 for its precinct count. A probe
 /// decoder with the bound spent is cut at tile 0 and counts on to tile 1, so
@@ -1596,6 +1603,7 @@ fn the_bound_spent_seed_waits_on_bound_spent_where_decode_with_is_refused_by_a_t
     check_waiting("bound_spent", &why, &bytes, &options);
 }
 
+#[cfg(feature = "__fuzz")]
 /// Where no amount spent cuts a refine before the tile the whole bound
 /// refuses, it decoded every tile before that one, as `decode_with` does,
 /// and waits on the `WorkLimit` `decode_with` gives, detail and all. On
@@ -1961,6 +1969,7 @@ const ONE_TILE: [&str; 5] = [
     "multilayer_multicomponent_lossless.j2k",
 ];
 
+#[cfg(feature = "__fuzz")]
 /// A change of the reduction alone, between refines at prefixes that
 /// double, keeps the packet walks: each refine gives the one-shot strict-off
 /// decode of its bytes under the new reduction, and no walk is charged as a
@@ -1993,6 +2002,7 @@ fn a_change_of_reduction_keeps_the_walks_and_refines_to_the_one_shot_decode() {
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// A change of the layer cap still lets the walks go, as they keep only
 /// the coding passes of the old cap: each refine gives the one-shot decode
 /// under the new cap, and the walks built again are charged.
@@ -2062,6 +2072,7 @@ fn refused_at_the_packet_bound(bytes: &[u8], reduction: u8) -> bool {
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// At the packet bound, a refine after a change of the reduction alone is
 /// refused where the one-shot decode of its bytes is, with the same
 /// refusal, and gives the image where that decode does. The prefixes are

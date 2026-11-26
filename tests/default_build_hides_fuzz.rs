@@ -6,6 +6,8 @@
 //! library the way a downstream crate does, with default features, and checks
 //! that it can use the public API but cannot name `rust_j2k::fuzz`.
 
+#![cfg(not(target_family = "wasm"))]
+
 use std::path::Path;
 use std::process::Command;
 
@@ -51,7 +53,7 @@ fn a_downstream_crate_with_default_features_cannot_name_the_fuzz_hooks() {
     );
     assert!(!ok, "rust_j2k::fuzz is exported by default features");
     assert!(
-        stderr.contains("could not find `fuzz`"),
+        stderr.contains("configured out"),
         "unexpected failure:\n{stderr}"
     );
 }

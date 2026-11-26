@@ -10,6 +10,8 @@
 //! previous number of tile-part (2)", after warning of the correction) and
 //! the fourth (the same error), which `strict` here refuses too.
 
+#![cfg(feature = "__fuzz")]
+
 #[path = "support/synth.rs"]
 mod synth;
 

@@ -661,7 +661,7 @@ impl IncrementalDecoder {
         }
     }
 
-    #[cfg(feature = "__fuzz")]
+    #[cfg(any(test, feature = "__fuzz"))]
     /// A decoder whose earlier refines spent `blocks` of the code-block
     /// work, as the unit tests set it up (see [`crate::fuzz`]).
     pub(crate) fn with_code_block_work_spent(options: DecodeOptions, blocks: u64) -> Result<Self> {
@@ -670,7 +670,7 @@ impl IncrementalDecoder {
         Ok(decoder)
     }
 
-    #[cfg(feature = "__fuzz")]
+    #[cfg(any(test, feature = "__fuzz"))]
     /// The code-block work the refines have spent, and the code-block
     /// bound of the last decode a refine tried, when that decode read the
     /// main header and has a bound (see [`crate::fuzz`]).
@@ -678,7 +678,7 @@ impl IncrementalDecoder {
         (self.spent.blocks, self.spent.bound)
     }
 
-    #[cfg(feature = "__fuzz")]
+    #[cfg(any(test, feature = "__fuzz"))]
     /// The packet visits the walks of tiles not kept have spent over the
     /// refines; the packet bound of the last refine that tried, when the
     /// bound on those walks refused it; and how many tiles have a walk too
