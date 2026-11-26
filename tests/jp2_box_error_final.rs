@@ -42,6 +42,8 @@
 //! the later [`final_shapes`] and the `header_split` inputs
 //! ([`the_header_split_inputs_are_final_once_the_fault_is_in`]).
 
+#[path = "support/skip.rs"]
+mod skip;
 #[path = "support/synth.rs"]
 mod synth;
 
@@ -201,6 +203,9 @@ fn shapes() -> Vec<(&'static str, Vec<u8>, DecodeOptions)> {
 /// error.
 #[test]
 fn the_one_shot_calls_give_an_error_more_bytes_replace() {
+    if skip::excluded() {
+        return;
+    }
     for (name, bytes, options) in shapes() {
         let lenient = options.with_strict(false);
         for (what, call) in [
@@ -268,6 +273,9 @@ waits! {
 
 /// The checks of [`waits!`] on shape `index` of [`shapes`].
 fn check_waits(index: usize) {
+    if skip::excluded() {
+        return;
+    }
     let shapes = shapes();
     assert_eq!(shapes.len(), 12, "a shape with no test");
     let (name, bytes, options) = shapes.into_iter().nth(index).expect("a shape");

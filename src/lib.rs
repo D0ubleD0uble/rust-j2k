@@ -1830,3 +1830,31 @@ pub(crate) use pipeline::decode::tile_bytes;
 #[cfg(test)]
 #[path = "../tests/support/synth.rs"]
 mod synth;
+
+// The skip for a test whose fixture the published package leaves out; the
+// integration tests include the same file.
+#[cfg(test)]
+#[path = "../tests/support/skip.rs"]
+mod skip;
+
+#[cfg(test)]
+mod skip_tests {
+    use super::skip::decide;
+
+    #[test]
+    fn a_present_marker_never_skips() {
+        assert!(!decide(true, false));
+        assert!(!decide(true, true));
+    }
+
+    #[test]
+    fn no_marker_and_no_git_skips() {
+        assert!(decide(false, false));
+    }
+
+    #[test]
+    #[should_panic(expected = "in a git checkout")]
+    fn no_marker_in_a_git_checkout_panics() {
+        decide(false, true);
+    }
+}

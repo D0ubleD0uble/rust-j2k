@@ -53,7 +53,7 @@ fn a_downstream_crate_with_default_features_cannot_name_the_fuzz_hooks() {
     );
     assert!(!ok, "rust_j2k::fuzz is exported by default features");
     assert!(
-        stderr.contains("configured out"),
+        stderr.contains("configured out") && stderr.contains("could not find `fuzz`"),
         "unexpected failure:\n{stderr}"
     );
 }

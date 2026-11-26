@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 mod inconsistent;
 use inconsistent::checked;
 
+#[path = "support/skip.rs"]
+mod skip;
 #[path = "support/synth.rs"]
 mod synth;
 
@@ -458,11 +460,17 @@ fn sweep_agrees_with_decode(reduction: u8) {
 
 #[test]
 fn read_header_agrees_with_decode_on_every_committed_file() {
+    if skip::excluded() {
+        return;
+    }
     sweep_agrees_with_decode(0);
 }
 
 #[test]
 fn read_header_agrees_with_decode_on_every_committed_file_at_a_reduction() {
+    if skip::excluded() {
+        return;
+    }
     sweep_agrees_with_decode(1);
 }
 
@@ -478,6 +486,9 @@ fn real(name: &str) -> Vec<u8> {
 /// file8 has one before `jp2c` and one after it. Sizes from a box dump.
 #[test]
 fn the_part4_files_report_their_xml_boxes() {
+    if skip::excluded() {
+        return;
+    }
     let xml_lengths = |n| {
         let jp2 = read_header(&part4(n)).unwrap().jp2.unwrap();
         assert!(jp2.uuid.is_empty(), "file{n}");
@@ -502,6 +513,9 @@ fn the_part4_files_report_their_xml_boxes() {
 /// color channels.
 #[test]
 fn the_jpx_compatible_files_report_their_metadata() {
+    if skip::excluded() {
+        return;
+    }
     for (n, profile) in [(5, 546), (7, 13332)] {
         let bytes = part4(n);
         let header = read_header(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
@@ -527,6 +541,9 @@ fn the_jpx_compatible_files_report_their_metadata() {
 /// read them: `resc 10000/254 e0` and `resd 12901/32768 e4`.
 #[test]
 fn the_gdal_samples_report_their_resolution() {
+    if skip::excluded() {
+        return;
+    }
     // `Resolution`, `Res` and `Ratio` are non-exhaustive, so compare fields.
     let fields = |r: Ratio| (r.numerator, r.denominator, r.exponent);
     let tlm = read_header(&real("byte_tlm_plt.jp2")).unwrap().jp2.unwrap();
@@ -581,6 +598,9 @@ fn a_component_too_deep_for_i32_is_refused_from_the_header() {
 /// reported. Identifiers and sizes from a box dump.
 #[test]
 fn byte_with_xmp_has_two_uuid_boxes_and_no_top_level_xml() {
+    if skip::excluded() {
+        return;
+    }
     let jp2 = read_header(&real("byte_with_xmp.jp2"))
         .unwrap()
         .jp2

@@ -8,6 +8,9 @@
 
 use std::path::PathBuf;
 
+#[path = "support/skip.rs"]
+mod skip;
+
 use rust_j2k::{DecodeOptions, Error, Image, Region, Window, decode_with, read_header};
 
 /// A splitmix64 stream: small, and the same on every platform.
@@ -145,19 +148,6 @@ fn read(path: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-/// The bytes of `file` in `dir`, a fixture directory `Cargo.toml` leaves
-/// out of the published package. `None` when the directory is not there,
-/// as in a packaged crate; a file missing from a directory that is there is
-/// a failure, so a renamed or deleted fixture cannot pass by being skipped.
-fn optional(dir: &str, file: &str) -> Option<Vec<u8>> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(dir);
-    if !root.is_dir() {
-        eprintln!("{dir} is not present (packaged crate?); skipping {file}");
-        return None;
-    }
-    Some(read(&format!("{dir}/{file}")))
-}
-
 /// The window fixtures: 3 x 3 tiles with partial edge tiles on 5/3 (with
 /// and without the color transform) and 9/7, and the sub-sampled 5/3 and
 /// 9/7 codestreams with their image and tiles off the grid's origin.
@@ -246,10 +236,12 @@ fn random_windows_of_a_cut_codestream_are_crops_of_its_partial_decode() {
 /// code-blocks) and on 5/3 (sub-sampled components), two HTJ2K
 /// codestreams from OpenJPH, on 9/7 and 5/3, and eight ISO HTJ2K conformance
 /// codestreams with refinement passes. Their directories are left
-/// out of the published package, so they are skipped where a directory is
-/// not there (see [`optional`]).
+/// out of the published package, so the test skips there.
 #[test]
 fn random_windows_of_larger_codestreams_are_crops_of_the_whole_decode() {
+    if skip::excluded() {
+        return;
+    }
     const BENCH: &str = "tests/fixtures/bench";
     const CONFORMANCE: &str = "tests/fixtures/conformance/codestreams";
     const OPENJPH: &str = "tests/fixtures/openjph/files";
@@ -280,8 +272,7 @@ fn random_windows_of_larger_codestreams_are_crops_of_the_whole_decode() {
     .into_iter()
     .enumerate()
     {
-        if let Some(bytes) = optional(dir, file) {
-            check(file, &bytes, 16, 100 + seed as u64);
-        }
+        let bytes = read(&format!("{dir}/{file}"));
+        check(file, &bytes, 16, 100 + seed as u64);
     }
 }

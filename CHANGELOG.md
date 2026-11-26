@@ -269,6 +269,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The published crate's own tests pass. A test that reads a fixture the
+  package leaves out (the conformance corpus, the GDAL JP2 files, the OpenJPH
+  files and the benchmark inputs) now skips, and says so, in the
+  unpacked package, where there is no `.git`. In a git checkout it fails when a
+  fixture is missing, and when the marker file `tests/fixtures/REPO_ONLY` is.
 - A `PPM` segment that ends inside a 4-byte `Nppm` field is refused as
   `Error::Marker`, as OpenJPEG refuses it. A.7.4 has each `PPM` segment end
   with a completed packet header; only the `Ippm` bytes may continue in the

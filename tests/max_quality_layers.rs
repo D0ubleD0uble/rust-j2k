@@ -59,6 +59,9 @@ fn cod_layers(bytes: &[u8]) -> u16 {
 /// `jp2_real/byte.jp2` 12, `jp2_palette_8bit.jp2` 3.
 #[test]
 fn read_header_reports_the_layer_count_opj_dump_prints() {
+    if support::skip::excluded() {
+        return;
+    }
     let cases: [(PathBuf, u16); 7] = [
         (fixtures().join("layers/lrcp.j2k"), 4),
         (fixtures().join("layers/pterm_cut.j2k"), 2),
@@ -205,6 +208,9 @@ fn a_cap_at_a_reduction_matches_openjpeg() {
 /// `predictable termination` and `segmentation symbols`.
 #[test]
 fn part4_codestreams_match_openjpeg_at_each_cap() {
+    if support::skip::excluded() {
+        return;
+    }
     let oracles = String::from_utf8(layers_file("part4.sha256")).unwrap();
     let mut graded = 0;
     for line in oracles.lines() {
@@ -233,6 +239,9 @@ fn part4_codestreams_match_openjpeg_at_each_cap() {
 /// the small codestreams, to keep the test short.
 #[test]
 fn a_cap_at_or_past_the_layer_count_is_no_cap() {
+    if support::skip::excluded() {
+        return;
+    }
     let mut paths: Vec<PathBuf> = Vec::new();
     for dir in ["", "conformance/codestreams", "layers"] {
         for entry in std::fs::read_dir(fixtures().join(dir)).unwrap() {

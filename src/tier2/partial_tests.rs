@@ -51,6 +51,9 @@ fn a_cut_packet_keeps_each_code_blocks_whole_layers() {
 /// Part 1 one is.
 #[test]
 fn a_cut_packet_keeps_whole_layers_of_ht_code_blocks() {
+    if crate::skip::excluded() {
+        return;
+    }
     assert!(
         whole_layers("conformance/ht/codestreams/ds0_ht_02_b11.j2k", 6),
         "no cut kept a block at an earlier layer beside a whole one"

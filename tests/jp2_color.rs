@@ -89,6 +89,9 @@ fn first_colr(bytes: &[u8]) -> &[u8] {
 /// its purpose.)
 #[test]
 fn kakadu_files_with_unkc_1_report_their_colr_value() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jp2_real");
     let files = [
         ("byte.jp2", ColorSpace::Grayscale),
@@ -108,6 +111,9 @@ fn kakadu_files_with_unkc_1_report_their_colr_value() {
 
 #[test]
 fn decode_reports_the_color_space_of_each_conformance_file() {
+    if support::skip::excluded() {
+        return;
+    }
     for (n, want) in EXPECT {
         let bytes = std::fs::read(path(*n)).unwrap_or_else(|e| panic!("file{n}: {e}"));
         match want {
@@ -136,6 +142,9 @@ fn decode_reports_the_color_space_of_each_conformance_file() {
 /// its as-coded check.
 #[test]
 fn file2_comes_out_in_color_order() {
+    if support::skip::excluded() {
+        return;
+    }
     use rust_j2k::{Association, ChannelDefinition, ChannelType};
     let bytes = std::fs::read(path(2)).expect("file2");
     let at = bytes.windows(4).position(|w| w == b"cdef").unwrap() + 4;

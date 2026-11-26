@@ -302,7 +302,31 @@ inputs) and everything used only to work on the repository, such as
 `package-hygiene` CI job checks only one rule: the license-restricted
 conformance corpus (`tests/fixtures/conformance/`) never ships.
 
-**Cost:** a few minutes.
+Then run the crate's own tests from the unpacked package:
+
+```sh
+cargo package --allow-dirty
+cd target/package/rust-j2k-X.Y.Z && cargo test
+```
+
+It must pass with no failures. A test that reads an excluded fixture skips and
+prints a line with `left out of the published package`. Count them with
+`... 2>&1 | grep -o 'left out of the published package' | wc -l` and note the
+number; `grep -c '^skipped'` undercounts, because the harness's own output can
+share a line with a skip message. A test skips only where
+`tests/fixtures/REPO_ONLY`, an empty file the package leaves out, is missing
+and there is no `.git` next to `Cargo.toml`. In the repository the test fails
+instead if a fixture is missing, and a missing marker in a git checkout panics,
+so a moved marker turns every CI job red. A packaged crate, `cargo vendor`
+output and a distro build have no `.git`, so they skip, whatever `CI` is set
+to. A test skips all of its fixtures at once, so a
+test that mixes packaged and excluded fixtures does not run on the packaged
+ones. The shared helper is `tests/support/skip.rs`. Cargo can reuse a stale
+build of the crate from an earlier unpack at the same path, which gives
+failures that are not real, so run `cargo clean -p rust-j2k` in the unpacked
+directory before `cargo test`.
+
+**Cost:** a few minutes, plus a second build of the crate and its tests.
 
 **When:** once per release, during the readiness check. The `package-hygiene`
 job checks the conformance rule on every PR.

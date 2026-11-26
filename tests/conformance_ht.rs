@@ -196,6 +196,9 @@ fn read_pgx(dir: &Path, path: &str) -> Pgx {
 /// Decode every HT codestream and graded JPH file, and enforce the ratchet.
 #[test]
 fn grades_the_ht_set_by_compliance_class() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = ht_dir();
     let manifest = load_ht_manifest(&dir);
     assert_eq!(
@@ -288,6 +291,9 @@ fn pin_refusals(graded: &[(&str, Grade)], expected: impl Fn(&str) -> &'static st
 /// OpenJPEG's output.
 #[test]
 fn grades_agreement_with_openjpeg() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = ht_dir();
     let manifest = load_ht_manifest(&dir);
     let graded: Vec<(&str, Grade)> = manifest
@@ -324,6 +330,9 @@ fn grades_agreement_with_openjpeg() {
 /// reference holds, and grade it bit-exactly.
 #[test]
 fn grades_the_jph_codestreams() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = ht_dir();
     let jp2 = jp2_dir();
     let manifest = load_ht_manifest(&dir);
@@ -350,6 +359,9 @@ fn grades_the_jph_codestreams() {
 /// Decode every OpenJPH codestream and grade it against OpenJPEG's decode.
 #[test]
 fn grades_the_openjph_codestreams() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = openjph_dir();
     let manifest = load_openjph_manifest(&dir);
     let graded: Vec<(&str, Grade)> = manifest
@@ -375,6 +387,9 @@ fn grades_the_openjph_codestreams() {
 /// depth of the component it grades, so a missing or damaged one fails here.
 #[test]
 fn every_reference_parses() {
+    if support::skip::excluded() {
+        return;
+    }
     let ht = ht_dir();
     let manifest = load_ht_manifest(&ht);
     let mut parsed = 0;
@@ -430,6 +445,9 @@ fn check_digest(dir: &Path, path: &str, digest: &Digest) {
 /// Every file the manifests name matches its recorded size and SHA-256.
 #[test]
 fn committed_bytes_match_the_manifest_digests() {
+    if support::skip::excluded() {
+        return;
+    }
     let ht = ht_dir();
     let manifest = load_ht_manifest(&ht);
     for c in &manifest.codestreams {
@@ -478,6 +496,9 @@ fn files_under(dir: &Path, subdirs: &[&str]) -> BTreeSet<String> {
 /// manifest, so nothing sits in the corpus ungraded.
 #[test]
 fn every_committed_file_is_in_a_manifest() {
+    if support::skip::excluded() {
+        return;
+    }
     let ht = ht_dir();
     let manifest = load_ht_manifest(&ht);
     let mut listed = BTreeSet::new();
@@ -609,6 +630,9 @@ fn bounds_at(bounds: &Bounds, k: usize) -> (f64, f64) {
 /// - an entry is `bit_exact` exactly when every bound is zero.
 #[test]
 fn every_bound_passes_its_cross_check() {
+    if support::skip::excluded() {
+        return;
+    }
     let ht = ht_dir();
     let manifest = load_ht_manifest(&ht);
     let part1 = part4::load_manifest(&part1_dir());
@@ -737,6 +761,9 @@ fn every_bound_passes_its_cross_check() {
 /// component that `regenerate.py` recorded.
 #[test]
 fn every_jph_codestream_matches_openjpeg() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = ht_dir();
     let manifest = load_ht_manifest(&dir);
     for j in &manifest.jph {
@@ -763,6 +790,9 @@ fn every_jph_codestream_matches_openjpeg() {
 /// zero.
 #[test]
 fn openjpeg_output_is_within_every_bound() {
+    if support::skip::excluded() {
+        return;
+    }
     let ht = ht_dir();
     let manifest = load_ht_manifest(&ht);
     let mut decoded = Vec::new();
@@ -852,6 +882,9 @@ fn name_bound(name: &str) -> Option<u32> {
 /// change the bar.
 #[test]
 fn the_manifest_pins_the_grading_bar() {
+    if support::skip::excluded() {
+        return;
+    }
     let manifest = load_ht_manifest(&ht_dir());
     let names: Vec<&str> = manifest
         .codestreams
@@ -995,6 +1028,9 @@ fn check_passes(name: &str, passes: &support::ht::Passes) {
 /// Unknown manifest keys are rejected rather than ignored, at every level.
 #[test]
 fn the_manifests_reject_unknown_keys() {
+    if support::skip::excluded() {
+        return;
+    }
     /// Add an unknown key to the object at JSON pointer `at` and expect `T` to
     /// refuse it.
     fn reject<T: serde::de::DeserializeOwned>(value: &serde_json::Value, at: &str) {
@@ -1077,6 +1113,9 @@ fn the_manifests_reject_unknown_keys() {
 /// decode right; `ht_refinement_matches_kakadu_stats` grades those.
 #[test]
 fn a_cap_before_the_refinement_layers_agrees_across_transcodes() {
+    if support::skip::excluded() {
+        return;
+    }
     use rust_j2k::{DecodeOptions, decode_with, read_header};
     for (base, last) in [
         ("ds0_ht_02", 4),
@@ -1122,6 +1161,9 @@ fn a_cap_before_the_refinement_layers_agrees_across_transcodes() {
 /// zero length, which T.814 B.3 makes `Z_blk = 1`: cleanup pass only.
 #[test]
 fn ht_transcodes_decode_as_their_part1_source() {
+    if support::skip::excluded() {
+        return;
+    }
     for (ht, part1) in [
         ("ds1_ht_04_b9", "p1_04"),
         ("ds1_ht_05_b11", "p1_05"),
@@ -1150,6 +1192,9 @@ const IRREVERSIBLE_STATS_MATCH: &[&str] = &["ds0_ht_02_b11", "ds1_ht_01_b11", "d
 /// `IRREVERSIBLE_STATS_MATCH`.
 #[test]
 fn ht_refinement_matches_kakadu_stats() {
+    if support::skip::excluded() {
+        return;
+    }
     let manifest = load_ht_manifest(&ht_dir());
     let read = |path: PathBuf| std::fs::read(&path).unwrap_or_else(|e| panic!("{e}"));
     let mut refined = 0;
@@ -1208,6 +1253,9 @@ fn ht_refinement_matches_kakadu_stats() {
 /// does.
 #[test]
 fn jph_files_match_kakadu_stats() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = ht_dir();
     let manifest = load_ht_manifest(&dir);
     let read = |path: PathBuf| std::fs::read(&path).unwrap_or_else(|e| panic!("{e}"));
@@ -1287,6 +1335,9 @@ fn jph_files_match_kakadu_stats() {
 /// OpenJPEG 2.5.0 refuses both files ("Invalid component index 18283").
 #[test]
 fn file10_reports_application_defined_channels_and_no_color_space() {
+    if support::skip::excluded() {
+        return;
+    }
     use rust_j2k::{Association, ChannelDefinition, ChannelType, ColorOutput, ColorSpace};
     let application = |asoc| ChannelDefinition {
         kind: ChannelType::ApplicationDefined,
@@ -1342,6 +1393,9 @@ fn file10_reports_application_defined_channels_and_no_color_space() {
 /// `grades_the_openjph_codestreams` grades against OpenJPEG.
 #[test]
 fn openjph_jph_files_decode_as_their_codestream() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = openjph_dir();
     let mut checked = 0;
     for e in load_openjph_manifest(&dir).entries {

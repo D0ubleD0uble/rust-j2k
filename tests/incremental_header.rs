@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 #[path = "support/held.rs"]
 mod held;
+#[path = "support/skip.rs"]
+mod skip;
 #[path = "support/synth.rs"]
 mod synth;
 
@@ -182,6 +184,9 @@ fn middle(bytes: &[u8]) -> Option<Region> {
 
 #[test]
 fn each_header_of_a_fixture_fed_in_pieces_is_the_read_of_its_prefix() {
+    if skip::excluded() {
+        return;
+    }
     let mut rng = Rng(0x5eed_0502);
     let paths = files(&synth::fixtures(""));
     assert!(paths.len() > 300, "{} fixtures", paths.len());
