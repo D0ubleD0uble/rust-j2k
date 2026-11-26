@@ -610,7 +610,8 @@ impl LimitDetail {
         self.refused_at
     }
 
-    /// The diagnostic, without the prefix the [`Error`]'s `Display` adds. Do not parse it: [`kind`](Self::kind),
+    /// The diagnostic, without the prefix the [`Error`]'s `Display` adds. Do
+    /// not parse it: [`kind`](Self::kind),
     /// [`retry_with`](Self::retry_with) and [`refused_at`](Self::refused_at)
     /// hold its data.
     pub fn message(&self) -> &str {

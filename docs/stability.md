@@ -170,7 +170,8 @@ These can change in any release:
   variant, and read a limit's data from `kind`, `retry_with` and
   `refused_at`.
 - **Which fault wins.** When an input has more than one fault, which one is
-  reported, including its variant. The rustdoc of `Error` lists what holds today.
+  reported, including its variant. The rustdoc of `Error` lists what holds
+  today.
 - **The minimum Rust version.** It is 1.87 (`rust-version` in
   `Cargo.toml`). No policy is set for raising it.
 - **The hidden `fuzz` module** and the `__fuzz` feature it needs. They exist
