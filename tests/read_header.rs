@@ -452,13 +452,17 @@ fn sweep_agrees_with_decode(reduction: u8) {
         assert_eq!(seen[2], 23, "the 23 Part 1 codestreams");
     }
     // Every listed tile fault really differs.
-    let listed: Vec<String> = TILE_FAULTS.iter().map(|(n, _)| n.to_string()).collect();
+    let listed: Vec<String> = TILE_FAULTS
+        .iter()
+        .filter(|(n, _)| !skip::is_excluded_path(n))
+        .map(|(n, _)| n.to_string())
+        .collect();
     if reduction == 0 {
         assert_eq!(differing, listed);
     }
     let listed: Vec<String> = LOWER_TILE_FAULTS
         .iter()
-        .filter(|(_, _, at, _)| *at == reduction)
+        .filter(|(n, _, at, _)| *at == reduction && !skip::is_excluded_path(n))
         .map(|(n, ..)| n.to_string())
         .collect();
     // Each listed file is refused by the header at the one reduction it names.
