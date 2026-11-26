@@ -35,14 +35,24 @@ const MARKER: &str = "tests/fixtures/.repo-only";
 /// test harness shows it for a passing test without `--nocapture`.
 #[track_caller]
 pub fn excluded() -> bool {
-    decide(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(MARKER).exists(),
-        std::env::var_os("CI").is_some(),
-    )
+    let marker = Path::new(env!("CARGO_MANIFEST_DIR")).join(MARKER).exists();
+    let skip = decide(marker, std::env::var_os("CI").is_some());
+    if skip {
+        let at = Location::caller();
+        let thread = std::thread::current();
+        let _ = writeln!(
+            std::io::stderr(),
+            "skipped {} ({}:{}): the fixtures it reads are left out of the published package",
+            thread.name().unwrap_or("a test"),
+            at.file(),
+            at.line()
+        );
+    }
+    skip
 }
 
-/// The decision of [`excluded`] for a given marker state and `CI` setting;
-/// `src/lib.rs` tests it.
+/// Whether to skip for a marker state and `CI` setting, panicking where a
+/// skip in CI would hide a missing marker. `src/lib.rs` tests it.
 #[track_caller]
 pub fn decide(marker_present: bool, ci: bool) -> bool {
     if marker_present {
@@ -52,14 +62,6 @@ pub fn decide(marker_present: bool, ci: bool) -> bool {
     assert!(
         !ci,
         "{}:{}: the marker {MARKER} is missing while CI is set; it must be in the repository",
-        at.file(),
-        at.line()
-    );
-    let thread = std::thread::current();
-    let _ = writeln!(
-        std::io::stderr(),
-        "skipped {} ({}:{}): the fixtures it reads are left out of the published package",
-        thread.name().unwrap_or("a test"),
         at.file(),
         at.line()
     );
