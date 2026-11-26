@@ -1847,26 +1847,77 @@ mod skip_tests {
         assert!(!decide(true, true));
     }
 
+    /// Checks the `tests/fixtures/` entries of the `exclude` array in
+    /// `manifest`, less `REPO_ONLY`, read as written but for a leading `/`,
+    /// quotes, a trailing comma and a comment. Panics on one that does not
+    /// end in `/` or is not in `EXCLUDED_DIRS`; returns how many it found.
+    fn check_exclude(manifest: &str) -> usize {
+        let block = manifest
+            .split_once("exclude")
+            .and_then(|(_, rest)| rest.split_once('['))
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .expect("an exclude array")
+            .0;
+        let mut found = 0;
+        for line in block.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            let entry = line.trim_end_matches(',').trim().trim_matches(['"', '\'']);
+            let entry = entry.strip_prefix('/').unwrap_or(entry);
+            let Some(rest) = entry.strip_prefix("tests/fixtures/") else {
+                continue;
+            };
+            if rest == "REPO_ONLY" {
+                continue;
+            }
+            assert!(
+                rest.ends_with('/'),
+                "{entry}: an excluded fixtures entry needs a trailing /"
+            );
+            assert!(
+                super::skip::EXCLUDED_DIRS.contains(&rest),
+                "{entry} is excluded from the package but not in EXCLUDED_DIRS"
+            );
+            found += 1;
+        }
+        found
+    }
+
     /// `EXCLUDED_DIRS` is the `tests/fixtures/` directories of the `exclude`
     /// list in `Cargo.toml`, which the package keeps.
     #[test]
     fn the_excluded_dirs_are_the_cargo_exclude_directories() {
         let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
             .expect("Cargo.toml");
-        let mut listed: Vec<&str> = manifest
-            .lines()
-            .filter_map(|line| {
-                let entry = line.trim().strip_suffix(',')?.trim_matches('"');
-                entry.strip_prefix("tests/fixtures/")?.strip_suffix('/')
-            })
-            .collect();
-        let mut dirs: Vec<&str> = super::skip::EXCLUDED_DIRS
-            .iter()
-            .map(|dir| dir.trim_end_matches('/'))
-            .collect();
-        listed.sort_unstable();
-        dirs.sort_unstable();
-        assert_eq!(dirs, listed);
+        assert_eq!(
+            check_exclude(&manifest),
+            super::skip::EXCLUDED_DIRS.len(),
+            "every EXCLUDED_DIRS entry is in exclude"
+        );
+    }
+
+    #[test]
+    fn the_exclude_check_reads_each_way_to_write_an_entry() {
+        for entry in [
+            "\"tests/fixtures/conformance/\",",
+            "\"/tests/fixtures/conformance/\",",
+            "\"tests/fixtures/conformance/\", # 40 MB",
+            "'tests/fixtures/conformance/',",
+        ] {
+            let manifest = format!("exclude = [\n    {entry}\n    \"/.github/\",\n]\n");
+            assert_eq!(check_exclude(&manifest), 1, "{entry}");
+        }
+        for entry in [
+            "\"tests/fixtures/huge/\",",
+            "\"/tests/fixtures/huge/\",",
+            "\"tests/fixtures/huge/\", # 40 MB",
+            "'tests/fixtures/huge/',",
+            "\"tests/fixtures/huge\",",
+            "\"tests/fixtures/conformance\",",
+        ] {
+            let manifest = format!("exclude = [\n    {entry}\n]\n");
+            let caught = std::panic::catch_unwind(|| check_exclude(&manifest)).is_err();
+            assert!(caught, "{entry} passed");
+        }
     }
 
     #[test]

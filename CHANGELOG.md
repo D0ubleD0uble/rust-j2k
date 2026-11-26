@@ -134,6 +134,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `cargo test` on the unpacked package now runs the part of each mixed fixture
   test that uses the files the package ships, and skips only the entries it
   leaves out. A test that reads only left-out files still skips whole.
+- `docs/openjpeg-departures.md` records that a resolution reduction is checked
+  against each component's levels after `COD` and `COC` are merged, so a file
+  whose `COD` has too few levels but whose `COC`s raise them decodes here, where
+  OpenJPEG refuses at the `COD`. A test pins it (#536).
+- `docs/openjpeg-departures.md` records that with `strict` off a tile with more
+  tile-parts than its `TNsot`, even after the `TPsot == TNsot` correction,
+  decodes from every part found, where OpenJPEG drops the extra part or refuses
+  the file. A test pins it (#634).
 - The hidden `rust_j2k::fuzz` hooks now need the private `__fuzz` feature, which
   is unstable and has no semver promise. A build with default features no
   longer exports them. They were never public API.

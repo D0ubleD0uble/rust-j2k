@@ -371,7 +371,13 @@ fn sweep_agrees_with_decode(reduction: u8) {
     }
     let packaged = skip::is_excluded_path("conformance/");
     all.retain(|path| {
-        !skip::is_excluded_path(&path.strip_prefix(&root).unwrap().to_string_lossy())
+        !skip::is_excluded_path(
+            &path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/"),
+        )
     });
     let mut seen = [0usize; 4];
     let mut compared = 0usize;
