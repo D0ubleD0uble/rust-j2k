@@ -67,11 +67,11 @@ does again on each refine.
   the one `decode_with` gives on those bytes. A refusal by a bound only the
   refines have, `BoundSpent` or `RepeatLimit`, can stand in for an error
   that block decoding, the wavelet or assembly would meet in a tile the
-  refine did not decode: the refine waits where `decode_with` fails, and `finish` reports
-  that error (see [Work and memory](#work-and-memory)). Once `refine` returns
-  an error,
-  every later `refine` returns the same error without decoding, until a
-  change of options (see [Changing the options](#changing-the-options)).
+  refine did not decode: the refine waits where `decode_with` fails, and
+  `finish` reports that error (see [Work and memory](#work-and-memory)).
+  Once `refine` returns an error, every later `refine` returns the same
+  error without decoding, until a change of options (see [Changing the
+  options](#changing-the-options)).
 - A refine tries to decode when the bytes fed are at least twice those of
   the last refine that decoded or tried to. Before any try, the first refine
   called with at least one byte fed tries; with none fed, `refine` waits
