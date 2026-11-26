@@ -1713,6 +1713,22 @@ the same, with "an Nppm".) A continuation carries `Ippm` bytes, not the rest of 
 `Nppm`, so this decoder refuses the split field as `Error::Marker`, and
 OpenJPEG gives "Not enough bytes to read Nppm" (`j2k.c:3958`).
 
+Two other shapes break "Every marker segment in this series shall end with a
+completed packet header" (A.7.4), and both decoders read
+them. They are not departures:
+
+- a `PPM` segment ends right after a whole `Nppm`, before that packet header
+  starts;
+- a `PPM` segment ends partway through a packet header.
+
+No bytes are lost, so the image is complete: with `strict` on, both decoders
+decode each to the same image as the file whose segments end on a completed
+packet header (opj_decompress 2.5.0 gives 176 for each test file, as for
+the conforming one). This is error correction that costs nothing, so the
+decoder does not refuse it, even with `strict` on
+(`ppm_segments_ending_before_or_inside_a_packet_header_decode` in
+`tests/ppm_nppm.rs`).
+
 ## The JP2 box layer
 
 The JP2 box layer follows OpenJPEG 2.5.0 where a file bends Annex I in a way it

@@ -131,6 +131,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `docs/openjpeg-departures.md` records that a `PPM` segment that ends after a
+  whole `Nppm`, or partway through a packet header, breaks A.7.4 but is read
+  here and in OpenJPEG. A test pins it (#667).
 - `docs/openjpeg-departures.md` records that a resolution reduction is checked
   against each component's levels after `COD` and `COC` are merged, so a file
   whose `COD` has too few levels but whose `COC`s raise them decodes here, where

@@ -383,3 +383,124 @@ fn a_ppm_whose_nppms_are_all_zero_is_read_on_every_prefix() {
         );
     }
 }
+
+/// What each path gives on `prefix`, with `strict` as given: the header, the
+/// decode, and an incremental decoder fed the prefix whole, after `header`,
+/// `refine` and `finish`.
+fn paths(prefix: &[u8], strict: bool) -> Vec<String> {
+    let mut decoder = IncrementalDecoder::new(options(strict)).unwrap();
+    decoder.feed(prefix);
+    let fed_header = keyed(decoder.header());
+    let refined = match decoder.refine() {
+        Ok(Refined::Image(image)) => outcome(Ok(image)),
+        Ok(_) => "no image".to_owned(),
+        Err(error) => format!("{error:?}"),
+    };
+    vec![
+        keyed(read_header_with(prefix, &options(strict))),
+        outcome(decode_with(prefix, &options(strict))),
+        fed_header,
+        refined,
+        outcome(decoder.finish()),
+    ]
+}
+
+/// `shape` and `conforming` differ only in their `PPM` segments, so the bytes
+/// from the first `SOT` marker on are the same. On every prefix of `shape`,
+/// with `strict` on and off, each path gives what it gives on the conforming
+/// file's prefix of the same tail, and from the first `SOT` marker on that is
+/// not a `PPM` error. The whole file decodes to 176, complete.
+fn check_same_as_conforming(name: &str, shape: &[u8], conforming: &[u8]) {
+    let shape_sot = sot_offset(shape);
+    let conforming_sot = sot_offset(conforming);
+    assert_eq!(shape[shape_sot..], conforming[conforming_sot..], "{name}");
+    for strict in [true, false] {
+        for length in 0..=shape.len() {
+            let at = format!("{name}, {length} of {} bytes, strict {strict}", shape.len());
+            let got = paths(&shape[..length], strict);
+            if length < shape_sot + 2 {
+                assert!(got[0].starts_with("Incomplete("), "{at}: {got:?}");
+                assert!(got[1].starts_with("Incomplete("), "{at}: {got:?}");
+            } else {
+                let tail = length - shape_sot;
+                let want = paths(&conforming[..conforming_sot + tail], strict);
+                assert_eq!(got, want, "{at}");
+                assert!(!got[0].starts_with("Marker("), "{at}: {got:?}");
+                assert!(!got[1].contains("PPM"), "{at}: {got:?}");
+            }
+        }
+        assert_eq!(
+            outcome(decode_with(shape, &options(strict))),
+            "Ok([176], complete true)",
+            "{name}, strict {strict}"
+        );
+        // One byte at a time, then `finish`.
+        let mut decoder = IncrementalDecoder::new(options(strict)).unwrap();
+        for byte in shape {
+            decoder.feed(std::slice::from_ref(byte));
+            let _ = decoder.header();
+            let _ = decoder.refine();
+        }
+        assert_eq!(
+            outcome(decoder.finish()),
+            "Ok([176], complete true)",
+            "{name}, fed one byte at a time, strict {strict}"
+        );
+    }
+}
+
+/// A `PPM` segment that ends after a whole `Nppm` but before that packet
+/// header (a), or partway through a packet header (b), breaks A.7.4: "Every
+/// marker segment in this series shall end with a completed packet header."
+/// No bytes are lost, so both are read, as OpenJPEG reads them. Each shape
+/// decodes to 176, complete, as the conforming file does, with `strict` on
+/// and off and on every prefix. The shapes are built on the one-layer and
+/// the two-layer files, the second at either record.
+///
+/// opj_decompress 2.5.0 decodes every one of these files to 176, the same
+/// as the conforming file, with no error.
+#[test]
+fn ppm_segments_ending_before_or_inside_a_packet_header_decode() {
+    let whole = [nppm(3), HEADER.to_vec()].concat();
+    let conforming = one_part(std::slice::from_ref(&whole), &BODY);
+    // (a) segment 1 ends after the whole `Nppm`.
+    let after_nppm = one_part(&[nppm(3), HEADER.to_vec()], &BODY);
+    check_same_as_conforming("one layer, (a)", &after_nppm, &conforming);
+    // (b) segment 1 ends partway through the packet header.
+    for cut in 1..HEADER.len() {
+        let inside = one_part(&[whole[..4 + cut].to_vec(), HEADER[cut..].to_vec()], &BODY);
+        check_same_as_conforming(&format!("one layer, (b) cut {cut}"), &inside, &conforming);
+    }
+
+    let two = two_parts(&[
+        [nppm(3), HEADER.to_vec()].concat(),
+        [nppm(1), vec![0]].concat(),
+    ]);
+    for (name, segments) in [
+        (
+            "two layers, (a) first",
+            vec![nppm(3), [HEADER.to_vec(), nppm(1), vec![0]].concat()],
+        ),
+        (
+            "two layers, (a) second",
+            vec![[nppm(3), HEADER.to_vec(), nppm(1)].concat(), vec![0]],
+        ),
+        (
+            "two layers, (b) first",
+            vec![
+                [nppm(3), HEADER[..2].to_vec()].concat(),
+                [HEADER[2..].to_vec(), nppm(1), vec![0]].concat(),
+            ],
+        ),
+        (
+            "two layers, three segments",
+            vec![
+                nppm(3),
+                HEADER[..1].to_vec(),
+                [&HEADER[1..], &nppm(1), &[0][..]].concat(),
+            ],
+        ),
+    ] {
+        check_same_as_conforming(name, &two_parts(&segments), &two);
+    }
+}
