@@ -1871,12 +1871,18 @@ mod skip_tests {
 
     #[test]
     fn a_path_is_excluded_only_under_an_excluded_dir() {
-        // The repository has the marker, so nothing is excluded here; the
-        // prefix rule is the same as the one the package applies.
-        assert!(!super::skip::is_excluded_path(
-            "conformance/jp2/files/file1.jp2"
-        ));
-        assert!(!super::skip::is_excluded_path("layers/lrcp.j2k"));
+        use super::skip::under_excluded_dir;
+        for rel in [
+            "conformance/jp2/files/file1.jp2",
+            "jp2_real/byte.jp2",
+            "bench/tiled_2048_gray.j2k",
+            "openjph/files/x.j2c",
+        ] {
+            assert!(under_excluded_dir(rel), "{rel}");
+        }
+        for rel in ["layers/lrcp.j2k", "jp2_cdef_rgba.jp2", "conformance_like/a"] {
+            assert!(!under_excluded_dir(rel), "{rel}");
+        }
     }
 
     #[test]

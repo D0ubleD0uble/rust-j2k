@@ -115,6 +115,15 @@ fn skip_real(bytes: &[u8]) -> bool {
     bytes.is_empty() && skip::excluded_path(REAL)
 }
 
+/// `real` then `after`, or no bytes where `real` is left out of the package.
+fn with_real(real: &[u8], after: &[u8]) -> Vec<u8> {
+    if real.is_empty() {
+        Vec::new()
+    } else {
+        [real, after].concat()
+    }
+}
+
 /// The shapes, each with the options it is decoded under.
 fn shapes() -> Vec<(&'static str, Vec<u8>, DecodeOptions)> {
     let one = codestream(1);
@@ -171,12 +180,12 @@ fn shapes() -> Vec<(&'static str, Vec<u8>, DecodeOptions)> {
         ),
         (
             "byte_tlm_plt.jp2, then a colr",
-            [real.clone(), gray()].concat(),
+            with_real(&real, &gray()),
             DecodeOptions::default(),
         ),
         (
             "byte_tlm_plt.jp2, then a colr of length 0",
-            [real, open_box(b"colr", &synth::colr_enum(17))].concat(),
+            with_real(&real, &open_box(b"colr", &synth::colr_enum(17))),
             DecodeOptions::default(),
         ),
         (
