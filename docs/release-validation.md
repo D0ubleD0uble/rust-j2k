@@ -302,7 +302,21 @@ inputs) and everything used only to work on the repository, such as
 `package-hygiene` CI job checks only one rule: the license-restricted
 conformance corpus (`tests/fixtures/conformance/`) never ships.
 
-**Cost:** a few minutes.
+Then run the crate's own tests from the unpacked package:
+
+```sh
+cargo package --allow-dirty
+cd target/package/rust-j2k-X.Y.Z && cargo test
+```
+
+It must pass with no failures. A test that reads an excluded fixture skips and
+prints a `skipped` line, so count those lines and note the number. A test
+skips only when `deny.toml`, a file the package leaves out, is missing, so a
+fixture missing from the repository itself still fails. The shared helper is
+`tests/support/skip.rs`. If `cargo test` reuses a stale build of the crate,
+run `cargo clean -p rust-j2k` in the unpacked directory first.
+
+**Cost:** a few minutes, plus a second build of the crate and its tests.
 
 **When:** once per release, during the readiness check. The `package-hygiene`
 job checks the conformance rule on every PR.

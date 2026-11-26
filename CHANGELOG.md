@@ -258,6 +258,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The published crate's own tests pass. A test that reads a fixture the
+  package leaves out (the conformance corpus, the GDAL JP2 files, the OpenJPH
+  files and the benchmark inputs) now skips, and says so, where it ran in the
+  unpacked package. In the repository it still fails when a fixture is missing.
 - `IncrementalDecoder::refine` and `header` give a JP2 file's error in a
   tile at once where its tile-part chain stops on one byte that is not
   `0xFF`, such as a tile-part that ends with the `jp2c` box, then a `00`.
