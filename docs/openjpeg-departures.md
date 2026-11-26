@@ -55,6 +55,7 @@ refusal under `ColorOutput::Srgb`).
 | [An unknown marker in the main header](#an-unknown-marker-in-the-main-header) | refuses as `Unsupported`; OpenJPEG warns, skips it and decodes | 3 |
 | [A tile size that overflows OpenJPEG's tile count](#a-tile-size-that-overflows-openjpegs-tile-count) | decodes one tile; OpenJPEG refuses | 1 |
 | [A tile with no sample of a component](#a-tile-with-no-sample-of-a-component) | decodes; OpenJPEG fails some such files, and a reduction that leaves a component no sample | 1 |
+| [A reduction checked against the merged levels](#a-reduction-checked-against-the-merged-levels) | decodes a `COD` too short for the reduction when `COC`s raise every component's levels; OpenJPEG refuses at the `COD` | 1 |
 | [A `PPM` whose `Nppm`s are all 0](#a-ppm-whose-nppms-are-all-0) | reads the header, and with `strict` off returns the image with the packets reported missing; OpenJPEG refuses the file, as a strict decode does | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
@@ -1617,6 +1618,27 @@ A resolution reduction that leaves a component with no sample in the
 image is an older, separate case: this decoder returns the component 0
 wide or 0 high, where OpenJPEG fails ("Failed to decode all used
 components").
+
+## A reduction checked against the merged levels
+
+A `COD` sets the levels of every component, and a `COC` overrides them for one
+(A.6.1, A.6.2). The standard applies the levels per component, so a file is
+valid at a reduction when every component, after the `COD` and `COC`s are
+merged, has more levels than the reduction.
+
+| Decoder | A `COD` of 1 level, a `COC` on every component raising it to 5, at a reduction of 3 |
+| ------- | ----------------------------------------------------------------------------------- |
+| OpenJPEG 2.5.0 | `opj_decompress -r 3` refuses at the `COD`, as it reads it, before the `COC`s: "Error decoding component 0. The number of resolutions to remove (3) is greater or equal than the number of resolutions of this component (2) Modify the cp_reduce parameter.", "Error reading COD marker", "failed to read the header" (exit 1) |
+| This decoder | checks the reduction against each component's final level count, so it decodes |
+
+Without `-r`, `opj_decompress` decodes the same file to the image of the
+original with its `COD` at 5 levels. Here the reduced image equals
+`opj_decompress -r 3` on that original, whose `COD` itself has 5 levels
+(`tests/coc_levels_reduction.rs` on `tests/fixtures/coc_levels/`, through
+`read_header_with`, `decode_with` and `IncrementalDecoder`). With no `COC`s the
+same edit is refused here too, so the check is still made. The order of that
+check among the other header checks is in
+[The order of the header checks](#the-order-of-the-header-checks).
 
 ## A `PPM` whose `Nppm`s are all 0
 

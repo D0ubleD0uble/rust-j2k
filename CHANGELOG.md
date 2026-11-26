@@ -131,6 +131,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `docs/openjpeg-departures.md` records that a resolution reduction is checked
+  against each component's levels after `COD` and `COC` are merged, so a file
+  whose `COD` has too few levels but whose `COC`s raise them decodes here, where
+  OpenJPEG refuses at the `COD`. A test pins it (#536).
 - The hidden `rust_j2k::fuzz` hooks now need the private `__fuzz` feature, which
   is unstable and has no semver promise. A build with default features no
   longer exports them. They were never public API.
