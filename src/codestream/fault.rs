@@ -132,6 +132,7 @@ impl Offsets {
 /// its first tile-part gives ([`Walk::restating`]). A tile's header is
 /// checked as its first tile-part is read, as the tile walk checks it, so a
 /// tile at fault is resolved in full from the header in hand.
+#[cfg(any(test, feature = "__fuzz"))]
 pub(crate) fn tile_parts_fault(bytes: &[u8], parsed: &ParsedHeader, strict: bool) -> Option<Error> {
     tile_parts_walk(bytes, parsed, strict).err()
 }
@@ -166,6 +167,7 @@ pub(crate) struct KeptWalk {
 /// `strict` on it walks from the start and leaves `kept` as it is: the
 /// `TNsot` look-ahead's answer then decides the walk's steps, and it reads
 /// the bytes past them.
+#[cfg(any(test, feature = "__fuzz"))]
 pub(crate) fn tile_parts_fault_kept(
     bytes: &[u8],
     parsed: &ParsedHeader,
