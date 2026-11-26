@@ -131,6 +131,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `cargo test` on the unpacked package now runs the part of each mixed fixture
+  test that uses the files the package ships, and skips only the entries it
+  leaves out. A test that reads only left-out files still skips whole.
 - `docs/openjpeg-departures.md` records that a `PPM` segment that ends after a
   whole `Nppm`, or partway through a packet header, breaks A.7.4 but is read
   here and in OpenJPEG. A test pins it (#667).

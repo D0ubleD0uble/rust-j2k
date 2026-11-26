@@ -364,6 +364,21 @@ fn sweep_agrees_with_decode(reduction: u8) {
     let mut all = Vec::new();
     files(&root, &mut all);
     all.sort();
+    // The excluded directories are not in the package, so they add no files
+    // there; each is reported once. In the repository the files are swept.
+    for dir in skip::EXCLUDED_DIRS {
+        skip::excluded_path(dir);
+    }
+    let packaged = skip::is_excluded_path("conformance/");
+    all.retain(|path| {
+        !skip::is_excluded_path(
+            &path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/"),
+        )
+    });
     let mut seen = [0usize; 4];
     let mut compared = 0usize;
     let mut differing = Vec::new();
@@ -435,17 +450,25 @@ fn sweep_agrees_with_decode(reduction: u8) {
     }
     let least = if reduction == 0 { 100 } else { 50 };
     assert!(compared > least, "{compared} files compared");
-    assert_eq!(seen[0], 9, "the nine Part 4 JP2 files");
-    assert_eq!(seen[1], 9, "the nine jp2_real files");
-    assert_eq!(seen[2], 23, "the 23 Part 1 codestreams");
+    if packaged {
+        assert_eq!(seen[..3], [0, 0, 0], "an excluded file in the package");
+    } else {
+        assert_eq!(seen[0], 9, "the nine Part 4 JP2 files");
+        assert_eq!(seen[1], 9, "the nine jp2_real files");
+        assert_eq!(seen[2], 23, "the 23 Part 1 codestreams");
+    }
     // Every listed tile fault really differs.
-    let listed: Vec<String> = TILE_FAULTS.iter().map(|(n, _)| n.to_string()).collect();
+    let listed: Vec<String> = TILE_FAULTS
+        .iter()
+        .filter(|(n, _)| !skip::is_excluded_path(n))
+        .map(|(n, _)| n.to_string())
+        .collect();
     if reduction == 0 {
         assert_eq!(differing, listed);
     }
     let listed: Vec<String> = LOWER_TILE_FAULTS
         .iter()
-        .filter(|(_, _, at, _)| *at == reduction)
+        .filter(|(n, _, at, _)| *at == reduction && !skip::is_excluded_path(n))
         .map(|(n, ..)| n.to_string())
         .collect();
     // Each listed file is refused by the header at the one reduction it names.
@@ -454,23 +477,20 @@ fn sweep_agrees_with_decode(reduction: u8) {
     // channels share one format, so the placement of the formats is pinned by
     // `read_header_places_palette_channels_by_their_definitions` in the crate.
     for name in ["jp2_cdef_reversed.jp2", "conformance/jp2/files/file2.jp2"] {
+        if skip::excluded_path(name) {
+            continue;
+        }
         assert!(names.iter().any(|n| n == name), "{name} is swept");
     }
 }
 
 #[test]
 fn read_header_agrees_with_decode_on_every_committed_file() {
-    if skip::excluded() {
-        return;
-    }
     sweep_agrees_with_decode(0);
 }
 
 #[test]
 fn read_header_agrees_with_decode_on_every_committed_file_at_a_reduction() {
-    if skip::excluded() {
-        return;
-    }
     sweep_agrees_with_decode(1);
 }
 

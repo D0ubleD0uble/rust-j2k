@@ -5331,6 +5331,10 @@ fn sot_at_reads_what_decode_sot_admits() {
     assert!(sot_at(&whole, 13).is_none());
 }
 
+/// Fewer than the files of `tests/fixtures/` outside the excluded
+/// directories, the ones the published package has.
+const PACKAGED_FILES: usize = 250;
+
 /// Every committed codestream, raw or in a JP2 file, and every header seed
 /// (`tests/fixtures/` and the fuzz corpora under `fuzz/`), whole and cut
 /// short at a few points: the fault-only walk gives the error of the
@@ -5338,9 +5342,6 @@ fn sot_at_reads_what_decode_sot_admits() {
 /// each `SOT` of the first tile-parts is also changed a byte at a time.
 #[test]
 fn the_fault_walk_gives_the_tile_parts_parse_error_on_every_fixture() {
-    if crate::skip::excluded() {
-        return;
-    }
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut dirs = vec![root.join("tests/fixtures"), root.join("fuzz/corpus")];
     let mut files = Vec::new();
@@ -5362,7 +5363,20 @@ fn the_fault_walk_gives_the_tile_parts_parse_error_on_every_fixture() {
         }
     }
     files.sort();
-    assert!(files.len() > 300, "{} files", files.len());
+    // The excluded directories are not in the package, so they add no files
+    // there; each is reported once. The fuzz corpus is not in it either.
+    let fixtures = root.join("tests/fixtures");
+    for dir in crate::skip::EXCLUDED_DIRS {
+        crate::skip::excluded_path(dir);
+    }
+    let packaged = crate::skip::is_excluded_path("conformance/");
+    files.retain(|path| {
+        path.strip_prefix(&fixtures).map_or(true, |rel| {
+            !crate::skip::is_excluded_path(&rel.to_string_lossy().replace('\\', "/"))
+        })
+    });
+    let floor = if packaged { PACKAGED_FILES } else { 300 };
+    assert!(files.len() > floor, "{} files", files.len());
     let (mut runs, mut faults) = (0usize, 0usize);
     let mut check = |bytes: &[u8]| {
         crate::fuzz::tile_parts_walks_agree(bytes);

@@ -1702,9 +1702,6 @@ fn finish_twice_gives_equal_results() {
 /// the main header of a codestream and the boxes of a JP2 file.
 #[test]
 fn header_and_bytes_follow_the_bytes_fed() {
-    if skip::excluded() {
-        return;
-    }
     for (name, options) in [
         ("layers/lrcp.j2k", DecodeOptions::default()),
         (
@@ -1712,6 +1709,9 @@ fn header_and_bytes_follow_the_bytes_fed() {
             DecodeOptions::default().with_resolution_reduction(1),
         ),
     ] {
+        if skip::excluded_path(name) {
+            continue;
+        }
         let bytes = std::fs::read(fixtures().join(name)).unwrap();
         let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
         assert_eq!(decoder.header().unwrap(), None, "{name}");

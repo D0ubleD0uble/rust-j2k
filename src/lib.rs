@@ -1847,6 +1847,137 @@ mod skip_tests {
         assert!(!decide(true, true));
     }
 
+    /// Checks that the `tests/fixtures/` entries of the `exclude` array in
+    /// `manifest`, less `REPO_ONLY`, are the `EXCLUDED_DIRS`, each once. An
+    /// entry is read as written but for a leading `/`, quotes, a trailing
+    /// comma and a `#` comment. The error names an entry that does not end
+    /// in `/`, is a prefix of `tests/fixtures/`, or is not in
+    /// `EXCLUDED_DIRS`, or says a dir is missing or repeated. It returns an
+    /// error rather than panicking: wasm32-wasip1 aborts on a panic.
+    fn check_exclude(manifest: &str) -> Result<(), String> {
+        let (_, rest) = manifest.split_once("exclude").ok_or("no exclude key")?;
+        let (_, rest) = rest.split_once('[').ok_or("no exclude array")?;
+        let mut found: Vec<&str> = Vec::new();
+        // The rest of the line with `[` is read too; the array ends at the
+        // first line that starts with `]` once a comment is stripped.
+        for line in rest.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.starts_with(']') {
+                break;
+            }
+            let entry = line.trim_end_matches(',').trim().trim_matches(['"', '\'']);
+            let entry = entry.strip_prefix('/').unwrap_or(entry);
+            if !entry.is_empty() && "tests/fixtures/".starts_with(entry) {
+                return Err(format!(
+                    "{entry}: excludes tests/fixtures/ or a parent of it"
+                ));
+            }
+            let Some(dir) = entry.strip_prefix("tests/fixtures/") else {
+                continue;
+            };
+            if dir == "REPO_ONLY" {
+                continue;
+            }
+            if !dir.ends_with('/') {
+                return Err(format!(
+                    "{entry}: an excluded fixtures entry needs a trailing /"
+                ));
+            }
+            if !super::skip::EXCLUDED_DIRS.contains(&dir) {
+                return Err(format!(
+                    "{entry} is excluded from the package but not in EXCLUDED_DIRS"
+                ));
+            }
+            found.push(dir);
+        }
+        found.sort_unstable();
+        let mut dirs = super::skip::EXCLUDED_DIRS.to_vec();
+        dirs.sort_unstable();
+        if found == dirs {
+            Ok(())
+        } else {
+            Err(format!(
+                "EXCLUDED_DIRS {dirs:?} and the exclude list {found:?} differ"
+            ))
+        }
+    }
+
+    /// `EXCLUDED_DIRS` is the `tests/fixtures/` directories of the `exclude`
+    /// list in `Cargo.toml`, which the package keeps.
+    #[test]
+    fn the_excluded_dirs_are_the_cargo_exclude_directories() {
+        let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+            .expect("Cargo.toml");
+        assert_eq!(check_exclude(&manifest), Ok(()));
+    }
+
+    /// An `exclude` array of the four `EXCLUDED_DIRS` with `lines` added.
+    fn manifest_with(lines: &str) -> String {
+        let dirs: String = super::skip::EXCLUDED_DIRS
+            .iter()
+            .map(|dir| format!("    \"/tests/fixtures/{dir}\",\n"))
+            .collect();
+        format!("exclude = [\n{dirs}{lines}\n    \"/.github/\",\n]\n")
+    }
+
+    #[test]
+    fn the_exclude_check_reads_each_way_to_write_an_entry() {
+        for ok in [
+            "",
+            "    # see [docs]",
+            "    \"/docs/x[1].md\",",
+            "    \"tests/fixtures/REPO_ONLY\", # a marker",
+        ] {
+            assert_eq!(check_exclude(&manifest_with(ok)), Ok(()), "{ok}");
+        }
+        for entry in [
+            "\"tests/fixtures/huge/\",",
+            "\"/tests/fixtures/huge/\",",
+            "\"tests/fixtures/huge/\", # 40 MB",
+            "'tests/fixtures/huge/',",
+            "\"tests/fixtures/huge\",",
+            "\"tests/fixtures/conformance\",",
+            // Past a `]` in a comment or a string.
+            "# see [docs]\n    \"tests/fixtures/huge/\",",
+            "\"/docs/x[1].md\",\n    \"tests/fixtures/huge/\",",
+            // Too wide.
+            "\"tests/\",",
+            "\"/tests/fixtures\",",
+            "\"tests/fixtures/\",",
+        ] {
+            assert!(
+                check_exclude(&manifest_with(entry)).is_err(),
+                "{entry} passed"
+            );
+        }
+    }
+
+    #[test]
+    fn the_exclude_check_compares_sets_not_counts() {
+        // A dir dropped and another repeated is still four entries.
+        let manifest = "exclude = [\n    \"/tests/fixtures/conformance/\",\n    \
+                        \"/tests/fixtures/conformance/\",\n    \"/tests/fixtures/jp2_real/\",\n    \
+                        \"/tests/fixtures/openjph/\",\n]\n";
+        let error = check_exclude(manifest).unwrap_err();
+        assert!(error.contains("differ"), "{error}");
+    }
+
+    #[test]
+    fn a_path_is_excluded_only_under_an_excluded_dir() {
+        use super::skip::under_excluded_dir;
+        for rel in [
+            "conformance/jp2/files/file1.jp2",
+            "jp2_real/byte.jp2",
+            "bench/tiled_2048_gray.j2k",
+            "openjph/files/x.j2c",
+        ] {
+            assert!(under_excluded_dir(rel), "{rel}");
+        }
+        for rel in ["layers/lrcp.j2k", "jp2_cdef_rgba.jp2", "conformance_like/a"] {
+            assert!(!under_excluded_dir(rel), "{rel}");
+        }
+    }
+
     #[test]
     fn no_marker_and_no_git_skips() {
         assert!(decide(false, false));
