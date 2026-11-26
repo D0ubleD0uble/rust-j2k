@@ -5,7 +5,8 @@ what can change.
 
 The crate follows [Semantic Versioning](https://semver.org/). While the
 version is `0.x`, a change that breaks a caller needs a new minor version,
-and a patch release does not break one. The CHANGELOG lists each breaking change under "Migrating from".
+and a patch release does not break one. The CHANGELOG lists each breaking change in a "Migrating from"
+section.
 
 ## What is covered
 
@@ -60,7 +61,7 @@ fields without a breaking change, so match on it with a `_` arm or `..`.
 
 `DecodeOptions` implements `PartialEq` and `Eq`, and that is covered:
 removing `Eq` would break a caller. So every new option must implement
-`Eq` too: a float setting, such as a gamma or a color tolerance, would need
+`Eq` too. A float setting, such as a gamma or a color tolerance, would need
 a wrapper type.
 
 Equality is structural: it compares the settings as stored, not the decodes
@@ -87,12 +88,14 @@ refusal of a tile. A later release can set it for more refusals, so handle
 ### `Waiting::Held`
 
 `Waiting::Held` carries an error that more bytes can still replace. One
-variant covers several ways it resolves, among them:
+variant covers several cases, and they resolve differently:
 
 - In a codestream, the first refine that decodes once the `EOC` is in gives
   the final answer.
 - In a JP2 file, the same holds once no box after the codestream can still
-  be read. Until then, only `finish` resolves it.
+  be read. Until then, `finish` reports the error.
+- A last tile-part whose `Psot` is 0 runs to the end of the input, so it
+  never closes, and only `finish` reports the error.
 - A refusal of the sRGB step is final or held, depending on whether a box
   after the codestream can still be read.
 
