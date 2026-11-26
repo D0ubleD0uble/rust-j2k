@@ -43,7 +43,7 @@ refusal under `ColorOutput::Srgb`).
 | [Stricter than the oracle on non-conforming streams](#stricter-than-the-oracle-on-non-conforming-streams) | refuses; OpenJPEG warns, reads on or invents values | 3 |
 | [Packets a POC sequence leaves out](#packets-a-poc-sequence-leaves-out) | refuses; OpenJPEG decodes them empty | 3 |
 | [Encoder mistakes OpenJPEG corrects](#encoder-mistakes-openjpeg-corrects) | corrects as OpenJPEG does; refuses mixed counts, differing restatements, and MCT on components that differ in depth or sign | 2 |
-| [Partial decode](#partial-decode) | with `strict` off: cut packets, POC gaps, packed-header overruns and cut tile-part headers handled differently | 1, 3 |
+| [Partial decode](#partial-decode) | with `strict` off: cut packets, POC gaps, packed-header overruns, cut tile-part headers and a tile with more tile-parts than `TNsot` handled differently | 1, 3 |
 | [Signed 32-bit components](#signed-32-bit-components) | decodes; OpenJPEG refuses | 1 |
 | [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
 | [Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks) | decodes; OpenJPEG refuses | 1 |
@@ -1034,6 +1034,38 @@ whole file decodes: each tile whose later parts have not arrived is charged.
 report holds at most five entries per tile-part, plus two.
 
 Four differences from OpenJPEG are deliberate.
+
+### A tile with more tile-parts than `TNsot`
+
+A.4.2 defines `TNsot` as the number of tile-parts of the tile in the
+codestream. A tile whose parts outnumber it carries a wrong count, and the
+standard does not make the extra parts something to drop or refuse. With
+`strict` off, a tile that has more parts than its `TNsot`, even after the
+`TPsot == TNsot` correction ([above](#tpsot--tnsot)) has raised the count by
+one, decodes from every part found and gets a `TilePartCountMismatch` ("tile 0
+declares 1 tile-part(s), 2 with the `TPsot == TNsot` correction, and 3 were
+found"). With `strict` on it is refused ("tile 0 tile-part 2 of a declared 1
+tile-parts, 2 with the `TPsot == TNsot` correction").
+
+OpenJPEG 2.5.0 warns "Non conformant codestream TPsot==TNsot." and then does
+one of two things, the same with and without `-allow-partial`, depending on
+whether another tile is still to come:
+
+- The tile is the last one in the codestream: it decodes the first two parts
+  and drops the third, exit 0. On a 32x32 file of three tile-parts, with
+  `TNsot` set to 1 on each, 917 of its 1024 samples differ from the image of
+  the unedited file.
+- Another tile follows: it refuses with "In SOT marker, TPSot (2) is not valid
+  regards to the previous number of tile-part (2), giving up" and "Fail to read
+  the current marker segment (0xff90)" ("failed to decode image!").
+
+Here the image from all three parts equals the unedited file's, which is the
+source image (the file is lossless), and `opj_decompress` on the unedited
+file gives the same samples (`tests/tnsot_extra_part.rs`, on
+`tests/fixtures/tnsot_extra_part/`: a file of one tile and a file of two tiles,
+each tile of three parts from `opj_compress -TP R`). The first case loses
+the extra part as OpenJPEG does when no correction applies (see
+[`TPsot == TNsot`](#tpsot--tnsot)).
 
 ### A cut packet keeps each code-block's whole layers
 
