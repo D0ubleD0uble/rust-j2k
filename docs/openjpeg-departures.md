@@ -43,7 +43,7 @@ refusal under `ColorOutput::Srgb`).
 | [Stricter than the oracle on non-conforming streams](#stricter-than-the-oracle-on-non-conforming-streams) | refuses; OpenJPEG warns, reads on or invents values | 3 |
 | [Packets a POC sequence leaves out](#packets-a-poc-sequence-leaves-out) | refuses; OpenJPEG decodes them empty | 3 |
 | [Encoder mistakes OpenJPEG corrects](#encoder-mistakes-openjpeg-corrects) | corrects as OpenJPEG does; refuses mixed counts, differing restatements, and MCT on components that differ in depth or sign | 2 |
-| [Partial decode](#partial-decode) | with `strict` off: cut packets, POC gaps, packed-header overruns and cut tile-part headers handled differently | 1, 3 |
+| [Partial decode](#partial-decode) | with `strict` off: cut packets, POC gaps, packed-header overruns, cut tile-part headers and a tile with more tile-parts than `TNsot` handled differently | 1, 3 |
 | [Signed 32-bit components](#signed-32-bit-components) | decodes; OpenJPEG refuses | 1 |
 | [HT placeholder passes](#ht-placeholder-passes) | decodes; OpenJPEG refuses or loses sync | 1 |
 | [Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks) | decodes; OpenJPEG refuses | 1 |
@@ -55,6 +55,7 @@ refusal under `ColorOutput::Srgb`).
 | [An unknown marker in the main header](#an-unknown-marker-in-the-main-header) | refuses as `Unsupported`; OpenJPEG warns, skips it and decodes | 3 |
 | [A tile size that overflows OpenJPEG's tile count](#a-tile-size-that-overflows-openjpegs-tile-count) | decodes one tile; OpenJPEG refuses | 1 |
 | [A tile with no sample of a component](#a-tile-with-no-sample-of-a-component) | decodes; OpenJPEG fails some such files, and a reduction that leaves a component no sample | 1 |
+| [A reduction checked against the merged levels](#a-reduction-checked-against-the-merged-levels) | decodes a `COD` too short for the reduction when `COC`s raise every component's levels; OpenJPEG refuses at the `COD` | 1 |
 | [A `PPM` whose `Nppm`s are all 0](#a-ppm-whose-nppms-are-all-0) | reads the header, and with `strict` off returns the image with the packets reported missing; OpenJPEG refuses the file, as a strict decode does | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
@@ -964,8 +965,8 @@ of `2/K`, every stage agrees bit for bit and the file decodes bit-exact.
 | OpenJPEG 2.5.0 | `opj_decompress -allow-partial` |
 | Standard | B.11 (whole packets may be dropped from the end of a tile) |
 | Rule | 1 for a cut packet (B.11); 3 for a packed-header overrun |
-| Tests and fixtures | `tests/partial_decode.rs`, `src/tier2/partial_tests.rs`, `tests/packed_overrun.rs`; `tests/fixtures/partial/`, `tests/fixtures/poc_coverage/`, `tests/fixtures/packed_overrun/` |
-| Decided | #214 |
+| Tests and fixtures | `tests/partial_decode.rs`, `src/tier2/partial_tests.rs`, `tests/packed_overrun.rs`, `tests/tnsot_extra_part.rs`; `tests/fixtures/partial/`, `tests/fixtures/poc_coverage/`, `tests/fixtures/packed_overrun/`, `tests/fixtures/tnsot_extra_part/` |
+| Decided | #214, #634 |
 
 With `DecodeOptions::strict` off the decoder takes missing data and bytes left
 after a tile's last packet, as `opj_decompress -allow-partial` does, and
@@ -1032,7 +1033,40 @@ whole file decodes: each tile whose later parts have not arrived is charged.
 `DecodeOptions::packet_work_limit` raises the bound for such a stream. The
 report holds at most five entries per tile-part, plus two.
 
-Four differences from OpenJPEG are deliberate.
+Five differences from OpenJPEG are deliberate.
+
+### A tile with more tile-parts than `TNsot`
+
+A.4.2 defines `TNsot` as the number of tile-parts of the tile in the
+codestream. A tile whose parts outnumber it carries a wrong count, and the
+standard does not make the extra parts something to drop or refuse. With
+`strict` off, a tile that has more parts than its `TNsot`, even after the
+`TPsot == TNsot` correction ([above](#tpsot--tnsot)) has raised the count by
+one, decodes from every part found and gets a `TilePartCountMismatch` ("tile 0
+declares 1 tile-part(s), 2 with the `TPsot == TNsot` correction, and 3 were
+found"). With `strict` on it is refused ("tile 0 tile-part 2 of a declared 1
+tile-parts, 2 with the `TPsot == TNsot` correction").
+
+OpenJPEG 2.5.0 warns "Non conformant codestream TPsot==TNsot." and then does
+one of two things, the same with and without `-allow-partial`, depending on
+whether another tile is still to come:
+
+- The tile is the last one in the codestream: it decodes the first two parts
+  and drops the third, exit 0. It stops reading once every tile is decoded, so
+  it never reads the third part. On a 32x32 file of three tile-parts, with
+  `TNsot` set to 1 on each, 917 of its 1024 samples differ from the image of
+  the unedited file.
+- Another tile follows (here tile 0 states 1 and tile 1 states 2): it refuses with "In SOT marker, TPSot (2) is not valid
+  regards to the previous number of tile-part (2), giving up" and "Fail to read
+  the current marker segment (0xff90)" ("failed to decode image!").
+
+Here the image from all three parts equals the unedited file's, which is the
+source image (the file is lossless), and `opj_decompress` on the unedited
+file gives the same samples (`tests/tnsot_extra_part.rs`, on
+`tests/fixtures/tnsot_extra_part/`: a file of one tile and a file of two tiles,
+each tile of three parts from `opj_compress -TP R`). The first case loses
+the extra part as OpenJPEG does when no correction applies (see
+[`TPsot == TNsot`](#tpsot--tnsot)).
 
 ### A cut packet keeps each code-block's whole layers
 
@@ -1617,6 +1651,27 @@ A resolution reduction that leaves a component with no sample in the
 image is an older, separate case: this decoder returns the component 0
 wide or 0 high, where OpenJPEG fails ("Failed to decode all used
 components").
+
+## A reduction checked against the merged levels
+
+A `COD` sets the levels of every component, and a `COC` overrides them for one
+(A.6.1, A.6.2). The levels are per component, so the reduction is checked
+per component: the file is accepted when every component, after the `COD` and
+`COC`s are merged, has at least as many levels as the reduction.
+
+| Decoder | A `COD` of 1 level, a `COC` on every component raising it to 5, at a reduction of 3 |
+| ------- | ----------------------------------------------------------------------------------- |
+| OpenJPEG 2.5.0 | `opj_decompress -r 3` refuses at the `COD`, as it reads it, before the `COC`s: "Error decoding component 0. The number of resolutions to remove (3) is greater or equal than the number of resolutions of this component (2) Modify the cp_reduce parameter.", "Error reading COD marker", "failed to read the header" (exit 1) |
+| This decoder | checks the reduction against each component's final level count, so it decodes |
+
+Without `-r`, `opj_decompress` decodes the same file to the image of the
+original with its `COD` at 5 levels. Here the reduced image equals
+`opj_decompress -r 3` on that original, whose `COD` itself has 5 levels
+(`tests/coc_levels_reduction.rs` on `tests/fixtures/coc_levels/`, through
+`read_header_with`, `decode_with` and `IncrementalDecoder`). With no `COC`s the
+same edit is refused here too, so the check is still made. The order of that
+check among the other header checks is in
+[The order of the header checks](#the-order-of-the-header-checks).
 
 ## A `PPM` whose `Nppm`s are all 0
 
