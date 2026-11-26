@@ -182,14 +182,35 @@ fn middle(bytes: &[u8]) -> Option<Region> {
     )))
 }
 
+/// Fewer than the files of `tests/fixtures/` outside the excluded
+/// directories.
+const PACKAGED_FILES: usize = 250;
+
+/// `path` below `root`, with `/` separators.
+fn rel(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 #[test]
 fn each_header_of_a_fixture_fed_in_pieces_is_the_read_of_its_prefix() {
-    if skip::excluded() {
-        return;
-    }
     let mut rng = Rng(0x5eed_0502);
-    let paths = files(&synth::fixtures(""));
-    assert!(paths.len() > 300, "{} fixtures", paths.len());
+    let root = synth::fixtures("");
+    let mut paths = files(&root);
+    // The excluded directories are not in the package, so they add no files
+    // there; each is reported once. In the repository the files are kept.
+    for dir in skip::EXCLUDED_DIRS {
+        skip::excluded_path(dir);
+    }
+    paths.retain(|path| !skip::is_excluded_path(&rel(&root, path)));
+    let floor = if skip::is_excluded_path("conformance/") {
+        PACKAGED_FILES
+    } else {
+        300
+    };
+    assert!(paths.len() > floor, "{} fixtures", paths.len());
     assert!(
         paths
             .iter()

@@ -105,6 +105,16 @@ fn srgb() -> DecodeOptions {
     DecodeOptions::default().with_color(ColorOutput::Srgb)
 }
 
+/// The real file of two shapes, which the published package leaves out.
+const REAL: &str = "jp2_real/byte_tlm_plt.jp2";
+
+/// `true`, and says so, for a shape built on [`REAL`] where the package leaves
+/// it out; the shape then has no bytes.
+#[track_caller]
+fn skip_real(bytes: &[u8]) -> bool {
+    bytes.is_empty() && skip::excluded_path(REAL)
+}
+
 /// The shapes, each with the options it is decoded under.
 fn shapes() -> Vec<(&'static str, Vec<u8>, DecodeOptions)> {
     let one = codestream(1);
@@ -130,7 +140,13 @@ fn shapes() -> Vec<(&'static str, Vec<u8>, DecodeOptions)> {
         &open_box(b"ftyp", b"jp2 \0\0\0\0jp2 "),
     ]
     .concat();
-    let real = synth::read_file(synth::fixtures("jp2_real/byte_tlm_plt.jp2"));
+    // Left out of the package: the two shapes built on it have no bytes there,
+    // and the tests that use them skip them with `skip_real`.
+    let real = if skip::is_excluded_path(REAL) {
+        Vec::new()
+    } else {
+        synth::read_file(synth::fixtures(REAL))
+    };
     vec![
         (
             "a colr after the codestream",
@@ -203,10 +219,10 @@ fn shapes() -> Vec<(&'static str, Vec<u8>, DecodeOptions)> {
 /// error.
 #[test]
 fn the_one_shot_calls_give_an_error_more_bytes_replace() {
-    if skip::excluded() {
-        return;
-    }
     for (name, bytes, options) in shapes() {
+        if skip_real(&bytes) {
+            continue;
+        }
         let lenient = options.with_strict(false);
         for (what, call) in [
             (
@@ -273,12 +289,12 @@ waits! {
 
 /// The checks of [`waits!`] on shape `index` of [`shapes`].
 fn check_waits(index: usize) {
-    if skip::excluded() {
-        return;
-    }
     let shapes = shapes();
     assert_eq!(shapes.len(), 12, "a shape with no test");
     let (name, bytes, options) = shapes.into_iter().nth(index).expect("a shape");
+    if skip_real(&bytes) {
+        return;
+    }
     let lenient = options.clone().with_strict(false);
     let whole = error_of(&decode_with(&bytes, &lenient));
     let whole_header = error_of(&read_header_with(&bytes, &lenient));

@@ -127,9 +127,6 @@ fn markers(bytes: &[u8], code: u8) -> Vec<usize> {
 /// `PLT` and `TLM`, and `POC` volumes in the main and tile-part headers.
 #[test]
 fn every_byte_refines_to_the_one_shot_decode_of_its_prefix() {
-    if crate::skip::excluded() {
-        return;
-    }
     for name in [
         "layers/lrcp.j2k",
         "layers/rpcl.j2k",
@@ -150,6 +147,9 @@ fn every_byte_refines_to_the_one_shot_decode_of_its_prefix() {
         "poc_precedence/poc_tile_leaves_out_packets.j2k",
         "poc_coverage/poc_res_tileparts.j2k",
     ] {
+        if crate::skip::excluded_path(name) {
+            continue;
+        }
         let bytes = fixture(name);
         let options = uncut(DecodeOptions::default());
         let images = refine_at(name, &bytes, &every(1, bytes.len()), &options);
@@ -1324,10 +1324,7 @@ fn set_options(decoder: &mut IncrementalDecoder, options: &DecodeOptions) {
 /// `POC` volume in a later tile-part, and the MIXED HT files.
 #[test]
 fn options_changed_between_refines_refine_to_the_one_shot_decode_of_their_prefix() {
-    if crate::skip::excluded() {
-        return;
-    }
-    let mut names: Vec<String> = [
+    let names: Vec<&str> = [
         "tiles_multipart_lossless.j2k",
         "layers/precincts_pterm.j2k",
         "multilayer_multicomponent_lossless.j2k",
@@ -1335,15 +1332,15 @@ fn options_changed_between_refines_refine_to_the_one_shot_decode_of_their_prefix
         "tile_header/tlm_32_16k.j2k",
         "jp2_real/byte_tlm_plt.jp2",
         "poc_precedence/poc_main_then_later_tile_part.j2k",
+        // The conformance corpus and `jp2_real` are left out of the
+        // published package.
+        "conformance/ht/codestreams/ds0_hm_15_b8.j2k",
     ]
-    .map(String::from)
-    .to_vec();
-    // The conformance corpus is left out of the published package.
-    if crate::skip::excluded() {
-        return;
-    }
-    names.push("conformance/ht/codestreams/ds0_hm_15_b8.j2k".to_string());
-    for name in &names {
+    .into();
+    for name in names {
+        if crate::skip::excluded_path(name) {
+            continue;
+        }
         let bytes = fixture(name);
         let stride = if bytes.len() > 8192 { 1009 } else { 61 };
         let mut decoder = IncrementalDecoder::new(uncut(DecodeOptions::default())).unwrap();

@@ -131,6 +131,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `cargo test` on the unpacked package now runs the part of each mixed fixture
+  test that uses the files the package ships, and skips only the entries it
+  leaves out. A test that reads only left-out files still skips whole.
 - The hidden `rust_j2k::fuzz` hooks now need the private `__fuzz` feature, which
   is unstable and has no semver promise. A build with default features no
   longer exports them. They were never public API.

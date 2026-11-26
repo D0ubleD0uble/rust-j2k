@@ -1847,6 +1847,38 @@ mod skip_tests {
         assert!(!decide(true, true));
     }
 
+    /// `EXCLUDED_DIRS` is the `tests/fixtures/` directories of the `exclude`
+    /// list in `Cargo.toml`, which the package keeps.
+    #[test]
+    fn the_excluded_dirs_are_the_cargo_exclude_directories() {
+        let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+            .expect("Cargo.toml");
+        let mut listed: Vec<&str> = manifest
+            .lines()
+            .filter_map(|line| {
+                let entry = line.trim().strip_suffix(',')?.trim_matches('"');
+                entry.strip_prefix("tests/fixtures/")?.strip_suffix('/')
+            })
+            .collect();
+        let mut dirs: Vec<&str> = super::skip::EXCLUDED_DIRS
+            .iter()
+            .map(|dir| dir.trim_end_matches('/'))
+            .collect();
+        listed.sort_unstable();
+        dirs.sort_unstable();
+        assert_eq!(dirs, listed);
+    }
+
+    #[test]
+    fn a_path_is_excluded_only_under_an_excluded_dir() {
+        // The repository has the marker, so nothing is excluded here; the
+        // prefix rule is the same as the one the package applies.
+        assert!(!super::skip::is_excluded_path(
+            "conformance/jp2/files/file1.jp2"
+        ));
+        assert!(!super::skip::is_excluded_path("layers/lrcp.j2k"));
+    }
+
     #[test]
     fn no_marker_and_no_git_skips() {
         assert!(decide(false, false));
