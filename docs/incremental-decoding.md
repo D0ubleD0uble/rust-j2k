@@ -58,7 +58,12 @@ does again on each refine.
   as its main header has come in. A tile's refusal under it waits until the
   input closes (see [When an error in a tile is
   final](#when-an-error-in-a-tile-is-final)), and so does the later-tile case
-  in the table above.
+  in the table above. On a 32-bit target the sample limit is the
+  address-space cap of 2^29 - 1 samples, which no limit lifts. An image past
+  it, and a tile past the code-block or precinct caps it sets, are refused
+  as `AddressSpace` with no `retry_with`, so `refine` never waits on
+  `Waiting::SampleLimit` (see [32-bit
+  targets](stability.md#32-bit-targets)).
   Any other error, including a limit that does not
   depend on the bytes (an image or a tile too large for the target to
   address, too many `POC` volumes, too many bit-planes), is the one
