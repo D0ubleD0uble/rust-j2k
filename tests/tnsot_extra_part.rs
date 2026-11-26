@@ -6,7 +6,7 @@
 //!
 //! Both files come from `tnsot_extra_part/`, three tile-parts per tile
 //! (`opj_compress -TP R`), with `TNsot` edited to 1 on the tile that carries
-//! the extra part. `opj_decompress` 2.5.0, with and without
+//! the extra part (and 2 on the tile after it). `opj_decompress` 2.5.0, with and without
 //! `-allow-partial`, warns "Non conformant codestream TPsot==TNsot." and then:
 //!
 //! - one tile, nothing after it: decodes from the first two parts and drops
@@ -52,26 +52,26 @@ fn options(strict: bool) -> DecodeOptions {
     DecodeOptions::default().with_strict(strict)
 }
 
-/// The count entries of tile `tile`, as text.
-fn entries(report: &[ReportEntry], tile: u32) -> Vec<String> {
+/// The count entries of the report, as text.
+fn entries(report: &[ReportEntry]) -> Vec<String> {
     report
         .iter()
-        .filter(|e| matches!(e, ReportEntry::TilePartCountMismatch { tile: t, .. } if *t == tile))
+        .filter(|e| matches!(e, ReportEntry::TilePartCountMismatch { .. }))
         .map(ToString::to_string)
         .collect()
 }
 
-fn pinned(bytes: &[u8], tile: u32, strict_error: &str) {
+fn pinned(bytes: &[u8]) {
     let image = decode_with(bytes, &options(false)).unwrap();
     assert_eq!(image.components[0].samples, oracle());
     assert_eq!(
-        entries(&image.report.entries, tile),
+        entries(&image.report.entries),
         [
             "tile 0 declares 1 tile-part(s), 2 with the `TPsot == TNsot` correction, and 3 were found"
         ]
     );
     match decode_with(bytes, &options(true)) {
-        Err(Error::Codestream(m)) => assert!(m.message().ends_with(strict_error), "{m}"),
+        Err(Error::Codestream(m)) => assert!(m.message().ends_with(REFUSED), "{m}"),
         other => panic!("expected Codestream, got {other:?}"),
     }
 }
@@ -92,15 +92,12 @@ fn the_unedited_files_decode_to_the_oracle() {
 /// One tile, three parts, each stating 1: OpenJPEG drops the third part.
 #[test]
 fn a_last_tile_with_an_extra_part_decodes_whole() {
-    pinned(&with_counts("tile1_tp3.j2k", &[1, 1, 1]), 0, REFUSED);
+    pinned(&with_counts("tile1_tp3.j2k", &[1, 1, 1]));
 }
 
-/// Tile 0 states 1 and carries 3, tile 1 follows: OpenJPEG refuses.
+/// Tile 0 states 1 and carries 3, tile 1 states 2 and carries 3 (right once
+/// the correction raises it): OpenJPEG refuses.
 #[test]
 fn an_extra_part_before_another_tile_decodes_whole() {
-    pinned(
-        &with_counts("tiles2_tp3.j2k", &[1, 1, 1, 3, 3, 3]),
-        0,
-        REFUSED,
-    );
+    pinned(&with_counts("tiles2_tp3.j2k", &[1, 1, 1, 2, 2, 2]));
 }
