@@ -1267,6 +1267,7 @@ fn a_refine_refused_for_what_earlier_refines_spent_waits_on_bound_spent() {
     );
 }
 
+#[cfg(feature = "__fuzz")]
 /// `tiles_even_origin_lossless.j2k` with a tile `COD` of no wavelet levels
 /// in the header of its last tile, tile 8, so that a decode at reduction 1
 /// decodes tiles 0 to 7 and then fails on tile 8, before its packets.
@@ -1333,6 +1334,7 @@ fn check_later_tiles_wait(bytes: &[u8], options: &DecodeOptions, expected: Error
     check_finish("later tile", bytes, decoder, options);
 }
 
+#[cfg(feature = "__fuzz")]
 /// A refine refused only for what earlier refines spent of the code-block
 /// bound waits on `BoundSpent` where `decode_with` fails in a later tile:
 /// the refine skips the block decoding of the tiles before it, where
@@ -1405,6 +1407,7 @@ fn a_refine_refused_for_what_was_spent_waits_where_an_earlier_tile_fails_its_blo
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// `incremental/segsym_tiles_flipped.j2k`: a 64 x 64 file in 16 x 16 tiles
 /// with segmentation symbols, one byte of tile 0 flipped, so `decode_with`
 /// fails in tile 0's block decoding.
@@ -1412,6 +1415,7 @@ fn segsym_tiles_flipped() -> Vec<u8> {
     std::fs::read(fixtures().join("incremental/segsym_tiles_flipped.j2k")).unwrap()
 }
 
+#[cfg(feature = "__fuzz")]
 /// The byte `segsym_tiles_flipped` flips, from the encoder's output.
 const SEGSYM_FLIPPED_AT: usize = 200;
 
@@ -1902,6 +1906,7 @@ fn decode_with_the_decoders_options_gives_a_partial_image_after_a_change() {
     assert!(decoder.finish().is_err());
 }
 
+#[cfg(feature = "__fuzz")]
 /// Feed `decoder` the bytes of `bytes` up to `end`, change its reduction to
 /// `reduction` (or its layer cap to `layers`), and refine, which must be
 /// due: `end` is at least twice the bytes of the last try. The refine must
@@ -1949,6 +1954,7 @@ fn change_and_refine(
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// The prefixes a change test refines at: each twice the one before, so
 /// that each refine is due, up to the whole file.
 fn doubling(len: usize) -> Vec<usize> {
@@ -1959,6 +1965,7 @@ fn doubling(len: usize) -> Vec<usize> {
     ends
 }
 
+#[cfg(feature = "__fuzz")]
 /// The single-tile files the reduction tests change the reduction on: one
 /// walk, which always fits the room, so nothing is let go for memory.
 const ONE_TILE: [&str; 5] = [
@@ -2035,6 +2042,7 @@ fn a_change_of_the_layer_cap_walks_the_tiles_again() {
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// A codestream of two 2048 x 2048 tiles, one 8-bit component, 5/3, LRCP,
 /// 40000 layers, one wavelet level and 4x4 code-blocks, on an image 2112
 /// wide, so tile 1 is cut to 64 wide by its edge. Tile 1's tile-part comes
@@ -2061,6 +2069,7 @@ fn two_tiles_at_the_packet_bound() -> Vec<u8> {
     out
 }
 
+#[cfg(feature = "__fuzz")]
 /// Whether the one-shot strict-off decode of `bytes` at `reduction` is
 /// refused by the packet bound. It gives an image otherwise.
 fn refused_at_the_packet_bound(bytes: &[u8], reduction: u8) -> bool {
