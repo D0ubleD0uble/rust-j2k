@@ -13,10 +13,10 @@
 //! of the Ippm series from the last PPM marker segment." (ITU-T T.800
 //! (08/2002).) A segment that ends inside an `Nppm` field is refused as
 //! `Marker`, as OpenJPEG refuses it. Table A.38 gives `Nppm` the range 0 to
-//! 2^32 - 1, so an `Nppm` of 0 is read as written: that tile-part has no packet header,
-//! and its data holds none either (A.7.4: with a `PPM` present, "packets
-//! distributed in the bit stream of the tile-parts are disallowed"). See "A
-//! `PPM` whose `Nppm`s are all 0" in `docs/openjpeg-departures.md`.
+//! 2^32 - 1, so an `Nppm` of 0 is read as written: that tile-part has no
+//! packet header, and its data holds none either (A.7.4: with a `PPM`
+//! present, "packets distributed in the bit stream of the tile-parts are
+//! disallowed"). See "A `PPM` whose `Nppm`s are all 0" in `docs/openjpeg-departures.md`.
 //!
 //! The files are built here: the main header of
 //! `tests/fixtures/packed_overrun/ppm_whole.j2k` (one layer) or
@@ -458,10 +458,15 @@ fn check_same_as_conforming_at(
                 assert!(got[1].starts_with("Incomplete("), "{at}: {got:?}");
                 assert_eq!(got[2], "Ok(None)", "{at}: {got:?}");
                 assert_eq!(got[3], "no image", "{at}: {got:?}");
-                // `FileFormat` while a JP2 box is cut short.
+                // `FileFormat` while the JP2 boxes before the codestream are cut
+                // short.
+                let kind = if 0 < length && length < shape_start {
+                    "FileFormat"
+                } else {
+                    "Codestream"
+                };
                 assert!(
-                    got[4].starts_with("Codestream(\"the input is truncated")
-                        || got[4].starts_with("FileFormat(\"the input is truncated"),
+                    got[4].starts_with(&format!("{kind}(\"the input is truncated")),
                     "{at}: {got:?}"
                 );
             } else {

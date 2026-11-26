@@ -57,6 +57,7 @@ refusal under `ColorOutput::Srgb`).
 | [A tile with no sample of a component](#a-tile-with-no-sample-of-a-component) | decodes; OpenJPEG fails some such files, and a reduction that leaves a component no sample | 1 |
 | [A reduction checked against the merged levels](#a-reduction-checked-against-the-merged-levels) | decodes a `COD` too short for the reduction when `COC`s raise every component's levels; OpenJPEG refuses at the `COD` | 1 |
 | [A `PPM` whose `Nppm`s are all 0](#a-ppm-whose-nppms-are-all-0) | reads the header, and with `strict` off returns the image with the packets reported missing; OpenJPEG refuses the file, as a strict decode does | 1 |
+| [Where a `PPM` segment may end](#where-a-ppm-segment-may-end) | refuses a split `Nppm` field, as OpenJPEG does; reads a segment that ends after an `Nppm` or inside a packet header, as OpenJPEG does | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
@@ -1704,8 +1705,8 @@ packet, and a packet header takes at least a byte.
 ## Where a `PPM` segment may end
 
 A `PPM` segment that ends inside a 4-byte `Nppm` field, so that the field
-continues in the next segment, is refused by both decoders. A.7.4 reads: "Every marker segment in this series shall end with a
-completed packet header. However, the series of Ippm parameters described
+continues in the next segment, is refused by both decoders. A.7.4 reads: "Every marker segment in this
+series shall end with a completed packet header. However, the series of Ippm parameters described
 by the Nppm does not have to be complete in a given marker segment.
 Therefore, it is possible that the next PPM marker segment will not have a
 Nppm parameter after Zppm, but the continuation of the Ippm series from the
