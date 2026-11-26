@@ -96,3 +96,22 @@ fn the_roi_byte_writes_rgn_markers() {
         rust_j2k::read_header(&bytes).unwrap_or_else(|e| panic!("{variant:#04x}: {e}"));
     }
 }
+
+/// Shape 7 with 0 to 3 packed bytes (the cut its steering byte gives), under
+/// PPM and PPT, Part 1 and HT: the header is read, and the decode gets past
+/// the headers to the packets. A segment that ends inside `Nppm`, or an
+/// empty `PPM` or `PPT` segment, would be refused as `Marker`.
+#[test]
+fn shape_7_with_a_short_packed_run_reaches_the_packets() {
+    let lenient = rust_j2k::DecodeOptions::default().with_strict(false);
+    for variant in [7 << 3, (7 << 3) | 0x40, 0x80 | (7 << 3), 0xC0 | (7 << 3)] {
+        for cut in 0..=3u8 {
+            let at = format!("{variant:#04x}, cut {cut}");
+            let bytes = wrap(variant, &[&[cut][..], &[0; 8]].concat());
+            rust_j2k::read_header(&bytes).unwrap_or_else(|e| panic!("{at}: {e:?}"));
+            if let Err(e) = rust_j2k::decode_with(&bytes, &lenient) {
+                assert!(!matches!(e, rust_j2k::Error::Marker(_)), "{at}: {e:?}");
+            }
+        }
+    }
+}

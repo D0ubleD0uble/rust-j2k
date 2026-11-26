@@ -1646,8 +1646,8 @@ fn a_later_tile_part_rgn_is_still_refused() {
 
 /// PPM's payload frames one packet-header chunk per tile-part with a 4-byte
 /// `Nppm` length (A.7.4). `decode_ppm_chunks` strips the lengths and returns the
-/// per-tile-part chunks, in `Zppm` order, joining markers so an `Nppm` can
-/// straddle a marker boundary — the same bytes an inline codestream would carry
+/// per-tile-part chunks, in `Zppm` order, joining markers so a chunk's bytes
+/// can continue in the next marker — the same bytes an inline codestream would carry
 /// as each tile-part's packet headers, which is why a PPM stream decodes to the
 /// same packets as its inline equivalent (proven end-to-end by `p1_03`/`p1_05`).
 #[test]
@@ -1656,7 +1656,8 @@ fn ppm_chunks_split_by_nppm_across_markers() {
     let one = decode_ppm_chunks(vec![(0, vec![0, 0, 0, 1, 0xAA, 0, 0, 0, 2, 0xBB, 0xCC])]).unwrap();
     assert_eq!(one, vec![vec![0xAA], vec![0xBB, 0xCC]]);
 
-    // Nppm=3 straddles two markers; joined in Zppm order (given out of order).
+    // The chunk of Nppm=3 straddles two markers; joined in Zppm order (given
+    // out of order).
     let split =
         decode_ppm_chunks(vec![(1, vec![0xBB, 0xCC]), (0, vec![0, 0, 0, 3, 0xAA])]).unwrap();
     assert_eq!(split, vec![vec![0xAA, 0xBB, 0xCC]]);
@@ -1690,6 +1691,27 @@ fn ppm_chunks_reject_malformed_framing() {
     assert!(matches!(
         decode_ppm_chunks(vec![(0, vec![0, 0, 0, 0]), (0, vec![0, 0, 0, 0])]),
         Err(Error::Codestream(_))
+    ));
+    // A marker that ends inside an `Nppm` field (A.7.4), at each byte of it,
+    // and with the field across three markers: `Marker`, naming the marker.
+    for cut in 1..4 {
+        let nppm = [0u8, 0, 0, 1];
+        let markers = vec![
+            (0, vec![0, 0, 0, 1, 0xAA]),
+            (1, nppm[..cut].to_vec()),
+            (2, [&nppm[cut..], &[0xBB]].concat()),
+        ];
+        let e = decode_ppm_chunks(markers).unwrap_err();
+        let want = format!("`PPM` with `Zppm` 1 ends {cut} byte(s) into an `Nppm` field");
+        assert!(
+            matches!(&e, Error::Marker(m) if m.message().starts_with(&want)),
+            "cut {cut}: {e:?}"
+        );
+    }
+    let three = vec![(0, vec![0, 0]), (1, vec![0]), (2, vec![1, 0xAA])];
+    assert!(matches!(
+        decode_ppm_chunks(three),
+        Err(Error::Marker(m)) if m.message().starts_with("`PPM` with `Zppm` 0 ends 2 byte(s)")
     ));
 }
 

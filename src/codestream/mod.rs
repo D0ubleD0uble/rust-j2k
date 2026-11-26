@@ -192,11 +192,15 @@ pub struct Tile<'a> {
     /// Where each tile-part's data ends in [`data`](Self::data), in `TPsot`
     /// order, so a report can name the tile-part a byte offset falls in.
     pub part_ends: Vec<usize>,
-    /// The tile's packed packet headers (`PPT`), concatenated across its
-    /// tile-parts; empty when the headers are inline with the bodies. When
-    /// non-empty, Tier-2 reads every packet header from here and every packet
-    /// body from [`data`](Self::data) (A.7.5).
+    /// The tile's packed packet headers (`PPM` chunks or `PPT`), concatenated
+    /// across its tile-parts. Read only when [`packed`](Self::packed) is set.
     pub packed_headers: Vec<u8>,
+    /// Whether the tile's packet headers are packed: a `PPM` is in the main
+    /// header or the tile carries a `PPT`. Tier-2 then reads every packet
+    /// header from [`packed_headers`](Self::packed_headers), even when it is
+    /// empty, and every packet body from [`data`](Self::data) (A.7.4,
+    /// A.7.5). Otherwise the headers are inline with the bodies.
+    pub packed: bool,
 }
 
 /// A parsed codestream: the main header plus every tile, in tile-index order.
@@ -1572,6 +1576,10 @@ fn walk_tiles<'a>(
             header: tile.header,
             data,
             part_ends,
+            // A `PPM` chunk may be empty (`Nppm` 0), so presence is the test:
+            // A.7.4 disallows packet headers in the tile-part data once a
+            // `PPM` is present. A `PPT` always holds a byte (`Lppt` 4 or more).
+            packed: !ppm.is_empty() || !tile.packed_headers.is_empty(),
             packed_headers: tile.packed_headers,
         });
     }
@@ -3403,12 +3411,16 @@ fn decode_plt(mut b: Cursor<'_>) -> Result<()> {
 /// across every marker in `Zppm` order, the payload is a run of `(Nppm, bytes)`
 /// records — `Nppm` a 4-byte length, `bytes` that tile-part's packet headers —
 /// one record per tile-part. The payloads are concatenated before the
-/// records are read, so an `Nppm` field may be split across segments, as
-/// may a chunk's bytes. OpenJPEG's `opj_j2k_merge_ppm` carries chunk bytes
-/// across segments too, but refuses an `Nppm` field split across segments,
-/// and a `PPM` whose `Nppm`s are all 0. Each returned chunk feeds a
-/// tile-part's packet-header stream in [`walk_tiles`], the same role `PPT`
-/// plays for a single tile-part.
+/// records are read, so a chunk's bytes may continue in the next segment, as
+/// A.7.4 allows. A segment may not end inside an `Nppm` field: A.7.4 has
+/// each segment end with a completed packet header, and a continuation start
+/// with `Ippm` bytes, so a split `Nppm` is a `Marker` error. OpenJPEG's
+/// `opj_j2k_merge_ppm` refuses it too. A `PPM` whose `Nppm`s are all 0 is
+/// read as written, every chunk empty; OpenJPEG refuses that one, as
+/// `opj_malloc(0)` returns NULL. Each returned chunk feeds a tile-part's
+/// packet-header stream in [`walk_tiles`], the same role `PPT` plays for a
+/// single tile-part. An empty chunk is still packed: the tile-part has no
+/// packet header, not inline ones.
 ///
 /// A `PPM` that carries only `Zppm` (`Lppm` 3) is refused, as OpenJPEG's
 /// `opj_j2k_read_ppm` refuses it, so a `PPM` present gives at least one chunk
@@ -3431,11 +3443,32 @@ fn decode_ppm_chunks(mut markers: Vec<(u8, Vec<u8>)>) -> Result<Vec<Vec<u8>>> {
         .iter()
         .find(|(_, bytes)| bytes.is_empty())
         .map(|&(zppm, _)| zppm);
+    // Where each segment's payload ends in the joined payload, with its `Zppm`.
+    let ends: Vec<(usize, u8)> = markers
+        .iter()
+        .scan(0, |end, (zppm, bytes)| {
+            *end += bytes.len();
+            Some((*end, *zppm))
+        })
+        .collect();
     let joined: Vec<u8> = markers.into_iter().flat_map(|(_, bytes)| bytes).collect();
 
     let mut cur = Cursor::at(&joined, 0);
     let mut chunks = Vec::new();
     while cur.remaining() > 0 {
+        // A segment that ends inside the 4-byte `Nppm` field (A.7.4). Only a
+        // field the joined payload holds whole: one cut short by the last
+        // segment is the overrun below.
+        let at = cur.pos;
+        if at + 4 <= joined.len() {
+            let next = ends.partition_point(|&(end, _)| end <= at);
+            if let Some(&(end, zppm)) = ends.get(next).filter(|&&(end, _)| end < at + 4) {
+                return Err(Error::marker(format!(
+                    "`PPM` with `Zppm` {zppm} ends {} byte(s) into an `Nppm` field; a `PPM` must end with a completed packet header",
+                    end - at
+                )));
+            }
+        }
         // Nppm: the byte count of this tile-part's packet headers (may be 0).
         let chunk = cur
             .u32()

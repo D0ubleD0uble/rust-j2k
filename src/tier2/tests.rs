@@ -132,6 +132,7 @@ fn tile(data: &[u8]) -> Tile<'_> {
         data: std::borrow::Cow::Borrowed(data),
         part_ends: vec![data.len()],
         packed_headers: Vec::new(),
+        packed: false,
     }
 }
 

@@ -35,9 +35,10 @@ fn ppm_file() -> Vec<u8> {
     ]
     .concat();
     for index in 0..=255u8 {
-        // `Zppm`, then records of an `Nppm` of 0 and no bytes.
+        // `Zppm`, then records of an `Nppm` of 0 and no bytes: 16,382 whole
+        // records, as a segment may not end inside an `Nppm` (A.7.4).
         let mut body = vec![index];
-        body.resize(65531, 0);
+        body.resize(1 + 4 * 16_382, 0);
         bytes.extend(synth::seg(0xFF60, &body));
     }
     bytes.extend(synth::tile_part(0, 0, 1, &[], &[]));
