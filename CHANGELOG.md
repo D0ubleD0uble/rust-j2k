@@ -73,9 +73,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `docs/stability.md` says what the API covers within a minor version and
-  what can change: message and `Display` text, the default limit values, the
-  minimum Rust version, and which fault is reported first. The
-  `Error::message` example no longer pins the `Display` format (#515).
+  what can change: message and `Display` text, the minimum Rust version,
+  which fault is reported first, and, in a minor release, the default limit
+  values. The `Error::message` example no longer pins the `Display` format
+  (#515).
 - `IncrementalDecoder::header` reads the header of the bytes fed so far
   (`Ok(None)` until the main header is whole), and
   `IncrementalDecoder::bytes` borrows them.

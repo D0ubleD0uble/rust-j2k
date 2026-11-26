@@ -183,9 +183,9 @@
 //!
 //! Within a minor version, no change breaks the types, their variants, the
 //! limit kinds, the accessors, what [`LimitDetail::retry_with`] means, or
-//! the variant each fault gives. Message and `Display` text, the default
-//! limit values, the minimum Rust version and which fault is reported first
-//! can change.
+//! the variant each fault gives. Message and `Display` text, the minimum
+//! Rust version and which fault is reported first can change in any
+//! release, and the default limit values in a minor one.
 //! [What the API covers](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/stability.md)
 //! gives the full list.
 //!

@@ -5,8 +5,8 @@ what can change.
 
 The crate follows [Semantic Versioning](https://semver.org/). While the
 version is `0.x`, a change that breaks a caller needs a new minor version,
-and a patch release does not break one. The CHANGELOG lists each breaking change in a "Migrating from"
-section.
+and a patch release does not break one. The CHANGELOG lists each breaking
+change in a "Migrating from" section.
 
 ## What is covered
 
@@ -155,8 +155,8 @@ These can change in any release:
 - **The hidden `fuzz` module** and the `__fuzz` feature it needs. They exist
   for the crate's own fuzz targets and tests, and are not part of the API.
 
-The default values of the limits are not covered either: they can change in
-a minor release. Only the types, the variants and what they mean are
+The default values of the limits are not covered either, but they change
+only in a minor release. Only the types, the variants and what they mean are
 stable. The values today:
 
 - The sample limit: 2^29 samples, or 8 samples per byte of input when that
