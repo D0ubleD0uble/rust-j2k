@@ -8,6 +8,9 @@
 //! `jp2c`, the `jp2c` box header and the codestream's main header. The bounds come from
 //! a marker and box walk written here (A.4, A.6, I.4), not from the decoder.
 
+#[path = "support/skip.rs"]
+mod skip;
+
 use std::path::{Path, PathBuf};
 
 use rust_j2k::{DecodeOptions, Error, decode, decode_with, read_header};
@@ -262,16 +265,13 @@ fn every_cut_inside_the_main_header_is_incomplete() {
     assert!(codestreams >= 100, "only {codestreams} codestreams cut");
     assert!(jp2s >= 30, "only {jp2s} JP2 files cut");
     // The HT fixtures are left out of the published package, so they are
-    // counted only where their directories are there: the three mixed-mode
-    // HT conformance codestreams and the 20 Part 4 JPH files in
-    // `conformance/ht/`, and the 7 OpenJPH JPH files in `openjph/`.
-    let present = |dir: &str| fixtures().join(dir).is_dir();
-    let (iso, openjph) = (present("conformance/ht"), present("openjph"));
-    if iso {
+    // counted only in the repository: the three mixed-mode HT conformance
+    // codestreams and the 20 Part 4 JPH files in `conformance/ht/`, and the 7
+    // OpenJPH JPH files in `openjph/`. A missing one fails there.
+    if !skip::excluded() {
         assert_eq!(ht_codestreams, 3, "mixed-mode codestreams cut");
+        assert_eq!(jphs, 20 + 7, "JPH files cut");
     }
-    let want = 20 * usize::from(iso) + 7 * usize::from(openjph);
-    assert_eq!(jphs, want, "JPH files cut");
 }
 
 /// Empty input, the first byte of `SOC`, and input under 8 bytes whose bytes

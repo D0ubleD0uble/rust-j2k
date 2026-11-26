@@ -17,8 +17,6 @@
 //! marker", or "Marker size inconsistent with stream length" where `Lsot`
 //! runs past the end of the file.
 
-#![cfg(feature = "__fuzz")]
-
 #[path = "support/synth.rs"]
 mod synth;
 
@@ -220,6 +218,7 @@ fn option_sets() -> [DecodeOptions; 2] {
 /// error but the one-shot call's on the whole file, and from `finish` what
 /// `decode_with` gives under the options.
 fn check_prefixes(name: &str, bytes: &[u8]) {
+    #[cfg(feature = "__fuzz")]
     rust_j2k::fuzz::tile_parts_walks_agree(bytes);
     for options in option_sets() {
         let lenient = options.clone().with_strict(false);
@@ -235,6 +234,7 @@ fn check_prefixes(name: &str, bytes: &[u8]) {
         for len in 0..bytes.len() {
             let prefix = &bytes[..len];
             let context = format!("{name}, {len} bytes, {options:?}");
+            #[cfg(feature = "__fuzz")]
             rust_j2k::fuzz::tile_parts_walks_agree(prefix);
             let decoded = error_of(&decode_with(prefix, &lenient));
             assert!(allowed(&decoded, &whole), "{context}: decode {decoded:?}");

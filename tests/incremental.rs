@@ -14,6 +14,8 @@ mod held;
 #[path = "support/inconsistent.rs"]
 mod inconsistent;
 use inconsistent::checked;
+#[path = "support/skip.rs"]
+mod skip;
 #[path = "support/synth.rs"]
 mod synth;
 
@@ -558,11 +560,11 @@ share_tests! {
 /// with `strict` off for `finish`.
 #[test]
 fn mixed_ht_files_refine_under_other_options() {
-    let dir = fixtures().join("conformance/ht/codestreams");
-    if !dir.exists() {
-        // The conformance corpus is left out of the published package.
+    // The conformance corpus is left out of the published package.
+    if skip::excluded() {
         return;
     }
+    let dir = fixtures().join("conformance/ht/codestreams");
     let mut rng = Rng(15444);
     let mut seen = 0;
     for path in files(&dir) {
@@ -1700,6 +1702,9 @@ fn finish_twice_gives_equal_results() {
 /// the main header of a codestream and the boxes of a JP2 file.
 #[test]
 fn header_and_bytes_follow_the_bytes_fed() {
+    if skip::excluded() {
+        return;
+    }
     for (name, options) in [
         ("layers/lrcp.j2k", DecodeOptions::default()),
         (

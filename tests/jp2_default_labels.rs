@@ -36,6 +36,9 @@ fn raw() -> DecodeOptions {
 /// the fourth channel is past sRGB's three colors.
 #[test]
 fn a_fourth_channel_of_an_srgb_file_is_unspecified_without_the_cdef() {
+    if support::skip::excluded() {
+        return;
+    }
     for path in ["jp2_real/3_13bit_and_1bit.jp2", "jp2_cdef_rgba.jp2"] {
         let bytes = read(path);
         let want = vec![color(1), color(2), color(3), UNSPECIFIED];

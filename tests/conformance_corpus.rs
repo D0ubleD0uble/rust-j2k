@@ -29,6 +29,9 @@ fn corpus_dir() -> PathBuf {
 
 #[test]
 fn manifest_and_corpus_are_consistent() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = corpus_dir();
     // Deserializing through the typed schema is itself the field check: an
     // unknown key, or a missing/mistyped modeled field, panics here.
@@ -131,6 +134,9 @@ fn manifest_and_corpus_are_consistent() {
 /// PLM against a synthetic fixture instead.
 #[test]
 fn corpus_covers_the_phase2_feature_matrix() {
+    if support::skip::excluded() {
+        return;
+    }
     let manifest = load_manifest(&corpus_dir());
     let entries = &manifest.entries;
 
@@ -202,6 +208,9 @@ fn corpus_covers_the_phase2_feature_matrix() {
 /// decodes today.
 #[test]
 fn decoding_p0_05_ignores_its_tlm_hint() {
+    if support::skip::excluded() {
+        return;
+    }
     let bytes = std::fs::read(corpus_dir().join("codestreams/p0_05.j2k")).expect("read p0_05");
 
     // TLM = 0xFF55; its segment length immediately follows the marker.

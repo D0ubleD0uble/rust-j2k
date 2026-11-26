@@ -12,14 +12,17 @@
 //! ignored).
 //!
 //! The conformance and `bench` fixtures are left out of the published
-//! package, so every file is read at run time and a missing one is skipped
-//! with a note.
+//! package, so the built-in set is skipped there (`tests/support/skip.rs`).
+//! In the repository a missing built-in file fails the run.
 
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use rust_j2k::{DecodeOptions, Region, Window, decode_with};
+
+#[path = "../tests/support/skip.rs"]
+mod skip;
 
 /// The built-in set, in the order it is printed. Paths are relative to the
 /// crate root.
@@ -55,7 +58,13 @@ fn main() {
         .collect();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 
-    let mut files: Vec<PathBuf> = FIXTURES.iter().map(|rel| root.join(rel)).collect();
+    let packaged = skip::excluded_named("the built-in bench set");
+    let mut files: Vec<PathBuf> = if packaged {
+        Vec::new()
+    } else {
+        FIXTURES.iter().map(|rel| root.join(rel)).collect()
+    };
+    let built_in = files.len();
     if let Some(dir) = std::env::var_os("RUST_J2K_BENCH_DIR") {
         match std::fs::read_dir(&dir) {
             Ok(entries) => {
@@ -81,7 +90,7 @@ fn main() {
         "{:<28} {:>9} {:>9} {:>9} {:>9}",
         "file", "median", "min", "max", "KiB"
     );
-    for path in &files {
+    for (index, path) in files.iter().enumerate() {
         let name = path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -90,6 +99,7 @@ fn main() {
         }
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
+            Err(e) if index < built_in => panic!("cannot read {}: {e}", path.display()),
             Err(e) => {
                 println!("{name:<28} skipped: cannot read {} ({e})", path.display());
                 continue;
@@ -103,7 +113,7 @@ fn main() {
     // the code-blocks and wavelet samples it needs.
     let path = root.join(TILED);
     let shown = filters.is_empty() || filters.iter().any(|f| "tiled_2048".contains(f.as_str()));
-    if shown {
+    if shown && !packaged {
         match std::fs::read(&path) {
             Ok(bytes) => {
                 for (label, options) in [
@@ -126,11 +136,7 @@ fn main() {
                     time(label, &bytes, &options, iters);
                 }
             }
-            Err(e) => println!(
-                "{:<28} skipped: cannot read {} ({e})",
-                "tiled_2048",
-                path.display()
-            ),
+            Err(e) => panic!("cannot read {}: {e}", path.display()),
         }
     }
 }

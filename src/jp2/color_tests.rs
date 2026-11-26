@@ -244,6 +244,9 @@ fn a_malformed_colr_is_refused_before_an_unsupported_box() {
 /// `decode` uses; `tests/jp2_color.rs` checks what `decode` reports.
 #[test]
 fn the_conformance_files_declare_the_expected_color_spaces() {
+    if crate::skip::excluded() {
+        return;
+    }
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/conformance/jp2/files");
     let expected = [
@@ -283,6 +286,9 @@ fn the_conformance_files_declare_the_expected_color_spaces() {
 /// header parses (`tests/jp2_real.rs` decodes the file).
 #[test]
 fn a_real_file_with_a_bpcc_box_parses() {
+    if crate::skip::excluded() {
+        return;
+    }
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/jp2_real/3_13bit_and_1bit.jp2");
     let bytes = std::fs::read(path).expect("fixture");

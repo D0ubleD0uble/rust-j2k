@@ -215,6 +215,9 @@ fn check_references(name: &str, file: &rust_j2k::Image, max_abs: i32) {
 
 #[test]
 fn every_fixture_decodes_like_its_oracle() {
+    if support::skip::excluded() {
+        return;
+    }
     let recorded = metadata();
     assert_eq!(
         recorded.files.len(),
@@ -281,6 +284,9 @@ fn every_fixture_decodes_like_its_oracle() {
 /// The table above covers exactly the files in the directory.
 #[test]
 fn the_table_lists_every_vendored_file() {
+    if support::skip::excluded() {
+        return;
+    }
     let mut on_disk: Vec<String> = std::fs::read_dir(dir())
         .expect("read jp2_real")
         .filter_map(|e| e.ok())
@@ -298,6 +304,9 @@ fn the_table_lists_every_vendored_file() {
 /// decodes in `jp2_cdef_unspecified` (`tests/jp2_synthetic.rs`).
 #[test]
 fn the_ecw_unspecified_cdef_is_read() {
+    if support::skip::excluded() {
+        return;
+    }
     let bytes = std::fs::read(dir().join("rgb16_ecwsdk.jp2")).unwrap();
     let at = bytes.windows(4).position(|w| w == b"cdef").unwrap() + 4;
     let mut want = vec![0, 3];
@@ -311,6 +320,9 @@ fn the_ecw_unspecified_cdef_is_read() {
 /// component has one.
 #[test]
 fn every_reference_is_used() {
+    if support::skip::excluded() {
+        return;
+    }
     let mut on_disk: Vec<String> = std::fs::read_dir(dir().join("references"))
         .expect("read references")
         .filter_map(|e| e.ok())

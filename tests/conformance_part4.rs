@@ -57,6 +57,9 @@ fn corpus_dir() -> PathBuf {
 /// implement yet report as *not yet decoded* and are not failures.
 #[test]
 fn grades_the_conformance_corpus_by_compliance_class() {
+    if support::skip::excluded() {
+        return;
+    }
     run_ratchet(&corpus_dir(), IN_CLASS);
 }
 
@@ -67,6 +70,9 @@ fn grades_the_conformance_corpus_by_compliance_class() {
 /// files written with CRLF line endings.
 #[test]
 fn every_reference_image_parses() {
+    if support::skip::excluded() {
+        return;
+    }
     assert_eq!(
         parse_every_reference(&corpus_dir()),
         78,
@@ -78,6 +84,9 @@ fn every_reference_image_parses() {
 /// reduction 0 are the same decode.
 #[test]
 fn decode_with_no_reduction_equals_decode() {
+    if support::skip::excluded() {
+        return;
+    }
     let bytes = std::fs::read(corpus_dir().join("codestreams/p0_01.j2k")).expect("read p0_01");
     let full = rust_j2k::decode(&bytes).expect("p0_01 decodes");
     let with = rust_j2k::decode_with(&bytes, &rust_j2k::DecodeOptions::default())
@@ -90,6 +99,9 @@ fn decode_with_no_reduction_equals_decode() {
 /// one under the limit halves each axis per level, rounding up.
 #[test]
 fn reduction_is_bounded_by_the_resolution_count() {
+    if support::skip::excluded() {
+        return;
+    }
     let bytes = std::fs::read(corpus_dir().join("codestreams/p0_01.j2k")).expect("read p0_01");
     let full = rust_j2k::decode(&bytes).expect("p0_01 decodes");
 

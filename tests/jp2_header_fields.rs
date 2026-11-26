@@ -101,6 +101,9 @@ fn check(jp2: &Jp2Metadata, unknown_color_space: u8, ipr: u8) {
 
 #[test]
 fn read_header_reports_the_ftyp_ihdr_colr_and_rreq_fields() {
+    if support::skip::excluded() {
+        return;
+    }
     for (unknown_color_space, ipr) in [(1, 0), (0, 1)] {
         let bytes = file5_with(unknown_color_space, ipr);
         let jp2 = read_header(&bytes).unwrap().jp2.unwrap();
@@ -110,6 +113,9 @@ fn read_header_reports_the_ftyp_ihdr_colr_and_rreq_fields() {
 
 #[test]
 fn decode_reports_the_ftyp_ihdr_colr_and_rreq_fields() {
+    if support::skip::excluded() {
+        return;
+    }
     for (unknown_color_space, ipr) in [(1, 0), (0, 1)] {
         let bytes = file5_with(unknown_color_space, ipr);
         let jp2 = decode(&bytes).unwrap().jp2.unwrap();
@@ -182,6 +188,9 @@ fn edge_case(name: &str) -> support::Jp2Boxes {
 /// left out.
 #[test]
 fn every_edge_case_has_a_test() {
+    if support::skip::excluded() {
+        return;
+    }
     let names: Vec<String> = edge_cases().cases.into_keys().collect();
     assert_eq!(
         names,
@@ -209,6 +218,9 @@ fn colors(boxes: &support::Jp2Boxes) -> Vec<(u8, u8)> {
 /// so every mask is two bytes) reports both, in box order.
 #[test]
 fn an_rreq_vendor_feature_is_reported() {
+    if support::skip::excluded() {
+        return;
+    }
     let boxes = edge_case("rreq_vendor_features");
     let rreq = boxes.reader_requirements.expect("an rreq");
     assert_eq!(rreq.mask_length, 2);
@@ -225,6 +237,9 @@ fn an_rreq_vendor_feature_is_reported() {
 /// remain, the ICC profile first.
 #[test]
 fn a_colr_before_the_first_jp2h_is_not_counted() {
+    if support::skip::excluded() {
+        return;
+    }
     let boxes = edge_case("colr_before_jp2h");
     assert_eq!(colors(&boxes), [(2, 0), (1, 1)]);
 }
@@ -232,6 +247,9 @@ fn a_colr_before_the_first_jp2h_is_not_counted() {
 /// A top-level `colr` after the `jp2c` is not counted.
 #[test]
 fn a_colr_after_the_jp2c_is_not_counted() {
+    if support::skip::excluded() {
+        return;
+    }
     let boxes = edge_case("colr_after_jp2c");
     assert_eq!(colors(&boxes), [(2, 0), (1, 1)]);
 }
@@ -240,6 +258,9 @@ fn a_colr_after_the_jp2c_is_not_counted() {
 /// inside the `jp2h`, so it is counted, after the two there.
 #[test]
 fn a_colr_between_the_jp2h_and_the_jp2c_is_counted() {
+    if support::skip::excluded() {
+        return;
+    }
     let boxes = edge_case("colr_between_jp2h_and_jp2c");
     assert_eq!(colors(&boxes), [(2, 0), (1, 1), (1, 0)]);
 }
@@ -248,6 +269,9 @@ fn a_colr_between_the_jp2h_and_the_jp2c_is_counted() {
 /// first's two, and its `ihdr` (with `UnkC` and `IPR` set) is ignored.
 #[test]
 fn a_second_jp2h_adds_its_colr_and_not_its_ihdr() {
+    if support::skip::excluded() {
+        return;
+    }
     let boxes = edge_case("second_jp2h");
     assert_eq!(colors(&boxes), [(2, 0), (1, 1), (1, 2)]);
     let header = &boxes.image_header;
@@ -258,6 +282,9 @@ fn a_second_jp2h_adds_its_colr_and_not_its_ihdr() {
 /// short and a well-formed one follows: there is none.
 #[test]
 fn a_malformed_first_rreq_hides_a_later_one() {
+    if support::skip::excluded() {
+        return;
+    }
     let boxes = edge_case("malformed_rreq_first");
     assert_eq!(boxes.reader_requirements, None);
 }
