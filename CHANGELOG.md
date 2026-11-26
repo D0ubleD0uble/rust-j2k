@@ -261,6 +261,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A `PPM` segment that ends inside a 4-byte `Nppm` field is refused as
+  `Error::Marker`, as OpenJPEG refuses it. A.7.4 has each `PPM` segment end
+  with a completed packet header; only the `Ippm` bytes may continue in the
+  next segment. Such files decoded before (#596).
+- A tile-part whose `PPM` chunk is empty (`Nppm` 0) has no packet header.
+  The decode read its packet headers from the tile-part data instead, which
+  A.7.4 rules out once a `PPM` is present, so a `PPM` whose `Nppm`s are all
+  0 could decode a tile from bytes that are not packet headers. Such a tile
+  is now refused with `strict` on, as its packets are missing, and decodes
+  with them reported missing with `strict` off. OpenJPEG refuses a `PPM`
+  whose `Nppm`s are all 0 (#596).
+- A tile whose packed packet headers (`PPM` or `PPT`) run out before its
+  last packet is refused with "the packed packet headers of tile N end
+  before the last packet", not "the data of tile N ends before the last
+  packet": the headers ran out, not the tile data (#596).
 - `IncrementalDecoder::refine` and `header` give a JP2 file's error in a
   tile at once where its tile-part chain stops on one byte that is not
   `0xFF`, such as a tile-part that ends with the `jp2c` box, then a `00`.

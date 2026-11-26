@@ -692,10 +692,10 @@ fn walk_packets<'a>(
         sop: header.cod.use_sop,
         eph: header.cod.use_eph,
     };
-    // When the tile carries PPT packed headers, packet headers come from that
-    // buffer and only the bodies stay inline; otherwise both are `data` and the
-    // two cursors move together.
-    let packed = !tile.packed_headers.is_empty();
+    // When the tile's headers are packed (`PPM` or `PPT`), packet headers come
+    // from that buffer and only the bodies stay inline; otherwise both are
+    // `data` and the two cursors move together.
+    let packed = tile.packed;
     let mut streams = PacketStreams {
         header: if packed { &tile.packed_headers } else { data },
         header_pos: 0,
@@ -2052,10 +2052,14 @@ fn parse_packet(
         if partial {
             return Ok(Packet::Ended);
         }
-        return Err(Error::codestream(format!(
-            "the data of tile {} ends before the last packet",
-            streams.tile
-        )));
+        // Packed, the headers ran out in their `PPM` or `PPT` bytes, not in
+        // the tile data, so the message says which.
+        let tile = streams.tile;
+        return Err(Error::codestream(if streams.packed {
+            format!("the packed packet headers of tile {tile} end before the last packet")
+        } else {
+            format!("the data of tile {tile} ends before the last packet")
+        }));
     }
 
     let mut bio = BitReader::new(&streams.header[streams.header_pos..]);

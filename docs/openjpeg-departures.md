@@ -55,6 +55,7 @@ refusal under `ColorOutput::Srgb`).
 | [An unknown marker in the main header](#an-unknown-marker-in-the-main-header) | refuses as `Unsupported`; OpenJPEG warns, skips it and decodes | 3 |
 | [A tile size that overflows OpenJPEG's tile count](#a-tile-size-that-overflows-openjpegs-tile-count) | decodes one tile; OpenJPEG refuses | 1 |
 | [A tile with no sample of a component](#a-tile-with-no-sample-of-a-component) | decodes; OpenJPEG fails some such files, and a reduction that leaves a component no sample | 1 |
+| [A `PPM` whose `Nppm`s are all 0](#a-ppm-whose-nppms-are-all-0) | reads the header, and with `strict` off returns the image with the packets reported missing; OpenJPEG refuses the file, as a strict decode does | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
@@ -1616,6 +1617,46 @@ A resolution reduction that leaves a component with no sample in the
 image is an older, separate case: this decoder returns the component 0
 wide or 0 high, where OpenJPEG fails ("Failed to decode all used
 components").
+
+## A `PPM` whose `Nppm`s are all 0
+
+| | |
+| - | - |
+| This decoder | reads the `PPM`: each tile-part has no packet header, and none is read from the tile-part data. A strict decode then refuses the tile ("the packed packet headers of tile 0 end before the last packet"); with `strict` off the image comes back with the packets reported missing |
+| OpenJPEG 2.5.0 | refuses ("Not enough memory to read PPM marker") |
+| Standard | Table A.38 gives `Nppm` the range 0 to 2^32 - 1; A.7.4: with a `PPM` present, "all the packet headers shall be found in the main header", and "packets distributed in the bit stream of the tile-parts are disallowed" |
+| Rule | 1 |
+| Tests and fixtures | `tests/ppm_nppm.rs`, built from the main headers of `tests/fixtures/packed_overrun/ppm_whole.j2k` and `ppm_two_parts.j2k` |
+| Decided | #596, 2026-11-26 |
+
+OpenJPEG's refusal is incidental, not a rule it applies. `opj_j2k_merge_ppm`
+adds up the `Nppm`s and allocates a buffer of that many bytes
+(`j2k.c:3985`). When they add up to 0, `opj_malloc(0)` returns NULL, which
+it reports as running out of memory (`j2k.c:3987`). An `Nppm` of 0 beside
+one that is not 0 decodes in both decoders, where the `Nppm` of 0 is a
+tile-part that holds no packet (`an_nppm_of_0_beside_one_that_is_not_decodes`).
+
+This decoder reads the `PPM` as written. A tile-part whose `Nppm` is 0 has no
+packet header, and its packet headers are still taken as packed: the data
+after its `SOD` is never read for packet headers, as A.7.4 rules out. So
+the all-zero files in `tests/ppm_nppm.rs` give, with `strict` on, "the packed packet
+headers of tile 0 end before the last packet", and with `strict` off the sample 128 (every
+coefficient 0) and a report that is not complete. That includes a file
+whose tile data holds the packet header OpenJPEG decodes to 176 when it is
+packed. No valid codestream has every `Nppm` 0: it has at least one
+packet, and a packet header takes at least a byte.
+
+A related shape is refused by both decoders: a `PPM` segment that ends
+inside a 4-byte `Nppm` field, so that the field continues in the next
+segment. A.7.4 reads: "Every marker segment in this series shall end with a
+completed packet header. However, the series of Ippm parameters described
+by the Nppm does not have to be complete in a given marker segment.
+Therefore, it is possible that the next PPM marker segment will not have a
+Nppm parameter after Zppm, but the continuation of the Ippm series from the
+last PPM marker segment." (ITU-T T.800 (08/2002); T.800 (11/2015) says
+the same, with "an Nppm".) A continuation carries `Ippm` bytes, not the rest of an
+`Nppm`, so this decoder refuses the split field as `Error::Marker`, and
+OpenJPEG gives "Not enough bytes to read Nppm" (`j2k.c:3958`).
 
 ## The JP2 box layer
 

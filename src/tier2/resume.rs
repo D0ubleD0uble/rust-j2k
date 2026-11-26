@@ -249,7 +249,7 @@ impl Walks {
             self.tiles.resize_with(index + 1, Slot::default);
         }
         let volumes = header.poc.len();
-        let packed = !tile.packed_headers.is_empty();
+        let packed = tile.packed;
         // Whether an earlier walk of the tile has read its packets, so a
         // walk built now reads them again.
         let walked_before = !matches!(self.tiles[index], Slot::Empty);
@@ -672,7 +672,7 @@ impl TileWalk {
         let end_visits = geoms.iter().map(Vec::len).sum::<usize>() as u64 * END_VISITS as u64;
         TileWalk {
             volumes: header.poc.len(),
-            packed: !tile.packed_headers.is_empty(),
+            packed: tile.packed,
             dropped,
             failure,
             states,
