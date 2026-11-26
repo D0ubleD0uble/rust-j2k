@@ -67,6 +67,26 @@ fields without a breaking change, so match on it with a `_` arm or `..`.
   measure of the file, and `None` when no option raises the limit or the
   refusal shows no factor. `DecodeOptions::raised_for` applies it.
 
+### Decoded output
+
+The samples a file decodes to, and whether it decodes or is refused, are
+covered, except for fixes. The crate decides each case by three rules, in
+order: follow the standard; otherwise give the error correction a user would
+expect, with OpenJPEG as the usual guide; and return an error rather than a
+wrong image ([correctness.md](correctness.md#when-the-oracle-and-the-standard-disagree)).
+
+- A fix that brings the output, or the choice to decode or refuse, closer to
+  those rules can ship in a patch release. Examples: output corrected to
+  match the standard, or OpenJPEG where the standard does not decide; a file
+  that gave a wrong image now refused; a file that was refused now decoded
+  as OpenJPEG decodes it. The CHANGELOG lists each one.
+- Any other change to the output needs a minor release, such as a new
+  default for color handling, or a different choice where the standard
+  leaves room.
+
+[openjpeg-departures.md](openjpeg-departures.md) records each place the
+output differs from OpenJPEG on purpose, and the rule behind it.
+
 ### `DecodeOptions` equality
 
 `DecodeOptions` implements `PartialEq` and `Eq`, and that is covered:
