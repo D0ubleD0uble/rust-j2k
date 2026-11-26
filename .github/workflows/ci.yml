@@ -187,7 +187,7 @@ jobs:
         run: |
           python3 scripts/gen-jp2-fuzz-seeds.py
           mkdir -p fuzz/corpus/header
-          cp tests/fixtures/*.j2k tests/fixtures/jp2_*.jp2 fuzz/corpus/header/
+          cp tests/fixtures/*.j2k tests/fixtures/jp2_*.jp2 tests/fixtures/header/* tests/fixtures/packed_overrun/*.j2k fuzz/corpus/header/
       # The JP2 box target takes the box dictionary instead.
       - name: Fuzz jp2_boxes (30s)
         run: cargo fuzz run jp2_boxes --target x86_64-unknown-linux-gnu -- -dict=fuzz/jp2.dict -max_total_time=30 -rss_limit_mb=4096 -timeout=30
