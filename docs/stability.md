@@ -24,19 +24,27 @@ A change to any of these that breaks a caller needs a new minor version.
   [`SampleLimit`] and [`WorkLimit`].
 - The output: [`Image`], [`Component`], [`Header`], [`ComponentInfo`],
   [`TileGrid`], [`DecodeReport`] and [`ReportEntry`].
-- The JP2 metadata types: `Jp2Metadata`, `ImageHeader`,
-  `ColorSpecification`, `ColorSpace`, `FileType`, `ReaderRequirements`,
-  `StandardFeature`, `VendorFeature`, `Resolution`, `Res`, `Ratio`,
-  `ChannelDefinition`, `ChannelDefinitionEntry`, `ChannelType`,
-  `Association`, `Palette`, `PaletteColumn`, `ChannelMapping`,
-  `MappingKind`, `XmlBox`, `IprBox`, `UuidBox` and `UuidInfo`.
+- The JP2 metadata types: [`Jp2Metadata`], [`ImageHeader`],
+  [`ColorSpecification`], [`ColorSpace`], [`FileType`],
+  [`ReaderRequirements`], [`StandardFeature`], [`VendorFeature`],
+  [`Resolution`], [`Res`], [`Ratio`], [`ChannelDefinition`],
+  [`ChannelDefinitionEntry`], [`ChannelType`], [`Association`],
+  [`Palette`], [`PaletteColumn`], [`ChannelMapping`], [`MappingKind`],
+  [`XmlBox`], [`IprBox`], [`UuidBox`] and [`UuidInfo`].
 - The incremental decoder: [`IncrementalDecoder`] (`new`, `feed`, `refine`,
   `header`, `finish`, `set_resolution_reduction`, `set_max_quality_layers`,
   `set_region`, `options`, `bytes`, `bytes_fed`, `bytes_decoded` and
   `into_bytes`), [`Refined`] with `image`, and [`Waiting`] and its variants.
-- The accessors on these types, such as `LimitDetail::kind`,
-  `LimitDetail::retry_with`, `LimitDetail::refused_at`,
+- Their public fields, constructors and methods. The fields are on
+  `Header`, `TileGrid`, `ComponentInfo`, `Image`, `Component`,
+  `DecodeReport` and the JP2 types. The constructors and methods include
+  `Image::new` and `component`, `Component::new` and `sample`,
+  `TileGrid::count` and `tile`, `Window::new`, `DecodeReport::is_complete`,
+  `LimitDetail::kind`, `retry_with` and `refused_at`,
   `LimitKind::is_adjustable`, and `RefusedAt::tile`, `amount` and `unit`.
+- The settings of `DecodeOptions::default()` other than the limits: full
+  resolution, every quality layer, the whole image, the components as the
+  file's boxes shape them, color as coded, and `strict` on.
 - The traits each type implements, the derived ones included. Every public
   type is `Send`, `Sync`, `UnwindSafe` and `RefUnwindSafe`
   (`tests/auto_traits.rs` checks this).
@@ -46,10 +54,12 @@ fields without a breaking change, so match on it with a `_` arm or `..`.
 
 ### What the types mean
 
-- **Which variant a fault gives.** The variant a given fault maps to is part
-  of the API: moving a fault to another variant, such as from
-  `Error::Codestream` to `Error::Marker`, is a breaking change. Which fault
-  is reported when an input has more than one is not covered (see below).
+- **Which variant a fault gives.** Each kind of fault maps to one variant,
+  and moving it to another, such as from `Error::Codestream` to
+  `Error::Marker`, is a breaking change. The promise is about the fault, not
+  the file: when a file has more than one fault, or a fix finds a fault that
+  was missed before, the error that file gives can change, variant included
+  (see "Which fault wins" below).
 - **Which limit refused.** The `LimitKind` a refusal names, which kinds an
   option raises (`LimitKind::is_adjustable`), and which option that is.
 - **`retry_with`.** What `LimitDetail::retry_with` means, as its rustdoc
@@ -63,6 +73,11 @@ fields without a breaking change, so match on it with a `_` arm or `..`.
 removing `Eq` would break a caller. So every new option must implement
 `Eq` too. A float setting, such as a gamma or a color tolerance, would need
 a wrapper type.
+
+Two other trait promises rule things out the same way. `Error` is `Clone`,
+so a source error it carries must be `Clone` too, or held in an `Arc`.
+Every public type is `Send` and `Sync`, so none can hold an `Rc`, a `Cell`
+or a raw pointer.
 
 Equality is structural: it compares the settings as stored, not the decodes
 they give. `Region::Whole` and a `Region::Window` that covers the whole
@@ -98,6 +113,10 @@ variant covers several cases, and they resolve differently:
   never closes, and only `finish` reports the error.
 - A refusal of the sRGB step is final or held, depending on whether a box
   after the codestream can still be read.
+- A fault in a box before the codestream: in a box of length 0, only
+  `finish` reports it, as the box runs to the end of the input. In a box
+  cut inside its `XLBox`, it resolves once the bytes that complete the
+  `XLBox` arrive.
 
 The value does not say which, and that is deliberate: `Held` is
 `#[non_exhaustive]`, so a field that says why can be added without a
@@ -117,11 +136,13 @@ bytes would lift: an `Error::Limit` of kind `Samples`, `TileCodeBlocks` or
   can refuse a huge image early.
 - A tile-cap refusal comes once the `EOC` closes the tile-parts, and in a
   JP2 file once no box after the codestream can still be read.
-- `refine` never returns these: it waits with `Waiting::SampleLimit`
-  instead, or with `Waiting::BoundSpent` for a later tile's cap met while it
-  counts the code-block work.
+- `refine` never returns these. It waits with `Waiting::SampleLimit`
+  instead, or, where a work bound refused first, with that bound's wait:
+  `Waiting::WorkLimit`, `MissingTiles`, `BoundSpent` or `RepeatLimit`.
 
-Every other error from `header` and `refine` is final.
+Every other error from `header` and `refine` is final. `finish` decodes
+under the decoder's own options, so with `strict` on it can give a
+different error from the one `refine` gave.
 
 ### What `header` returning `Ok(None)` means
 
@@ -149,7 +170,7 @@ These can change in any release:
   variant, and read a limit's data from `kind`, `retry_with` and
   `refused_at`.
 - **Which fault wins.** When an input has more than one fault, which one is
-  reported. The rustdoc of `Error` lists what holds today.
+  reported, including its variant. The rustdoc of `Error` lists what holds today.
 - **The minimum Rust version.** It is 1.87 (`rust-version` in
   `Cargo.toml`). No policy is set for raising it.
 - **The hidden `fuzz` module** and the `__fuzz` feature it needs. They exist
@@ -224,3 +245,26 @@ below the 2^29 floor of the default sample limit. So:
 [`IncrementalDecoder`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.IncrementalDecoder.html
 [`Refined`]: https://docs.rs/rust-j2k/latest/rust_j2k/enum.Refined.html
 [`Waiting`]: https://docs.rs/rust-j2k/latest/rust_j2k/enum.Waiting.html
+[`Jp2Metadata`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.Jp2Metadata.html
+[`ImageHeader`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.ImageHeader.html
+[`ColorSpecification`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.ColorSpecification.html
+[`ColorSpace`]: https://docs.rs/rust-j2k/latest/rust_j2k/enum.ColorSpace.html
+[`FileType`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.FileType.html
+[`ReaderRequirements`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.ReaderRequirements.html
+[`StandardFeature`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.StandardFeature.html
+[`VendorFeature`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.VendorFeature.html
+[`Resolution`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.Resolution.html
+[`Res`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.Res.html
+[`Ratio`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.Ratio.html
+[`ChannelDefinition`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.ChannelDefinition.html
+[`ChannelDefinitionEntry`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.ChannelDefinitionEntry.html
+[`ChannelType`]: https://docs.rs/rust-j2k/latest/rust_j2k/enum.ChannelType.html
+[`Association`]: https://docs.rs/rust-j2k/latest/rust_j2k/enum.Association.html
+[`Palette`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.Palette.html
+[`PaletteColumn`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.PaletteColumn.html
+[`ChannelMapping`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.ChannelMapping.html
+[`MappingKind`]: https://docs.rs/rust-j2k/latest/rust_j2k/enum.MappingKind.html
+[`XmlBox`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.XmlBox.html
+[`IprBox`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.IprBox.html
+[`UuidBox`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.UuidBox.html
+[`UuidInfo`]: https://docs.rs/rust-j2k/latest/rust_j2k/struct.UuidInfo.html
