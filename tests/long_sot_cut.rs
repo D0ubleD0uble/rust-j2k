@@ -17,6 +17,8 @@
 //! marker", or "Marker size inconsistent with stream length" where `Lsot`
 //! runs past the end of the file.
 
+#![cfg(feature = "__fuzz")]
+
 #[path = "support/synth.rs"]
 mod synth;
 

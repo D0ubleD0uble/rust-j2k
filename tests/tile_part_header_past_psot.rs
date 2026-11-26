@@ -15,6 +15,8 @@
 //! too short"), and each damaged-length file, with or without
 //! `-allow-partial`.
 
+#![cfg(feature = "__fuzz")]
+
 #[path = "support/synth.rs"]
 mod synth;
 

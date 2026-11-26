@@ -13,6 +13,8 @@
 //! `QCD` is a departure this crate already made. Only which fault wins is
 //! checked here.
 
+#![cfg(feature = "__fuzz")]
+
 #[path = "support/synth.rs"]
 mod synth;
 

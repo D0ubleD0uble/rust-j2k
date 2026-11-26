@@ -131,6 +131,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The hidden `rust_j2k::fuzz` hooks now need the private `__fuzz` feature, which
+  is unstable and has no semver promise. A build with default features no
+  longer exports them. They were never public API.
 - `Error::Marker` and `Error::Codestream` no longer overlap, and the
   faults listed under Migrating from 0.5 move from `Codestream` to
   `Marker`. Which fault a file reports is unchanged. A segment that runs

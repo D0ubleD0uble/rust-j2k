@@ -14,6 +14,8 @@
 //! counts); refusing them is the departure "a `TNsot` that differs between
 //! a tile's parts" in `docs/openjpeg-departures.md`.
 
+#![cfg(feature = "__fuzz")]
+
 #[path = "support/held.rs"]
 mod held;
 #[path = "support/synth.rs"]

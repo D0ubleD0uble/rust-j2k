@@ -909,6 +909,7 @@ impl SrgbPlan {
     /// Open `profile` and read the input profile for both forms, as planning
     /// does, but build no transform. The fuzz target for the ICC reader
     /// calls this for every input; building the transform costs far more.
+    #[cfg(any(test, feature = "__fuzz"))]
     pub(crate) fn read_profile(profile: &[u8]) {
         if let Ok(icc) = Profile::parse(profile) {
             for form in [Form::Gray, Form::Rgb] {
