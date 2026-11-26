@@ -15,8 +15,6 @@
 //! too short"), and each damaged-length file, with or without
 //! `-allow-partial`.
 
-#![cfg(feature = "__fuzz")]
-
 #[path = "support/synth.rs"]
 mod synth;
 
@@ -206,6 +204,7 @@ fn a_prefix_moves_from_ok_to_one_final_error() {
         for length in at..=bytes.len() {
             let prefix = &bytes[..length];
             decoder.feed(&bytes[length - 1..length]);
+            #[cfg(feature = "__fuzz")]
             rust_j2k::fuzz::tile_parts_walks_agree(prefix);
             let decoded = decode_with(prefix, &options(false)).map(|_| ());
             match (decoded, &failed) {

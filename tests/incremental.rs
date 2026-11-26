@@ -560,11 +560,11 @@ share_tests! {
 /// with `strict` off for `finish`.
 #[test]
 fn mixed_ht_files_refine_under_other_options() {
-    let dir = fixtures().join("conformance/ht/codestreams");
-    if !dir.exists() {
-        // The conformance corpus is left out of the published package.
+    // The conformance corpus is left out of the published package.
+    if skip::excluded() {
         return;
     }
+    let dir = fixtures().join("conformance/ht/codestreams");
     let mut rng = Rng(15444);
     let mut seen = 0;
     for path in files(&dir) {

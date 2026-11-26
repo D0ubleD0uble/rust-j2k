@@ -10,8 +10,6 @@
 //! previous number of tile-part (2)", after warning of the correction) and
 //! the fourth (the same error), which `strict` here refuses too.
 
-#![cfg(feature = "__fuzz")]
-
 #[path = "support/synth.rs"]
 mod synth;
 
@@ -45,6 +43,7 @@ fn options(strict: bool) -> DecodeOptions {
 /// The text of the error `strict` gives. The walk that keeps no tile
 /// record, which the header read uses, must give the same one.
 fn strict_error(bytes: &[u8]) -> String {
+    #[cfg(feature = "__fuzz")]
     rust_j2k::fuzz::tile_parts_walks_agree(bytes);
     let error = decode_with(bytes, &options(true)).unwrap_err();
     assert!(matches!(error, Error::Codestream(_)), "{error:?}");
@@ -137,6 +136,7 @@ fn two_counts_without_the_correction_give_the_stated_ones() {
 #[test]
 fn two_counts_strict_off_leave_the_correction_out() {
     let bytes = file(&[(0, 0, 1), (0, 1, 1), (0, 2, 3)]);
+    #[cfg(feature = "__fuzz")]
     rust_j2k::fuzz::tile_parts_walks_agree(&bytes);
     let error = decode_with(&bytes, &options(false)).unwrap_err();
     assert!(

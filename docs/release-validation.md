@@ -310,11 +310,17 @@ cd target/package/rust-j2k-X.Y.Z && cargo test
 ```
 
 It must pass with no failures. A test that reads an excluded fixture skips and
-prints a `skipped` line, so count those lines and note the number. A test
-skips only when `deny.toml`, a file the package leaves out, is missing, so a
-fixture missing from the repository itself still fails. The shared helper is
-`tests/support/skip.rs`. If `cargo test` reuses a stale build of the crate,
-run `cargo clean -p rust-j2k` in the unpacked directory first.
+prints a line with `left out of the published package`. Count them with
+`... 2>&1 | grep -o 'left out of the published package' | wc -l` and note the
+number; `grep -c '^skipped'` undercounts, because the harness's own output can
+share a line with a skip message. A test skips only where
+`tests/fixtures/.repo-only`, an empty file the package leaves out, is missing.
+In the repository the test fails instead if a fixture is missing, and with `CI`
+set a missing marker panics. A test skips all of its fixtures at once, so a
+test that mixes packaged and excluded fixtures does not run on the packaged
+ones. The shared helper is `tests/support/skip.rs`. If `cargo test` reuses a
+stale build of the crate, run `cargo clean -p rust-j2k` in the unpacked
+directory first.
 
 **Cost:** a few minutes, plus a second build of the crate and its tests.
 

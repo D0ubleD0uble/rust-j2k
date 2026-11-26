@@ -702,10 +702,7 @@ mod tests {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/conformance/ht/codestreams")
             .join(format!("{name}.j2k"));
-        // The conformance directory is not in the published package.
-        let Ok(bytes) = std::fs::read(path) else {
-            return Vec::new();
-        };
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let parsed = crate::codestream::parse_header(&bytes).unwrap();
         let cs = crate::codestream::parse_tiles(&bytes, parsed).unwrap();
         let mut seeds = Vec::new();
@@ -779,6 +776,10 @@ mod tests {
     /// write them out as the target's seed corpus (see `fuzz/README.md`).
     #[test]
     fn ht_block_seeds_from_the_corpus_decode() {
+        // The conformance directory is not in the published package.
+        if crate::skip::excluded() {
+            return;
+        }
         let dir = std::env::var_os("RUST_J2K_HT_SEED_DIR").map(std::path::PathBuf::from);
         let (mut total, mut refined) = (0usize, 0usize);
         for name in HT_SEED_FILES {
@@ -803,8 +804,7 @@ mod tests {
                 std::fs::write(dir.join(format!("tall_{w}x{h}")), tall_seed(w, h)).unwrap();
             }
         }
-        if total > 0 {
-            assert!(refined > 0, "no seed runs a refinement pass");
-        }
+        assert!(total > 0, "no seeds");
+        assert!(refined > 0, "no seed runs a refinement pass");
     }
 }

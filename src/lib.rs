@@ -1836,3 +1836,25 @@ mod synth;
 #[cfg(test)]
 #[path = "../tests/support/skip.rs"]
 mod skip;
+
+#[cfg(test)]
+mod skip_tests {
+    use super::skip::decide;
+
+    #[test]
+    fn a_present_marker_never_skips() {
+        assert!(!decide(true, false));
+        assert!(!decide(true, true));
+    }
+
+    #[test]
+    fn a_missing_marker_skips_outside_ci() {
+        assert!(decide(false, false));
+    }
+
+    #[test]
+    #[should_panic(expected = "while CI is set")]
+    fn a_missing_marker_panics_in_ci() {
+        decide(false, true);
+    }
+}

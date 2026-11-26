@@ -195,14 +195,15 @@ fn pieces_of_any_size_refine_to_the_one_shot_decode_of_their_prefix() {
 /// cut at points drawn over all of each.
 #[test]
 fn mixed_ht_files_refine_to_the_one_shot_decode_of_their_prefix() {
+    // The conformance corpus is left out of the published package.
+    if crate::skip::excluded() {
+        return;
+    }
     let dir = format!(
         "{}/tests/fixtures/conformance/ht/codestreams",
         env!("CARGO_MANIFEST_DIR")
     );
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        // The conformance corpus is left out of the published package.
-        return;
-    };
+    let entries = std::fs::read_dir(&dir).expect("the HT corpus directory");
     let mut seen = 0;
     for entry in entries {
         let path = entry.unwrap().path();
@@ -225,14 +226,15 @@ fn mixed_ht_files_refine_to_the_one_shot_decode_of_their_prefix() {
 /// yet have an `SOP` before them, which the next refine finds.
 #[test]
 fn packed_headers_with_sop_markers_refine_to_the_one_shot_decode() {
+    // The conformance corpus is left out of the published package.
+    if crate::skip::excluded() {
+        return;
+    }
     let path = format!(
         "{}/tests/fixtures/conformance/codestreams/p1_05.j2k",
         env!("CARGO_MANIFEST_DIR")
     );
-    let Ok(bytes) = std::fs::read(&path) else {
-        // The conformance corpus is left out of the published package.
-        return;
-    };
+    let bytes = std::fs::read(&path).expect("read p1_05");
     let options = uncut(DecodeOptions::default().with_resolution_reduction(2));
     // Each cut ends a piece right before an `SOP`.
     let mut ends: Vec<usize> = markers(&bytes, 0x91).into_iter().step_by(97).collect();
@@ -1337,15 +1339,10 @@ fn options_changed_between_refines_refine_to_the_one_shot_decode_of_their_prefix
     .map(String::from)
     .to_vec();
     // The conformance corpus is left out of the published package.
-    let ht = "conformance/ht/codestreams/ds0_hm_15_b8.j2k";
-    if std::path::Path::new(&format!(
-        "{}/tests/fixtures/{ht}",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .exists()
-    {
-        names.push(ht.to_string());
+    if crate::skip::excluded() {
+        return;
     }
+    names.push("conformance/ht/codestreams/ds0_hm_15_b8.j2k".to_string());
     for name in &names {
         let bytes = fixture(name);
         let stride = if bytes.len() > 8192 { 1009 } else { 61 };

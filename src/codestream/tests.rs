@@ -2436,14 +2436,15 @@ fn pgx_extent(path: &std::path::Path) -> (u32, u32) {
 /// decoder rejects (COC, PPM, POC, …) and `p0_02`'s reserved `0xFF30`, because
 /// walking is subset-agnostic.
 ///
-/// Returns early if the corpus is absent: it is `exclude`d from the packaged
+/// Skips where the corpus is absent: it is `exclude`d from the packaged
 /// crate, so a `cargo test` unpacked from crates.io has no fixtures.
 #[test]
 fn siz_matches_opj_dump_across_the_conformance_corpus() {
-    let dir = corpus_dir();
-    let Ok(text) = std::fs::read_to_string(dir.join("manifest.json")) else {
+    if crate::skip::excluded() {
         return;
-    };
+    }
+    let dir = corpus_dir();
+    let text = std::fs::read_to_string(dir.join("manifest.json")).expect("read manifest");
     let manifest: serde_json::Value = serde_json::from_str(&text).expect("manifest parses");
 
     for entry in manifest["entries"].as_array().expect("entries") {
@@ -2535,10 +2536,11 @@ fn siz_matches_opj_dump_across_the_conformance_corpus() {
 /// rejection means the walk got there, a structural one means it did not.
 #[test]
 fn p0_02_reserved_marker_walks_cleanly() {
-    let path = corpus_dir().join("codestreams/p0_02.j2k");
-    let Ok(bytes) = std::fs::read(&path) else {
+    if crate::skip::excluded() {
         return;
-    };
+    }
+    let path = corpus_dir().join("codestreams/p0_02.j2k");
+    let bytes = std::fs::read(&path).expect("read p0_02");
 
     let (segments, sot) = walk_main_header(&bytes).expect("main header walks");
     assert!(sot.is_ok(), "the walk reaches the SOT: {sot:?}");
@@ -3970,14 +3972,15 @@ fn plm_in_the_tile_part_header_is_a_codestream_error() {
 /// `p0_05`'s TLM against the codestream itself: the single entry must name
 /// tile 0 with the exact `Psot` its SOT declares (`opj_dump` does not print
 /// TLM, so the codestream is the reference here — Ptlm and Psot describe the
-/// same span, A.4.2 and A.7.1). Returns early if the corpus is absent: it is
+/// same span, A.4.2 and A.7.1). Skips where the corpus is absent: it is
 /// `exclude`d from the packaged crate.
 #[test]
 fn tlm_of_p0_05_matches_its_tile_part_length() {
-    let path = corpus_dir().join("codestreams/p0_05.j2k");
-    let Ok(bytes) = std::fs::read(&path) else {
+    if crate::skip::excluded() {
         return;
-    };
+    }
+    let path = corpus_dir().join("codestreams/p0_05.j2k");
+    let bytes = std::fs::read(&path).expect("read p0_05");
 
     parse(&bytes).expect("p0_05 parses");
     let tlm = tlm_entries(&bytes);

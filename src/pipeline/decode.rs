@@ -2070,16 +2070,11 @@ pub(crate) mod tests {
     #[test]
     fn a_window_inside_a_tile_decodes_fewer_code_blocks_than_the_tile() {
         // `tests/fixtures/bench/` is left out of the published package, so
-        // the test is skipped where the directory is not there; a file
-        // missing from a directory that is there fails it.
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bench");
-        if !dir.is_dir() {
-            eprintln!(
-                "{} is not present (packaged crate?); skipping",
-                dir.display()
-            );
+        // the test skips there; in the repository a missing file fails it.
+        if crate::skip::excluded() {
             return;
         }
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bench");
         let path = dir.join("tiled_2048_gray.j2k");
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let all = DecodeOptions::default();
