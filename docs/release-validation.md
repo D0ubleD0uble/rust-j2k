@@ -63,6 +63,7 @@ costly API choices a second reader finds.
 rustup update stable
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
+cargo clippy --lib -- -D warnings
 cargo test
 cargo deny check
 ```
