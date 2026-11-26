@@ -1850,12 +1850,13 @@ mod skip_tests {
     /// Checks that the `tests/fixtures/` entries of the `exclude` array in
     /// `manifest`, less `REPO_ONLY`, are the `EXCLUDED_DIRS`, each once. An
     /// entry is read as written but for a leading `/`, quotes, a trailing
-    /// comma and a `#` comment. Panics on one that does not end in `/`, is a
-    /// prefix of `tests/fixtures/`, or is not in `EXCLUDED_DIRS`, and where a
-    /// dir is missing or repeated.
-    fn check_exclude(manifest: &str) {
-        let (_, rest) = manifest.split_once("exclude").expect("an exclude key");
-        let (_, rest) = rest.split_once('[').expect("an exclude array");
+    /// comma and a `#` comment. The error names an entry that does not end
+    /// in `/`, is a prefix of `tests/fixtures/`, or is not in
+    /// `EXCLUDED_DIRS`, or says a dir is missing or repeated. It returns an
+    /// error rather than panicking: wasm32-wasip1 aborts on a panic.
+    fn check_exclude(manifest: &str) -> Result<(), String> {
+        let (_, rest) = manifest.split_once("exclude").ok_or("no exclude key")?;
+        let (_, rest) = rest.split_once('[').ok_or("no exclude array")?;
         let mut found: Vec<&str> = Vec::new();
         // The rest of the line with `[` is read too; the array ends at the
         // first line that starts with `]` once a comment is stripped.
@@ -1866,30 +1867,39 @@ mod skip_tests {
             }
             let entry = line.trim_end_matches(',').trim().trim_matches(['"', '\'']);
             let entry = entry.strip_prefix('/').unwrap_or(entry);
-            assert!(
-                entry.is_empty() || !"tests/fixtures/".starts_with(entry),
-                "{entry}: excludes tests/fixtures/ or a parent of it"
-            );
+            if !entry.is_empty() && "tests/fixtures/".starts_with(entry) {
+                return Err(format!(
+                    "{entry}: excludes tests/fixtures/ or a parent of it"
+                ));
+            }
             let Some(dir) = entry.strip_prefix("tests/fixtures/") else {
                 continue;
             };
             if dir == "REPO_ONLY" {
                 continue;
             }
-            assert!(
-                dir.ends_with('/'),
-                "{entry}: an excluded fixtures entry needs a trailing /"
-            );
-            assert!(
-                super::skip::EXCLUDED_DIRS.contains(&dir),
-                "{entry} is excluded from the package but not in EXCLUDED_DIRS"
-            );
+            if !dir.ends_with('/') {
+                return Err(format!(
+                    "{entry}: an excluded fixtures entry needs a trailing /"
+                ));
+            }
+            if !super::skip::EXCLUDED_DIRS.contains(&dir) {
+                return Err(format!(
+                    "{entry} is excluded from the package but not in EXCLUDED_DIRS"
+                ));
+            }
             found.push(dir);
         }
         found.sort_unstable();
         let mut dirs = super::skip::EXCLUDED_DIRS.to_vec();
         dirs.sort_unstable();
-        assert_eq!(found, dirs, "EXCLUDED_DIRS and the exclude list differ");
+        if found == dirs {
+            Ok(())
+        } else {
+            Err(format!(
+                "EXCLUDED_DIRS {dirs:?} and the exclude list {found:?} differ"
+            ))
+        }
     }
 
     /// `EXCLUDED_DIRS` is the `tests/fixtures/` directories of the `exclude`
@@ -1898,7 +1908,7 @@ mod skip_tests {
     fn the_excluded_dirs_are_the_cargo_exclude_directories() {
         let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
             .expect("Cargo.toml");
-        check_exclude(&manifest);
+        assert_eq!(check_exclude(&manifest), Ok(()));
     }
 
     /// An `exclude` array of the four `EXCLUDED_DIRS` with `lines` added.
@@ -1910,18 +1920,16 @@ mod skip_tests {
         format!("exclude = [\n{dirs}{lines}\n    \"/.github/\",\n]\n")
     }
 
-    fn passes(manifest: &str) -> bool {
-        std::panic::catch_unwind(|| check_exclude(manifest)).is_ok()
-    }
-
     #[test]
     fn the_exclude_check_reads_each_way_to_write_an_entry() {
-        assert!(passes(&manifest_with("")));
-        assert!(passes(&manifest_with("    # see [docs]")));
-        assert!(passes(&manifest_with("    \"/docs/x[1].md\",")));
-        assert!(passes(&manifest_with(
-            "    \"tests/fixtures/REPO_ONLY\", # a marker"
-        )));
+        for ok in [
+            "",
+            "    # see [docs]",
+            "    \"/docs/x[1].md\",",
+            "    \"tests/fixtures/REPO_ONLY\", # a marker",
+        ] {
+            assert_eq!(check_exclude(&manifest_with(ok)), Ok(()), "{ok}");
+        }
         for entry in [
             "\"tests/fixtures/huge/\",",
             "\"/tests/fixtures/huge/\",",
@@ -1937,7 +1945,10 @@ mod skip_tests {
             "\"/tests/fixtures\",",
             "\"tests/fixtures/\",",
         ] {
-            assert!(!passes(&manifest_with(entry)), "{entry} passed");
+            assert!(
+                check_exclude(&manifest_with(entry)).is_err(),
+                "{entry} passed"
+            );
         }
     }
 
@@ -1947,7 +1958,8 @@ mod skip_tests {
         let manifest = "exclude = [\n    \"/tests/fixtures/conformance/\",\n    \
                         \"/tests/fixtures/conformance/\",\n    \"/tests/fixtures/jp2_real/\",\n    \
                         \"/tests/fixtures/openjph/\",\n]\n";
-        assert!(!passes(manifest));
+        let error = check_exclude(manifest).unwrap_err();
+        assert!(error.contains("differ"), "{error}");
     }
 
     #[test]
