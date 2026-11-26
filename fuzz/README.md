@@ -51,8 +51,9 @@ fuzz/
 reaches tier-2 or tier-1, so most of its executions die in `parse_main_header`.
 The other three start deeper: `tile_body` wraps the input in a valid main
 header so every execution reaches the packet reader, and `tier1_block`/`mq`
-call hidden hooks the library exposes (`rust_j2k::fuzz`, `#[doc(hidden)]` and
-not public API) to drive the EBCOT block decoder and MQ coder directly.
+call hidden hooks the library exposes (`rust_j2k::fuzz`, `#[doc(hidden)]`,
+not public API, and built only with the private `__fuzz` feature, which this
+workspace turns on) to drive the EBCOT block decoder and MQ coder directly.
 
 `tile_body`'s second input byte steers a region of interest: with bit 7 set
 it writes an `RGN` marker (a maxshift of 0 to 19 from the low 5 bits, on

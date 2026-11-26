@@ -6,6 +6,7 @@
 //! would silently drop one of these, so adding such a field fails here
 //! instead. `IncrementalDecoder` has the same check beside its definition.
 
+#[cfg(feature = "__fuzz")]
 use rust_j2k::fuzz::RepeatWork;
 use rust_j2k::{
     AmountUnit, Association, ChannelDefinition, ChannelDefinitionEntry, ChannelMapping,
@@ -68,6 +69,7 @@ const _: () = {
     holds::<PaletteColumn>();
     holds::<ChannelMapping>();
     holds::<MappingKind>();
+    #[cfg(feature = "__fuzz")]
     holds::<RepeatWork>();
 };
 

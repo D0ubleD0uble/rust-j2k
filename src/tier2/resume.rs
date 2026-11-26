@@ -351,6 +351,7 @@ impl Walks {
     }
 
     /// How many tiles have a walk kept, and how many one too large to keep.
+    #[cfg(any(test, feature = "__fuzz"))]
     pub(crate) fn kept(&self) -> (usize, usize) {
         let kept = self
             .tiles

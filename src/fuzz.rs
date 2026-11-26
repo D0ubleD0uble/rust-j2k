@@ -7,8 +7,10 @@
 //! contract under test is the crate-wide one — typed errors, never a panic,
 //! bounded work — so results are discarded.
 //!
-//! `#[doc(hidden)]` and semver-exempt: a test seam for the detached fuzz
-//! workspace, not public API. A smoke test below keeps it building in CI.
+//! `#[doc(hidden)]` and behind the private `__fuzz` Cargo feature, which is
+//! unstable and carries no semver promise: a test seam for the detached fuzz
+//! workspace and this crate's tests, not public API. Nothing outside this
+//! repository should enable it. A smoke test below keeps it building in CI.
 
 use crate::tier1::ebcot::mq::MqDecoder;
 use crate::tier1::ebcot::passes::{
@@ -232,17 +234,7 @@ pub fn icc_profile(data: &[u8]) {
     crate::jp2::SrgbPlan::read_profile(data);
 }
 
-/// How far above its cap [`with_code_block_work_cap`] lets a code-block bound
-/// go: the most a `Raised` factor or `Unlimited` sets is this times the cap.
-/// The `retry_ladder` target decodes at factors up to this, so its ladder
-/// sees the factors it asks for.
-pub const CODE_BLOCK_CAP_FACTOR: u64 = 4;
-
-/// The sample-passes [`with_code_block_work_cap`] charges for each sample a
-/// tile reconstructs. Under the fuzz build (ASan) a sample of a thin image
-/// with empty packets takes about as long to reconstruct as this many
-/// sample-passes of the slowest block data.
-pub const CAP_WORK_PER_SAMPLE: u64 = 4;
+pub use crate::pipeline::decode::{CAP_WORK_PER_SAMPLE, CODE_BLOCK_CAP_FACTOR};
 
 /// `options` with the code-block work bound set to `cap` sample-passes,
 /// so a fuzz target's time does not grow with the input's bytes. The bound

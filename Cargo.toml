@@ -55,7 +55,15 @@ rustdoc-args   = ["--cfg", "docsrs"]
 # the crate stays pure-Rust and cross-compiles to every target with no C toolchain.
 [dependencies]
 
+# Private and unstable, with no semver promise: turns on the hidden
+# `rust_j2k::fuzz` hooks that the detached fuzz workspace and this crate's
+# tests use. The dev-dependency below enables it for `cargo test`; a build with
+# default features does not export the hooks.
+[features]
+__fuzz = []
+
 [dev-dependencies]
+rust-j2k = { path = ".", features = ["__fuzz"] }
 # Test-only: deserialize the committed `<name>.expected.json` oracle snapshots
 # the conformance harness compares against. Pure-Rust, so the no-C-dependency
 # rule still holds; these never ship in the library.

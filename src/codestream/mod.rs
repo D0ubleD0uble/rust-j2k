@@ -297,9 +297,10 @@ pub fn parse_tiles_with(
     split_tiles_checked(bytes, parsed, strict, true)
 }
 
-pub(crate) use fault::{
-    KeptWalk, tile_parts_fault, tile_parts_fault_kept, tile_parts_walk, tile_parts_walk_kept,
-};
+pub(crate) use fault::{KeptWalk, tile_parts_walk, tile_parts_walk_kept};
+// Read only by the unit tests and the `__fuzz` hooks.
+#[cfg(any(test, feature = "__fuzz"))]
+pub(crate) use fault::{tile_parts_fault, tile_parts_fault_kept};
 
 /// Check the header of a tile's first tile-part, `tile`, as the tile walk
 /// reads it, so that a malformed tile-part header is a parse error rather

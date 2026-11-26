@@ -1269,6 +1269,7 @@ fn a_refine_refused_for_what_earlier_refines_spent_waits_on_bound_spent() {
     );
 }
 
+#[cfg(feature = "__fuzz")]
 /// `tiles_even_origin_lossless.j2k` with a tile `COD` of no wavelet levels
 /// in the header of its last tile, tile 8, so that a decode at reduction 1
 /// decodes tiles 0 to 7 and then fails on tile 8, before its packets.
@@ -1299,6 +1300,7 @@ fn last_tile_without_levels() -> Vec<u8> {
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// Check that a refine of `bytes` under `options`, refused only for what
 /// earlier refines spent of the code-block bound, waits on `BoundSpent`
 /// where `decode_with` with `strict` off gives `expected`, an error in a
@@ -1334,6 +1336,7 @@ fn check_later_tiles_wait(bytes: &[u8], options: &DecodeOptions, expected: Error
     check_finish("later tile", bytes, decoder, options);
 }
 
+#[cfg(feature = "__fuzz")]
 /// A refine refused only for what earlier refines spent of the code-block
 /// bound waits on `BoundSpent` where `decode_with` fails in a later tile:
 /// the refine skips the block decoding of the tiles before it, where
@@ -1349,6 +1352,7 @@ fn a_refine_refused_for_what_was_spent_waits_where_a_later_tile_fails() {
     check_later_tiles_wait(&bytes, &options, error);
 }
 
+#[cfg(feature = "__fuzz")]
 /// The `incremental/spent_bound_tier1_then_eph*.j2k` files, HT files the
 /// `incremental_decode` fuzz target found (#485): `decode_with` fails in
 /// the block decoding of one tile (an HT suffix length `Scup` out of
@@ -1405,6 +1409,7 @@ fn a_refine_refused_for_what_was_spent_waits_where_an_earlier_tile_fails_its_blo
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// `incremental/segsym_tiles_flipped.j2k`: a 64 x 64 file in 16 x 16 tiles
 /// with segmentation symbols, one byte of tile 0 flipped, so `decode_with`
 /// fails in tile 0's block decoding.
@@ -1412,9 +1417,11 @@ fn segsym_tiles_flipped() -> Vec<u8> {
     std::fs::read(fixtures().join("incremental/segsym_tiles_flipped.j2k")).unwrap()
 }
 
+#[cfg(feature = "__fuzz")]
 /// The byte `segsym_tiles_flipped` flips, from the encoder's output.
 const SEGSYM_FLIPPED_AT: usize = 200;
 
+#[cfg(feature = "__fuzz")]
 /// The code-block work a refine with nothing spent spends on `bytes` under
 /// `options`, and the bound it has.
 fn fresh_block_work(bytes: &[u8], options: &DecodeOptions) -> (u64, u64) {
@@ -1425,6 +1432,7 @@ fn fresh_block_work(bytes: &[u8], options: &DecodeOptions) -> (u64, u64) {
     (work, bound.unwrap())
 }
 
+#[cfg(feature = "__fuzz")]
 /// A refine refused for what earlier refines spent counts the later tiles'
 /// work without decoding them. Where that count passes the whole bound,
 /// `decode_with` still decodes the tiles before the one refused first, so
@@ -1485,6 +1493,7 @@ fn a_refine_refused_by_the_whole_bound_after_a_cut_waits_on_bound_spent() {
     assert_eq!(checked, 2 * 2 * (4640_u64.div_ceil(37) + 4));
 }
 
+#[cfg(feature = "__fuzz")]
 /// Where the count after a cut passes the whole bound and `decode_with`
 /// is refused by that bound too, the wait names the same tile and work as
 /// that refusal. On `segsym_tiles_flipped` with the byte flipped back, a
@@ -1530,6 +1539,7 @@ fn a_count_refused_where_decode_with_is_names_its_tile_and_work() {
     check_waiting("segsym_tiles", &why, &bytes, &options);
 }
 
+#[cfg(feature = "__fuzz")]
 /// The seed `incremental/t1bomb_row_128_8.seed` reaches the same path under
 /// the fuzz target's cap of 2^22: with all the bound spent, a refine is cut
 /// at tile 0 and its count passes the whole bound at tile 2, where
@@ -1558,6 +1568,7 @@ fn the_t1bomb_row_seed_counts_past_the_whole_bound_where_decode_with_is_refused(
     check_waiting("t1bomb_row_128_8", &why, &bytes, &options);
 }
 
+#[cfg(feature = "__fuzz")]
 /// The seed `incremental/bound_spent_stands_in_for_a_tile_cap_refusal.seed`
 /// is refused by `decode_with` at tile 1 for its precinct count. A probe
 /// decoder with the bound spent is cut at tile 0 and counts on to tile 1, so
@@ -1598,6 +1609,7 @@ fn the_bound_spent_seed_waits_on_bound_spent_where_decode_with_is_refused_by_a_t
     check_waiting("bound_spent", &why, &bytes, &options);
 }
 
+#[cfg(feature = "__fuzz")]
 /// Where no amount spent cuts a refine before the tile the whole bound
 /// refuses, it decoded every tile before that one, as `decode_with` does,
 /// and waits on the `WorkLimit` `decode_with` gives, detail and all. On
@@ -1899,6 +1911,7 @@ fn decode_with_the_decoders_options_gives_a_partial_image_after_a_change() {
     assert!(decoder.finish().is_err());
 }
 
+#[cfg(feature = "__fuzz")]
 /// Feed `decoder` the bytes of `bytes` up to `end`, change its reduction to
 /// `reduction` (or its layer cap to `layers`), and refine, which must be
 /// due: `end` is at least twice the bytes of the last try. The refine must
@@ -1946,6 +1959,7 @@ fn change_and_refine(
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// The prefixes a change test refines at: each twice the one before, so
 /// that each refine is due, up to the whole file.
 fn doubling(len: usize) -> Vec<usize> {
@@ -1956,6 +1970,7 @@ fn doubling(len: usize) -> Vec<usize> {
     ends
 }
 
+#[cfg(feature = "__fuzz")]
 /// The single-tile files the reduction tests change the reduction on: one
 /// walk, which always fits the room, so nothing is let go for memory.
 const ONE_TILE: [&str; 5] = [
@@ -1966,6 +1981,7 @@ const ONE_TILE: [&str; 5] = [
     "multilayer_multicomponent_lossless.j2k",
 ];
 
+#[cfg(feature = "__fuzz")]
 /// A change of the reduction alone, between refines at prefixes that
 /// double, keeps the packet walks: each refine gives the one-shot strict-off
 /// decode of its bytes under the new reduction, and no walk is charged as a
@@ -1998,6 +2014,7 @@ fn a_change_of_reduction_keeps_the_walks_and_refines_to_the_one_shot_decode() {
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// A change of the layer cap still lets the walks go, as they keep only
 /// the coding passes of the old cap: each refine gives the one-shot decode
 /// under the new cap, and the walks built again are charged.
@@ -2030,6 +2047,7 @@ fn a_change_of_the_layer_cap_walks_the_tiles_again() {
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// A codestream of two 2048 x 2048 tiles, one 8-bit component, 5/3, LRCP,
 /// 40000 layers, one wavelet level and 4x4 code-blocks, on an image 2112
 /// wide, so tile 1 is cut to 64 wide by its edge. Tile 1's tile-part comes
@@ -2056,6 +2074,7 @@ fn two_tiles_at_the_packet_bound() -> Vec<u8> {
     out
 }
 
+#[cfg(feature = "__fuzz")]
 /// Whether the one-shot strict-off decode of `bytes` at `reduction` is
 /// refused by the packet bound. It gives an image otherwise.
 fn refused_at_the_packet_bound(bytes: &[u8], reduction: u8) -> bool {
@@ -2067,6 +2086,7 @@ fn refused_at_the_packet_bound(bytes: &[u8], reduction: u8) -> bool {
     }
 }
 
+#[cfg(feature = "__fuzz")]
 /// At the packet bound, a refine after a change of the reduction alone is
 /// refused where the one-shot decode of its bytes is, with the same
 /// refusal, and gives the image where that decode does. The prefixes are

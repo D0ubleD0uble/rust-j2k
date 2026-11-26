@@ -22,6 +22,8 @@
 //! short, with the loss reported, is how this decoder already treated a
 //! tile-part cut inside its header (see `docs/openjpeg-departures.md`).
 
+#![cfg(feature = "__fuzz")]
+
 use rust_j2k::{DecodeOptions, IncrementalDecoder, Refined, ReportEntry, decode_with};
 
 /// The `SOT` offsets of a codestream, by the `Psot` chain.
