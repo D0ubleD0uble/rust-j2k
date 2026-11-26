@@ -58,7 +58,7 @@ fn main() {
         .collect();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 
-    let packaged = skip::excluded();
+    let packaged = skip::excluded_named("the built-in bench set");
     let mut files: Vec<PathBuf> = if packaged {
         Vec::new()
     } else {

@@ -314,9 +314,12 @@ prints a line with `left out of the published package`. Count them with
 `... 2>&1 | grep -o 'left out of the published package' | wc -l` and note the
 number; `grep -c '^skipped'` undercounts, because the harness's own output can
 share a line with a skip message. A test skips only where
-`tests/fixtures/.repo-only`, an empty file the package leaves out, is missing.
-In the repository the test fails instead if a fixture is missing, and with `CI`
-set a missing marker panics. A test skips all of its fixtures at once, so a
+`tests/fixtures/REPO_ONLY`, an empty file the package leaves out, is missing
+and there is no `.git` next to `Cargo.toml`. In the repository the test fails
+instead if a fixture is missing, and a missing marker in a git checkout panics,
+so a moved marker turns every CI job red. A packaged crate, `cargo vendor`
+output and a distro build have no `.git`, so they skip, whatever `CI` is set
+to. A test skips all of its fixtures at once, so a
 test that mixes packaged and excluded fixtures does not run on the packaged
 ones. The shared helper is `tests/support/skip.rs`. If `cargo test` reuses a
 stale build of the crate, run `cargo clean -p rust-j2k` in the unpacked

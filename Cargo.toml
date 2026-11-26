@@ -28,8 +28,8 @@ exclude = [
     "tests/fixtures/bench/",
     "tests/fixtures/openjph/",
     # The marker the test skip helper (tests/support/skip.rs) looks for: a test
-    # skips only where this file is missing, that is, in the package.
-    "tests/fixtures/.repo-only",
+    # skips only where this file is missing and there is no .git, that is, in the package.
+    "tests/fixtures/REPO_ONLY",
     "/.claude/",
     "/.github/",
     "/.gitattributes",

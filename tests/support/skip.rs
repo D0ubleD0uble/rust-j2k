@@ -5,11 +5,15 @@
 //! conformance testing only, and the others are large. A test that reads one
 //! calls [`excluded`] first and returns when it is `true`.
 //!
-//! The test skips only when [`MARKER`] is missing. The marker is a file the
-//! package also leaves out, so a checkout of the repository always has it. In
-//! the repository a missing fixture therefore fails the test, which reads it
-//! with a hard `expect` after the skip check; only the unpacked package skips.
-//! A test that skips does so for all of its fixtures at once.
+//! The test skips only when [`MARKER`] is missing and the crate directory is
+//! not a git checkout. The marker is a file the package also leaves out, so a
+//! checkout of the repository always has it. In the repository a missing
+//! fixture therefore fails the test, which reads it with a hard `expect` after
+//! the skip check. A missing marker in a git checkout (a `.git` directory, or
+//! a `.git` file in a worktree, next to `Cargo.toml`) panics, so a moved or
+//! deleted marker fails every checkout instead of skipping quietly. The
+//! unpacked package, `cargo vendor` output and distro builds have no `.git`,
+//! so they skip. A test that skips does so for all of its fixtures at once.
 //!
 //! This file is shared: `tests/support/mod.rs` and the `src/` unit tests
 //! (through `#[path]` in `src/lib.rs`) both include it, and a few integration
@@ -22,28 +26,41 @@ use std::path::Path;
 /// An empty tracked file that `Cargo.toml` excludes from the package, so it
 /// is in every checkout of the repository and never in the package. The skip
 /// depends on it: keep it in the repository and in the `exclude` list.
-const MARKER: &str = "tests/fixtures/.repo-only";
+const MARKER: &str = "tests/fixtures/REPO_ONLY";
 
 /// `true` when this is the published package, which has no excluded fixtures.
 /// The caller then returns. Says on stderr which test was skipped.
 ///
-/// Panics instead when the `CI` environment variable is set (GitHub Actions
-/// sets it) and the marker is missing: CI runs the repository, so a missing or
-/// moved marker must turn it red rather than skip every test quietly.
+/// Panics instead when the marker is missing in a git checkout.
 ///
 /// The line goes straight to stderr rather than through `eprintln!`, so the
 /// test harness shows it for a passing test without `--nocapture`.
+#[allow(dead_code)]
 #[track_caller]
 pub fn excluded() -> bool {
-    let marker = Path::new(env!("CARGO_MANIFEST_DIR")).join(MARKER).exists();
-    let skip = decide(marker, std::env::var_os("CI").is_some());
+    excluded_as(None)
+}
+
+/// [`excluded`] for something that is not a test (the bench), named in the
+/// skip line as `what`.
+#[allow(dead_code)]
+#[track_caller]
+pub fn excluded_named(what: &str) -> bool {
+    excluded_as(Some(what))
+}
+
+#[track_caller]
+fn excluded_as(what: Option<&str>) -> bool {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let skip = decide(root.join(MARKER).exists(), root.join(".git").exists());
     if skip {
         let at = Location::caller();
         let thread = std::thread::current();
+        let name = what.or(thread.name()).unwrap_or("a test");
         let _ = writeln!(
             std::io::stderr(),
             "skipped {} ({}:{}): the fixtures it reads are left out of the published package",
-            thread.name().unwrap_or("a test"),
+            name,
             at.file(),
             at.line()
         );
@@ -51,17 +68,17 @@ pub fn excluded() -> bool {
     skip
 }
 
-/// Whether to skip for a marker state and `CI` setting, panicking where a
-/// skip in CI would hide a missing marker. `src/lib.rs` tests it.
+/// Whether to skip for a marker state and a git checkout, panicking where a
+/// skip would hide a missing marker. `src/lib.rs` tests it.
 #[track_caller]
-pub fn decide(marker_present: bool, ci: bool) -> bool {
+pub fn decide(marker_present: bool, git_checkout: bool) -> bool {
     if marker_present {
         return false;
     }
     let at = Location::caller();
     assert!(
-        !ci,
-        "{}:{}: the marker {MARKER} is missing while CI is set; it must be in the repository",
+        !git_checkout,
+        "{}:{}: the marker {MARKER} is missing in a git checkout; it must be in the repository",
         at.file(),
         at.line()
     );

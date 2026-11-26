@@ -1848,13 +1848,13 @@ mod skip_tests {
     }
 
     #[test]
-    fn a_missing_marker_skips_outside_ci() {
+    fn no_marker_and_no_git_skips() {
         assert!(decide(false, false));
     }
 
     #[test]
-    #[should_panic(expected = "while CI is set")]
-    fn a_missing_marker_panics_in_ci() {
+    #[should_panic(expected = "in a git checkout")]
+    fn no_marker_in_a_git_checkout_panics() {
         decide(false, true);
     }
 }
