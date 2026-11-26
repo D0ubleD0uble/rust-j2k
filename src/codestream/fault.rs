@@ -1,5 +1,5 @@
 //! The walk of the tile-parts that looks for a fault and keeps no tile
-//! record: [`tile_parts_fault`] gives the error [`parse_tiles_with`] gives,
+//! record: `tile_parts_fault` gives the error [`parse_tiles_with`] gives,
 //! in time linear in the input and with heap that grows with the tile count
 //! and, for the tiles whose later tile-parts restate their own coding with
 //! headers that differ, with those tiles' first tile-part headers.
@@ -16,7 +16,7 @@
 //! walks are kept in step
 //! by a differential over every committed codestream and header seed in
 //! `tests.rs`, and over fuzzed input by the `header` fuzz target
-//! ([`crate::fuzz::tile_parts_walks_agree`]). [`tile_parts_fault_kept`]
+//! (`fuzz::tile_parts_walks_agree`). `tile_parts_fault_kept`
 //! keeps the walk between calls on an input that grows, with `strict` off,
 //! and the same differential holds it to a walk from the start on growing
 //! prefixes.
@@ -132,17 +132,18 @@ impl Offsets {
 /// its first tile-part gives ([`Walk::restating`]). A tile's header is
 /// checked as its first tile-part is read, as the tile walk checks it, so a
 /// tile at fault is resolved in full from the header in hand.
+#[cfg(any(test, feature = "__fuzz"))]
 pub(crate) fn tile_parts_fault(bytes: &[u8], parsed: &ParsedHeader, strict: bool) -> Option<Error> {
     tile_parts_walk(bytes, parsed, strict).err()
 }
 
-/// The walk of [`tile_parts_fault`]: its error, or whether it closed, as
+/// The walk of `tile_parts_fault`: its error, or whether it closed, as
 /// [`Codestream::closed`](super::Codestream::closed) says of the tile walk.
 pub(crate) fn tile_parts_walk(bytes: &[u8], parsed: &ParsedHeader, strict: bool) -> Result<bool> {
     Walk::new(bytes, parsed).run(bytes, parsed, strict, &mut None)
 }
 
-/// The walk of [`tile_parts_fault_kept`], kept for its next call on an
+/// The walk of `tile_parts_fault_kept`, kept for its next call on an
 /// input that extends this one: where the walk stood after the last
 /// tile-part it read whose end, by a `Psot` other than 0, is followed by an
 /// `SOT` in the input. Every step before there read only bytes before
@@ -166,6 +167,7 @@ pub(crate) struct KeptWalk {
 /// `strict` on it walks from the start and leaves `kept` as it is: the
 /// `TNsot` look-ahead's answer then decides the walk's steps, and it reads
 /// the bytes past them.
+#[cfg(any(test, feature = "__fuzz"))]
 pub(crate) fn tile_parts_fault_kept(
     bytes: &[u8],
     parsed: &ParsedHeader,
@@ -175,7 +177,7 @@ pub(crate) fn tile_parts_fault_kept(
     tile_parts_walk_kept(bytes, parsed, strict, kept).err()
 }
 
-/// The walk of [`tile_parts_fault_kept`]: its error, or whether it closed
+/// The walk of `tile_parts_fault_kept`: its error, or whether it closed
 /// (see [`tile_parts_walk`]).
 pub(crate) fn tile_parts_walk_kept(
     bytes: &[u8],

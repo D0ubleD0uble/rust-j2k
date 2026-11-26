@@ -70,6 +70,7 @@ impl CleanupBound {
     }
 }
 
+#[cfg(any(test, feature = "__fuzz"))]
 /// Decode one HT code-block, for the fuzz hook (`crate::fuzz::ht_block`),
 /// which holds no [`BlockCoder`].
 pub(crate) fn decode_ht_block(

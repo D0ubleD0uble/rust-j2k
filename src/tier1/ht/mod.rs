@@ -18,7 +18,7 @@
 //! significant (7.5).
 //!
 //! The rest of tier-1 reaches this module only through
-//! [`BlockCoder`](super::BlockCoder): [`decode`] and [`passes_run`].
+//! [`BlockCoder`](super::BlockCoder): `decode` and [`passes_run`].
 
 #[cfg(test)]
 mod tests;
@@ -85,6 +85,7 @@ pub(super) struct Params {
 /// as the Part 1 coder undoes it, by H.1: a magnitude at or above `2^(s + 1)`
 /// at double scale is region and comes down `s` planes; one below is
 /// background and stays (see `undo_maxshift`).
+#[cfg(any(test, feature = "__fuzz"))]
 pub(super) fn decode(block: &CodeBlock<'_>, numbps: u32, params: Params) -> Result<Vec<i32>> {
     let mut scratch = Scratch::default();
     decode_into(block, numbps, params, &mut scratch)?;
@@ -135,7 +136,7 @@ fn zeroed<T: Clone + Default>(buffer: &mut Vec<T>, len: usize) {
     buffer.resize(len, T::default());
 }
 
-/// [`decode`] into `scratch`, whose coefficients hold the block until its
+/// `decode` into `scratch`, whose coefficients hold the block until its
 /// next decode.
 pub(super) fn decode_into<'s>(
     block: &CodeBlock<'_>,
@@ -266,7 +267,7 @@ fn fill(block: &CodeBlock<'_>, numbps: u32, params: Params, scratch: &mut Scratc
     Ok(())
 }
 
-/// The coding passes [`decode`] runs on `block` in a subband of `numbps`
+/// The coding passes `decode` runs on `block` in a subband of `numbps`
 /// magnitude bit-planes, under a maxshift of `roi_shift`. See [`z_blk`].
 pub(super) fn passes_run(block: &CodeBlock<'_>, numbps: u32, roi_shift: u8) -> u64 {
     u64::from(z_blk(block, numbps + u32::from(roi_shift)))

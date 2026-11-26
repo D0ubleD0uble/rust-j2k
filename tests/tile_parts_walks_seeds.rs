@@ -5,6 +5,8 @@
 //! files, so the prefixes are what reach the walks' handling of input that
 //! ends early.
 
+#![cfg(feature = "__fuzz")]
+
 use std::path::{Path, PathBuf};
 
 fn fixtures() -> PathBuf {

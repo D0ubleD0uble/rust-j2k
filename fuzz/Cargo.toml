@@ -19,6 +19,7 @@ libfuzzer-sys = "0.4"
 
 [dependencies.rust-j2k]
 path = ".."
+features = ["__fuzz"]
 
 # One binary per target. `decode` drives the public entry point.
 [[bin]]

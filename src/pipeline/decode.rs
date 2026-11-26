@@ -18,6 +18,18 @@ use crate::{
     incremental, jp2, limit_hint, mct, samples, tier1, tier2, window,
 };
 
+/// How far above its cap `fuzz::with_code_block_work_cap` lets a code-block
+/// bound go: the most a `Raised` factor or `Unlimited` sets is this times the
+/// cap. The `retry_ladder` fuzz target decodes at factors up to this, so its
+/// ladder sees the factors it asks for.
+pub const CODE_BLOCK_CAP_FACTOR: u64 = 4;
+
+/// The sample-passes `fuzz::with_code_block_work_cap` charges for each sample
+/// a tile reconstructs. Under the fuzz build (ASan) a sample of a thin image
+/// with empty packets takes about as long to reconstruct as this many
+/// sample-passes of the slowest block data.
+pub const CAP_WORK_PER_SAMPLE: u64 = 4;
+
 /// The [`Header`] that [`read_header_with`](crate::read_header_with) returns
 /// for `bytes` under `options`.
 pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Header> {
@@ -235,7 +247,7 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// with no tile over a cap under the main header is still read no further
 /// than the first `SOT`. A refusal or a stop at a budget gives the decode's
 /// error for the tile-parts where its parse would find one, with `strict`
-/// on or off ([`codestream::tile_parts_fault`], a walk that keeps no tile
+/// on or off (`codestream::tile_parts_fault`, a walk that keeps no tile
 /// record).
 ///
 /// With [`Hold::UntilClosed`], a refusal with no fault in the tile-parts is
@@ -323,9 +335,9 @@ enum Hold {
 }
 
 /// The walk of the tile-parts for the decode's error for them
-/// ([`codestream::tile_parts_fault`]): from the start, or, for a call that
+/// (`codestream::tile_parts_fault`): from the start, or, for a call that
 /// keeps, from where the last such call left it on the start of the same
-/// input ([`codestream::tile_parts_fault_kept`]).
+/// input (`codestream::tile_parts_fault_kept`).
 #[derive(Default)]
 struct Faults {
     /// Whether the call keeps.
@@ -958,7 +970,7 @@ impl<'a> Rescue<'a> {
 
     /// The error for a tile whose own tile-part header is at fault: the
     /// decode's error for the tile-parts, with
-    /// `strict` as the read has it ([`codestream::tile_parts_fault`]), as
+    /// `strict` as the read has it (`codestream::tile_parts_fault`), as
     /// the decode parses every tile-part before it counts any tile. A
     /// tile-part header at fault is one that parse finds, if it finds no
     /// fault before it, except, with `strict` off, a fault the input may
@@ -1010,7 +1022,7 @@ impl<'a> Rescue<'a> {
     /// before it counts a tile, so it refuses the file for the first fault
     /// its parse finds (in any tile's tile-part headers, or the chain), or
     /// for the missing tile, and never gets to the count. This is the error
-    /// of that parse ([`codestream::tile_parts_fault`]), which reads the
+    /// of that parse (`codestream::tile_parts_fault`), which reads the
     /// main header in place, the tile-part headers and not the tile data,
     /// and keeps no tile record. `None` only if the parse finds no fault,
     /// which the walk finding no tile-part rules out.
@@ -1469,10 +1481,7 @@ fn decode_codestream(
     // `fuzz::with_code_block_work_cap`).
     let (block_default, block_ceiling) = match options.code_block_work_cap {
         None => (tier1::decode_work(bytes), None),
-        Some(cap) => (
-            cap,
-            Some(cap.saturating_mul(crate::fuzz::CODE_BLOCK_CAP_FACTOR)),
-        ),
+        Some(cap) => (cap, Some(cap.saturating_mul(CODE_BLOCK_CAP_FACTOR))),
     };
     // The whole code-block bound, which a decode of these bytes on its own
     // is held to.
@@ -1733,8 +1742,7 @@ fn decode_codestream(
                     .filter_map(|c| cs.header.siz.tile_component_rect(tile.index, c))
                     .map(|rect| rect.reduced(reduction).area())
                     .fold(0, u64::saturating_add);
-                work =
-                    work.saturating_add(samples.saturating_mul(crate::fuzz::CAP_WORK_PER_SAMPLE));
+                work = work.saturating_add(samples.saturating_mul(CAP_WORK_PER_SAMPLE));
             }
             if let Some(own) = &mut counting {
                 if work > full_blocks.saturating_sub(*own) {

@@ -2,6 +2,8 @@
 //! reported exactly when the input does not end in `FF D9`, whether the input
 //! is cut inside the tile-part's header or inside its data.
 
+#![cfg(feature = "__fuzz")]
+
 #[path = "support/synth.rs"]
 mod synth;
 use synth::{cod_body, qcd_none_body, seg, siz_body, tile_part};
