@@ -113,7 +113,7 @@ differential checks and mutation testing that are not listed here.
 
 Semantic Versioning. While the decoder's coverage is still widening (see
 `docs/roadmap.md`), expect `0.x` minor bumps to carry behavioral and possibly
-API changes. What the public API covers, and what can change, is
-in [`docs/stability.md`](docs/stability.md). `1.0.0` is
+API changes. [`docs/stability.md`](docs/stability.md) says what the public
+API covers and what can change. `1.0.0` is
 reserved for when Part 1 decode coverage is general rather than the GRIB2
 subset.

@@ -4,9 +4,8 @@ This page says what a caller can rely on from one release to the next, and
 what can change.
 
 The crate follows [Semantic Versioning](https://semver.org/). While the
-version is `0.x`, a change that breaks a caller needs a new minor version
-(`0.6` to `0.7`), and a patch release (`0.6.0` to `0.6.1`) does not break
-one. The CHANGELOG lists each breaking change under "Migrating from".
+version is `0.x`, a change that breaks a caller needs a new minor version,
+and a patch release does not break one. The CHANGELOG lists each breaking change under "Migrating from".
 
 ## What is covered
 
@@ -60,9 +59,9 @@ fields without a breaking change, so match on it with a `_` arm or `..`.
 ### `DecodeOptions` equality
 
 `DecodeOptions` implements `PartialEq` and `Eq`, and that is covered:
-removing `Eq` would break a caller. So an option held as a float, such as a
-gamma or a color tolerance, can only be added as a type that implements
-`Eq`.
+removing `Eq` would break a caller. So every new option must implement
+`Eq` too: a float setting, such as a gamma or a color tolerance, would need
+a wrapper type.
 
 Equality is structural: it compares the settings as stored, not the decodes
 they give. `Region::Whole` and a `Region::Window` that covers the whole
@@ -87,7 +86,8 @@ refusal of a tile. A later release can set it for more refusals, so handle
 
 ### `Waiting::Held`
 
-One `Waiting::Held` covers three ways a held error resolves:
+`Waiting::Held` carries an error that more bytes can still replace. One
+variant covers several ways it resolves, among them:
 
 - In a codestream, the first refine that decodes once the `EOC` is in gives
   the final answer.
@@ -96,9 +96,9 @@ One `Waiting::Held` covers three ways a held error resolves:
 - A refusal of the sRGB step is final or held, depending on whether a box
   after the codestream can still be read.
 
-The value does not say which. It is covered without a field that says why,
-on purpose: `Held` is `#[non_exhaustive]`, so a `reason` field can be added
-later without a break.
+The value does not say which, and that is deliberate: `Held` is
+`#[non_exhaustive]`, so a field that says why can be added without a
+break.
 
 ### When an error from the incremental decoder is final
 
@@ -127,7 +127,8 @@ Every other error from `header` and `refine` is final.
 
 - The main header is not complete yet.
 - In a JP2 file, a fault in a box before the codestream is held, because
-  more bytes could change it, as with a `jp2h` or `ftyp` box of length 0.
+  more bytes could change it, such as a `jp2h` or `ftyp` box of length 0,
+  or one cut inside its `XLBox`.
 
 `refine` tells the two apart: it waits with `Waiting::HeaderIncomplete` for
 the first and with `Waiting::Held { error }` for the second. `finish`
@@ -157,18 +158,18 @@ stable. The values today:
 
 - The sample limit: 2^29 samples, or 8 samples per byte of input when that
   is more.
-- The caps on a tile: one code-block for each 512 samples the sample limit
-  allows and one precinct for each 2048, and at least 2^20 code-blocks and
-  2^18 precincts.
+- The caps on a tile: the larger of 2^20 code-blocks and one for each 512
+  samples the sample limit allows, and the larger of 2^18 precincts and one
+  for each 2048.
 - The packet work bound: 2^24 steps, or 32 per byte of tile data when that
   is more.
 - The code-block work bound: 2^26 sample-passes, or 2^15 per byte of tile
   data when that is more.
 - The guards no option raises: at most 32 `POC` volumes in a tile, and at
   most 30 bit-planes in a code-block.
-- For an `IncrementalDecoder`: the walks it keeps hold at most the larger of
-  1 MiB and 32 bytes per byte fed, and the walks it does again spend at most
-  about four times the packet bound of one decode before a refine waits with
+- For an `IncrementalDecoder`: the packet walks it keeps take at most the
+  larger of 1 MiB and 32 bytes per byte fed. Once the walks it does again
+  pass four times the packet bound of one decode, a refine waits with
   `Waiting::RepeatLimit`.
 
 The memory and time figures in the rustdoc, [SECURITY.md](../SECURITY.md)

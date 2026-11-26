@@ -72,12 +72,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `docs/stability.md` says what the API covers within a minor version: the
-  types, variants, limit kinds and accessors, what `retry_with` means, the
-  variant each fault gives, and how `IncrementalDecoder` holds and reports
-  errors. It also lists what can change: message and `Display` text, the
-  default limit values, the minimum Rust version, and which fault is
-  reported first. The crate docs, `Error` and the README link to it. The
+- `docs/stability.md` says what the API covers within a minor version and
+  what can change: message and `Display` text, the default limit values, the
+  minimum Rust version, and which fault is reported first. The
   `Error::message` example no longer pins the `Display` format (#515).
 - `IncrementalDecoder::header` reads the header of the bytes fed so far
   (`Ok(None)` until the main header is whole), and
