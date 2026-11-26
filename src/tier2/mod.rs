@@ -2052,10 +2052,14 @@ fn parse_packet(
         if partial {
             return Ok(Packet::Ended);
         }
-        return Err(Error::codestream(format!(
-            "the data of tile {} ends before the last packet",
-            streams.tile
-        )));
+        // Packed, the headers ran out in their `PPM` or `PPT` bytes, not in
+        // the tile data, so the message says which.
+        let tile = streams.tile;
+        return Err(Error::codestream(if streams.packed {
+            format!("the packed packet headers of tile {tile} end before the last packet")
+        } else {
+            format!("the data of tile {tile} ends before the last packet")
+        }));
     }
 
     let mut bio = BitReader::new(&streams.header[streams.header_pos..]);

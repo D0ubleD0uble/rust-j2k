@@ -278,10 +278,10 @@ fn partial(bytes: &[u8]) -> String {
 /// A `PPM` whose `Nppm`s are all 0 is read: no prefix gives a `PPM` error.
 ///
 /// Until the input holds the first `SOT` marker the main header is cut
-/// short. From there `read_header_with` and the incremental `header` succeed. The
-/// tile-parts have no packet header, so a strict decode refuses the whole
-/// file ("the data of tile 0 ends before the last packet") and a decode
-/// with `strict` off returns the image with the packets reported missing,
+/// short. From there `read_header_with` and the incremental `header`
+/// succeed. The tile-parts have no packet header, so a strict decode
+/// refuses the whole file ("the packed packet headers of tile 0 end before
+/// the last packet") and a decode with `strict` off returns the image with the packets reported missing,
 /// its sample 128 (all coefficients 0). No prefix decodes to 176: the data
 /// is not read for packet headers. From the settled prefix on, `finish`
 /// gives what `decode_with` gives, and a `refine` that decodes gives what
@@ -373,7 +373,7 @@ fn a_ppm_whose_nppms_are_all_zero_is_read_on_every_prefix() {
         }
         assert_eq!(
             outcome(decode_with(&bytes, &options(true))),
-            "Codestream(\"the data of tile 0 ends before the last packet\")",
+            "Codestream(\"the packed packet headers of tile 0 end before the last packet\")",
             "{name}"
         );
         assert_eq!(

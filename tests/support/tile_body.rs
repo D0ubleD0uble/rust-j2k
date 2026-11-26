@@ -34,8 +34,10 @@ fn steer(body: &mut &[u8]) -> u8 {
 /// partition, 4 the bypass (lazy) code-block style, 5 POC volumes over the
 /// widened geometry, 6 a 2×2 tile grid with interleaved tile-parts, 7 packed
 /// packet headers (bit 6 picks PPM over PPT). Shapes 4, 5, and 7 read steering
-/// bytes off the front of `body`. Every shape stays a byte-perfect header so
-/// the body reaches the packet reader. Bit 7 makes the code-blocks HT, and bit 6
+/// bytes off the front of `body`. Every shape's main and tile-part headers
+/// are read, whatever the body, so the body reaches the packet reader: the
+/// `PPM` and `PPT` segments split only where A.7.4 and A.7.5 allow, and none
+/// is empty. Bit 7 makes the code-blocks HT, and bit 6
 /// with it (shapes 0 to 6) makes them MIXED; MIXED shape 4 drops the bypass and
 /// terminate-each-pass flags, which A.4 forbids.
 pub fn wrap(variant: u8, body: &[u8]) -> Vec<u8> {
@@ -197,14 +199,21 @@ pub fn wrap_roi(variant: u8, roi: u8, mut body: &[u8]) -> Vec<u8> {
     }
     if shape == 7 && use_ppm {
         // PPM: `Nppm` (the chunk length for the single tile-part) + the packed
-        // headers, carried by two marker segments emitted in reverse `Zppm`
-        // order — the split may fall inside `Nppm` itself, so the stitch (sort
-        // by `Zppm`, join, then read chunk lengths) is exercised end to end.
+        // headers. With any packed bytes they are carried by two marker
+        // segments emitted in reverse `Zppm` order, split inside the chunk's
+        // bytes, so the stitch (sort by `Zppm`, join, then read chunk lengths)
+        // is exercised end to end. The split never falls inside `Nppm`, which
+        // A.7.4 forbids, and neither segment is empty (`Lppm` 3 is refused).
+        // An empty chunk (`Nppm` 0) is one segment.
         let mut joined = (packed.len() as u32).to_be_bytes().to_vec();
         joined.extend_from_slice(packed);
-        let mid = joined.len() / 2;
-        bytes.extend_from_slice(&seg(0xFF60, &[&[1u8], &joined[mid..]].concat()));
-        bytes.extend_from_slice(&seg(0xFF60, &[&[0u8], &joined[..mid]].concat()));
+        if packed.is_empty() {
+            bytes.extend_from_slice(&seg(0xFF60, &[&[0u8], &joined[..]].concat()));
+        } else {
+            let mid = 4 + packed.len() / 2;
+            bytes.extend_from_slice(&seg(0xFF60, &[&[1u8], &joined[mid..]].concat()));
+            bytes.extend_from_slice(&seg(0xFF60, &[&[0u8], &joined[..mid]].concat()));
+        }
     }
 
     if multi_tile {
@@ -226,10 +235,17 @@ pub fn wrap_roi(variant: u8, roi: u8, mut body: &[u8]) -> Vec<u8> {
         let mut rest = Vec::new();
         if shape == 7 && !use_ppm {
             // PPT: the packed headers split across two marker segments emitted
-            // in reverse `Zppt` order, exercising the in-tile-part stitch.
-            let mid = packed.len() / 2;
-            rest.extend_from_slice(&seg(0xFF61, &[&[1u8], &packed[mid..]].concat()));
-            rest.extend_from_slice(&seg(0xFF61, &[&[0u8], &packed[..mid]].concat()));
+            // in reverse `Zppt` order, exercising the in-tile-part stitch. A
+            // `PPT` holds at least one byte (`Lppt` 3 is refused), so one byte
+            // is one segment, and no packed byte is no `PPT`: the headers are
+            // then inline.
+            if packed.len() >= 2 {
+                let mid = packed.len() / 2;
+                rest.extend_from_slice(&seg(0xFF61, &[&[1u8], &packed[mid..]].concat()));
+                rest.extend_from_slice(&seg(0xFF61, &[&[0u8], &packed[..mid]].concat()));
+            } else if !packed.is_empty() {
+                rest.extend_from_slice(&seg(0xFF61, &[&[0u8], packed].concat()));
+            }
         }
         rest.extend_from_slice(&0xFF93u16.to_be_bytes()); // SOD
         rest.extend_from_slice(body);
