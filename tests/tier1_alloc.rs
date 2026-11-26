@@ -17,6 +17,8 @@
 
 #[path = "support/alloc.rs"]
 mod alloc;
+#[path = "support/skip.rs"]
+mod skip;
 use alloc::ALLOCATIONS;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -37,12 +39,12 @@ fn fnv1a64(samples: &[i32]) -> String {
 
 #[test]
 fn many_small_blocks_allocate_little_per_block() {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bench");
     // `tests/fixtures/bench/` is left out of the published package.
-    let Ok(bytes) = std::fs::read(dir.join("small_blocks_128_b4.j2k")) else {
-        eprintln!("tier1_alloc: fixture not present (packaged crate?); skipping");
+    if skip::excluded() {
         return;
-    };
+    }
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bench");
+    let bytes = std::fs::read(dir.join("small_blocks_128_b4.j2k")).expect("the bench fixture");
     let expected: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(dir.join("small_blocks_128_b4.expected.json")).unwrap(),
     )

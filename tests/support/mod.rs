@@ -26,6 +26,7 @@ pub mod inconsistent;
 pub mod jp2;
 pub mod part4;
 pub mod pgx;
+pub mod skip;
 pub mod synth;
 
 use std::fmt;

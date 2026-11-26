@@ -520,6 +520,9 @@ fn tile_data(bytes: &[u8]) -> &[u8] {
 /// 144 bytes after packet 12's header.
 #[test]
 fn ds0_ht_02_b11_resolution_0_by_hand() {
+    if crate::skip::excluded() {
+        return;
+    }
     let bytes = read_codestream("ds0_ht_02_b11.j2k");
     // The packets, each `SOP` header `EPH` body, and the headers and bodies
     // of resolution 0.
@@ -603,6 +606,9 @@ fn ds0_ht_02_b11_resolution_0_by_hand() {
 /// bytes after L6's header, which ends 18 bytes into the tile.
 #[test]
 fn ds0_ht_05_b11_component_0_resolution_0_by_hand() {
+    if crate::skip::excluded() {
+        return;
+    }
     let bytes = read_codestream("ds0_ht_05_b11.j2k");
     let data = tile_data(&bytes);
     assert_eq!(
@@ -1049,6 +1055,9 @@ fn codestream_of<'a>(bytes: &'a [u8], entry: &serde_json::Value) -> &'a [u8] {
 /// whole), the two counts agree. Run with `--nocapture` for the counts.
 #[test]
 fn the_corpus_pass_counts_are_the_manifests() {
+    if crate::skip::excluded() {
+        return;
+    }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let sets: [(&Path, &str, &[&str]); 2] = [
         (&ht_dir(), "conformance/ht", &["codestreams", "jph"]),

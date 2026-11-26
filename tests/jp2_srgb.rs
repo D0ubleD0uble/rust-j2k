@@ -62,6 +62,9 @@ fn sycc_fixtures_match_openjpeg_within_one() {
 /// default decode sample for sample.
 #[test]
 fn srgb_and_gray_files_pass_through() {
+    if support::skip::excluded() {
+        return;
+    }
     for n in [1, 4, 6, 9] {
         let bytes = conformance(n);
         let coded = decode(&bytes).unwrap_or_else(|e| panic!("file{n}: {e}"));
@@ -75,6 +78,9 @@ fn srgb_and_gray_files_pass_through() {
 /// default decode differs from the `Srgb` one.
 #[test]
 fn the_default_is_as_coded() {
+    if support::skip::excluded() {
+        return;
+    }
     assert_eq!(DecodeOptions::default().color(), &ColorOutput::AsCoded);
     for n in [2, 3, 5, 7, 8] {
         let bytes = conformance(n);
@@ -88,6 +94,9 @@ fn the_default_is_as_coded() {
 /// output is refused.
 #[test]
 fn raw_channels_with_srgb_is_invalid_options() {
+    if support::skip::excluded() {
+        return;
+    }
     let options = srgb().with_raw_channels(true);
     assert!(matches!(
         decode_with(&conformance(1), &options),

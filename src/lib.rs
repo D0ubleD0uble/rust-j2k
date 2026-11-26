@@ -1829,3 +1829,9 @@ pub(crate) use pipeline::decode::tile_bytes;
 #[cfg(test)]
 #[path = "../tests/support/synth.rs"]
 mod synth;
+
+// The skip for a test whose fixture the published package leaves out; the
+// integration tests include the same file.
+#[cfg(test)]
+#[path = "../tests/support/skip.rs"]
+mod skip;

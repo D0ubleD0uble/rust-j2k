@@ -5132,6 +5132,9 @@ fn cpf_number(cpf: &markers::Cpf) -> u64 {
 /// log records, and the whole header parses, the MIXED files' included.
 #[test]
 fn the_ht_corpus_decodes_its_cap_and_cpf_and_parses() {
+    if crate::skip::excluded() {
+        return;
+    }
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/conformance/ht/codestreams");
     let mut names: Vec<String> = std::fs::read_dir(&dir)
@@ -5310,6 +5313,9 @@ fn sot_at_reads_what_decode_sot_admits() {
 /// each `SOT` of the first tile-parts is also changed a byte at a time.
 #[test]
 fn the_fault_walk_gives_the_tile_parts_parse_error_on_every_fixture() {
+    if crate::skip::excluded() {
+        return;
+    }
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut dirs = vec![root.join("tests/fixtures"), root.join("fuzz/corpus")];
     let mut files = Vec::new();

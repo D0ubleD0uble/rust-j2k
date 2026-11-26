@@ -127,6 +127,9 @@ fn markers(bytes: &[u8], code: u8) -> Vec<usize> {
 /// `PLT` and `TLM`, and `POC` volumes in the main and tile-part headers.
 #[test]
 fn every_byte_refines_to_the_one_shot_decode_of_its_prefix() {
+    if crate::skip::excluded() {
+        return;
+    }
     for name in [
         "layers/lrcp.j2k",
         "layers/rpcl.j2k",
@@ -948,6 +951,9 @@ fn capped(cap: u64) -> DecodeOptions {
 /// it waits on `WorkLimit`, as a decode of it on its own is refused.
 #[test]
 fn a_refine_whose_own_work_is_the_whole_bound_waits_on_bound_spent() {
+    if crate::skip::excluded() {
+        return;
+    }
     let bytes = fixture("bench/small_blocks_128_b4.j2k");
     let work = own_work(&bytes, &capped(u64::MAX / 8));
     let options = capped(work);
@@ -1316,6 +1322,9 @@ fn set_options(decoder: &mut IncrementalDecoder, options: &DecodeOptions) {
 /// `POC` volume in a later tile-part, and the MIXED HT files.
 #[test]
 fn options_changed_between_refines_refine_to_the_one_shot_decode_of_their_prefix() {
+    if crate::skip::excluded() {
+        return;
+    }
     let mut names: Vec<String> = [
         "tiles_multipart_lossless.j2k",
         "layers/precincts_pterm.j2k",

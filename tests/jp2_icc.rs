@@ -151,6 +151,9 @@ fn variants() -> Vec<Variant> {
 /// sample for sample: 8-bit output for files 5 and 8, 16-bit for file7.
 #[test]
 fn icc_conformance_variants_match_openjpeg_exactly() {
+    if support::skip::excluded() {
+        return;
+    }
     let all = variants();
     assert_eq!(all.len(), 21, "three files x seven variants");
     for v in &all {
@@ -172,6 +175,9 @@ fn icc_conformance_variants_match_openjpeg_exactly() {
 /// covers the conformance files as shipped.
 #[test]
 fn the_intent_0_variants_are_the_files_as_shipped() {
+    if support::skip::excluded() {
+        return;
+    }
     for v in variants().iter().filter(|v| v.variant == "intent0") {
         let bytes = read(&format!("conformance/jp2/{}", v.file));
         let (start, _) = profile_span(&bytes);
@@ -191,6 +197,9 @@ fn the_intent_0_variants_are_the_files_as_shipped() {
 /// oracle would catch an ignored `wtpt`.
 #[test]
 fn the_white_point_variants_differ_from_intent_3() {
+    if support::skip::excluded() {
+        return;
+    }
     let all = variants();
     for file in ["files/file5.jp2", "files/file7.jp2", "files/file8.jp2"] {
         let of = |name: &str| {
@@ -377,6 +386,9 @@ fn wrap_sycc(codestream: &[u8]) -> Vec<u8> {
 /// which describe the file as declared.
 #[test]
 fn sycc_and_rgb_profiles_on_fewer_than_three_channels_pass_through() {
+    if support::skip::excluded() {
+        return;
+    }
     let one = read("multilayer_lossless.j2k");
     let two = read("cblksty_bypass_lossless.j2k");
     for (codestream, channels) in [(&one, 1), (&two, 2)] {
@@ -405,6 +417,9 @@ fn sycc_and_rgb_profiles_on_fewer_than_three_channels_pass_through() {
 /// and the metadata says so: three color channels, sRGB.
 #[test]
 fn a_tinted_gray_profile_gives_three_color_channels() {
+    if support::skip::excluded() {
+        return;
+    }
     let v = variants()
         .into_iter()
         .find(|v| v.file == "files/file8.jp2" && v.variant == "intent3_d65")
@@ -461,6 +476,9 @@ fn tinted_gray(side: u32) -> Vec<u8> {
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
+    if support::skip::excluded() {
+        return;
+    }
     let bytes = tinted_gray(14_000);
     match read_header_with(&bytes, &srgb()) {
         Err(Error::Limit(m)) => assert!(
@@ -488,6 +506,9 @@ fn a_tinted_gray_profile_is_held_to_the_sample_limit() {
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn a_tinted_gray_profile_is_held_to_an_at_most_ceiling() {
+    if support::skip::excluded() {
+        return;
+    }
     let bytes = tinted_gray(12_000);
     assert_eq!(
         read_header_with(&bytes, &srgb()).unwrap().components.len(),
@@ -722,6 +743,9 @@ const BLUE_SIGNED: [&str; 3] = [
 /// pass-through file `-force-rgb` fails, since nothing was converted.
 #[test]
 fn an_rgb_profile_passes_through_when_the_first_four_channels_differ() {
+    if support::skip::excluded() {
+        return;
+    }
     let rgb = file5_profile();
     let with_cdef = [cdef(RGBA_CDEF)];
     let signed = with_ssiz(&rgba(), 3, SIGNED_8);
@@ -799,6 +823,9 @@ fn an_rgb_profile_passes_through_when_the_first_four_channels_differ() {
 /// fourth channel differs, as in `opj_decompress`.
 #[test]
 fn the_afl_test_comes_before_this_decoders_refusals() {
+    if support::skip::excluded() {
+        return;
+    }
     let signed = with_ssiz(&rgba(), 3, SIGNED_8);
     let two_colors = [cdef(&[(0, 0, 1), (1, 0, 2), (2, 1, 0), (3, 1, 0)])];
     let signed_planes = [
@@ -855,6 +882,9 @@ fn the_afl_test_comes_before_this_decoders_refusals() {
 /// YCbCr profile has no AFL test.
 #[test]
 fn the_afl_test_covers_only_rgb_profiles_and_four_channels() {
+    if support::skip::excluded() {
+        return;
+    }
     let rgb = file5_profile();
     let fifth = read("channels/fifth_subsampled.j2k");
     let five_cdef = [cdef(&[

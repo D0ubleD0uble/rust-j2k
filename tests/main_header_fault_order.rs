@@ -35,6 +35,8 @@
 //! body is its error. This decoder differs there (see "An unknown marker in the main
 //! header" in `docs/openjpeg-departures.md`).
 
+#[path = "support/skip.rs"]
+mod skip;
 #[path = "support/synth.rs"]
 mod synth;
 
@@ -296,6 +298,9 @@ fn an_unread_marker_is_refused_once_the_header_reaches_sot() {
 /// 2.5.0 warns of an unknown marker and fails to read the header.
 #[test]
 fn a_damaged_first_sot_is_a_structural_fault() {
+    if skip::excluded() {
+        return;
+    }
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/conformance/codestreams/p0_07.j2k"

@@ -36,6 +36,9 @@ fn jp2_dir() -> PathBuf {
 /// Decode every JP2 file and grade it, enforcing the ratchet.
 #[test]
 fn grades_the_jp2_reader_files_by_compliance_class() {
+    if support::skip::excluded() {
+        return;
+    }
     run_ratchet(&jp2_dir(), IN_CLASS);
 }
 
@@ -45,6 +48,9 @@ fn grades_the_jp2_reader_files_by_compliance_class() {
 /// (an ICC profile, then an enumerated color space that is ignored).
 #[test]
 fn every_jp2_file_header_matches_its_box_dump() {
+    if support::skip::excluded() {
+        return;
+    }
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct BoxDumps {
@@ -83,6 +89,9 @@ fn every_jp2_file_header_matches_its_box_dump() {
 /// Every reference plane parses as an 8-bit unsigned PGX of the file's size.
 #[test]
 fn every_jp2_reference_parses() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = jp2_dir();
     let mut parsed = 0;
     for entry in load_manifest(&dir).entries {
@@ -108,6 +117,9 @@ fn every_jp2_reference_parses() {
 /// of one size and depth.
 #[test]
 fn the_as_coded_references_match_the_codestream_layout() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = jp2_dir();
     let mut with_refs = Vec::new();
     for entry in load_manifest(&dir).entries {
@@ -141,6 +153,9 @@ fn the_as_coded_references_match_the_codestream_layout() {
 /// does a missing component.
 #[test]
 fn the_as_coded_grade_catches_a_changed_sample() {
+    if support::skip::excluded() {
+        return;
+    }
     use support::jp2::grade_as_coded;
     let dir = jp2_dir();
     for entry in load_manifest(&dir).entries {
@@ -173,6 +188,9 @@ fn the_as_coded_grade_catches_a_changed_sample() {
 /// a corpus edit cannot quietly change the bar.
 #[test]
 fn the_manifest_pins_the_grading_bar() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = jp2_dir();
     let manifest = load_manifest(&dir);
     assert_eq!(manifest.entries.len(), 9);
@@ -224,6 +242,9 @@ fn the_manifest_pins_the_grading_bar() {
 /// nested object, rather than ignored.
 #[test]
 fn the_manifest_rejects_unknown_keys() {
+    if support::skip::excluded() {
+        return;
+    }
     let text = std::fs::read_to_string(jp2_dir().join("manifest.json")).expect("read manifest");
     // The committed manifest round-trips.
     serde_json::from_str::<Jp2Manifest>(&text).expect("committed manifest parses");
@@ -281,6 +302,9 @@ fn the_decoded_component_count_must_equal_the_graded_count() {
 /// truncated, swapped, or edited file fails here.
 #[test]
 fn committed_bytes_match_the_manifest_digests() {
+    if support::skip::excluded() {
+        return;
+    }
     let dir = jp2_dir();
     for entry in load_manifest(&dir).entries {
         assert_eq!(entry.reference_digests.len(), entry.references.len());
