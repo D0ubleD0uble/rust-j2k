@@ -1,7 +1,9 @@
 //! Two `PPM` shapes OpenJPEG 2.5.0 refuses: an `Nppm` field split across
-//! `PPM` segments, and a `PPM` whose `Nppm`s are all 0. Each is checked on
-//! the whole file and on every prefix, by `read_header_with`, `decode_with`
-//! and `IncrementalDecoder`, with `strict` on and off.
+//! `PPM` segments, and a `PPM` whose `Nppm`s are all 0. Two it reads: a
+//! segment that ends right after a whole `Nppm`, and one that ends partway
+//! through a packet header. Each is checked on the whole file and on every
+//! prefix, by `read_header_with`, `decode_with` and `IncrementalDecoder`,
+//! with `strict` on and off.
 //!
 //! ISO/IEC 15444-1 A.7.4 (`Zppm`) reads: "Every marker segment in this
 //! series shall end with a completed packet header. However, the series of
@@ -9,9 +11,9 @@
 //! given marker segment. Therefore, it is possible that the next PPM marker
 //! segment will not have a Nppm parameter after Zppm, but the continuation
 //! of the Ippm series from the last PPM marker segment." (ITU-T T.800
-//! (08/2002).) A segment that ends inside an `Nppm` field breaks that, so
-//! it is refused as `Marker`, as OpenJPEG refuses it. Table A.38 gives `Nppm` the range 0 to 2^32 - 1, so
-//! an `Nppm` of 0 is read as written: that tile-part has no packet header,
+//! (08/2002).) A segment that ends inside an `Nppm` field is refused as
+//! `Marker`, as OpenJPEG refuses it. Table A.38 gives `Nppm` the range 0 to
+//! 2^32 - 1, so an `Nppm` of 0 is read as written: that tile-part has no packet header,
 //! and its data holds none either (A.7.4: with a `PPM` present, "packets
 //! distributed in the bit stream of the tile-parts are disallowed"). See "A
 //! `PPM` whose `Nppm`s are all 0" in `docs/openjpeg-departures.md`.
@@ -195,7 +197,7 @@ fn check_refused_both(name: &str, codestream: &[u8], want: &str) {
 
 fn split_error(zppm: u8, into: usize) -> String {
     format!(
-        "Marker(\"`PPM` with `Zppm` {zppm} ends {into} byte(s) into an `Nppm` field; a `PPM` must end with a completed packet header\")"
+        "Marker(\"`PPM` with `Zppm` {zppm} ends {into} byte(s) into an `Nppm` field; an `Nppm` field may not continue in the next `PPM`\")"
     )
 }
 
@@ -384,13 +386,22 @@ fn a_ppm_whose_nppms_are_all_zero_is_read_on_every_prefix() {
     }
 }
 
+/// A decoder's `header` as `Ok(None)` (not ready), `Ok(Some)` or its error.
+fn header_state<T>(result: Result<Option<T>, Error>) -> String {
+    match result {
+        Ok(None) => "Ok(None)".to_owned(),
+        Ok(Some(_)) => "Ok(Some)".to_owned(),
+        Err(error) => format!("{error:?}"),
+    }
+}
+
 /// What each path gives on `prefix`, with `strict` as given: the header, the
 /// decode, and an incremental decoder fed the prefix whole, after `header`,
 /// `refine` and `finish`.
 fn paths(prefix: &[u8], strict: bool) -> Vec<String> {
     let mut decoder = IncrementalDecoder::new(options(strict)).unwrap();
     decoder.feed(prefix);
-    let fed_header = keyed(decoder.header());
+    let fed_header = header_state(decoder.header());
     let refined = match decoder.refine() {
         Ok(Refined::Image(image)) => outcome(Ok(image)),
         Ok(_) => "no image".to_owned(),
@@ -408,11 +419,35 @@ fn paths(prefix: &[u8], strict: bool) -> Vec<String> {
 /// `shape` and `conforming` differ only in their `PPM` segments, so the bytes
 /// from the first `SOT` marker on are the same. On every prefix of `shape`,
 /// with `strict` on and off, each path gives what it gives on the conforming
-/// file's prefix of the same tail, and from the first `SOT` marker on that is
-/// not a `PPM` error. The whole file decodes to 176, complete.
+/// file's prefix of the same tail. Before the main header is settled that is
+/// input that runs out, for the one-shot calls and the incremental decoder
+/// alike; from there on the header is ready and nothing is a `PPM` error. The
+/// whole file decodes to 176, complete, also fed one byte at a time. Each is
+/// run on the codestream and on it in a JP2 file.
 fn check_same_as_conforming(name: &str, shape: &[u8], conforming: &[u8]) {
-    let shape_sot = sot_offset(shape);
-    let conforming_sot = sot_offset(conforming);
+    check_same_as_conforming_at(name, shape, conforming, 0, 0);
+    let (shape_file, shape_start) = in_jp2(shape);
+    let (conforming_file, conforming_start) = in_jp2(conforming);
+    check_same_as_conforming_at(
+        &format!("{name}, in JP2"),
+        &shape_file,
+        &conforming_file,
+        shape_start,
+        conforming_start,
+    );
+}
+
+/// `check_same_as_conforming` on files whose codestreams start at
+/// `shape_start` and `conforming_start`.
+fn check_same_as_conforming_at(
+    name: &str,
+    shape: &[u8],
+    conforming: &[u8],
+    shape_start: usize,
+    conforming_start: usize,
+) {
+    let shape_sot = shape_start + sot_offset(&shape[shape_start..]);
+    let conforming_sot = conforming_start + sot_offset(&conforming[conforming_start..]);
     assert_eq!(shape[shape_sot..], conforming[conforming_sot..], "{name}");
     for strict in [true, false] {
         for length in 0..=shape.len() {
@@ -421,12 +456,21 @@ fn check_same_as_conforming(name: &str, shape: &[u8], conforming: &[u8]) {
             if length < shape_sot + 2 {
                 assert!(got[0].starts_with("Incomplete("), "{at}: {got:?}");
                 assert!(got[1].starts_with("Incomplete("), "{at}: {got:?}");
+                assert_eq!(got[2], "Ok(None)", "{at}: {got:?}");
+                assert_eq!(got[3], "no image", "{at}: {got:?}");
+                // `FileFormat` while a JP2 box is cut short.
+                assert!(
+                    got[4].starts_with("Codestream(\"the input is truncated")
+                        || got[4].starts_with("FileFormat(\"the input is truncated"),
+                    "{at}: {got:?}"
+                );
             } else {
                 let tail = length - shape_sot;
                 let want = paths(&conforming[..conforming_sot + tail], strict);
                 assert_eq!(got, want, "{at}");
                 assert!(!got[0].starts_with("Marker("), "{at}: {got:?}");
                 assert!(!got[1].contains("PPM"), "{at}: {got:?}");
+                assert_eq!(got[2], "Ok(Some)", "{at}: {got:?}");
             }
         }
         assert_eq!(
@@ -436,10 +480,21 @@ fn check_same_as_conforming(name: &str, shape: &[u8], conforming: &[u8]) {
         );
         // One byte at a time, then `finish`.
         let mut decoder = IncrementalDecoder::new(options(strict)).unwrap();
-        for byte in shape {
+        for (index, byte) in shape.iter().enumerate() {
+            let at = format!(
+                "{name}, {} bytes fed one at a time, strict {strict}",
+                index + 1
+            );
             decoder.feed(std::slice::from_ref(byte));
-            let _ = decoder.header();
-            let _ = decoder.refine();
+            let header = header_state(decoder.header());
+            if index + 1 < shape_sot + 2 {
+                assert_eq!(header, "Ok(None)", "{at}");
+            } else {
+                assert_eq!(header, "Ok(Some)", "{at}");
+            }
+            if let Err(error) = decoder.refine() {
+                panic!("{at}: refine: {error:?}");
+            }
         }
         assert_eq!(
             outcome(decoder.finish()),

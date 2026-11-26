@@ -1701,31 +1701,32 @@ whose tile data holds the packet header OpenJPEG decodes to 176 when it is
 packed. No valid codestream has every `Nppm` 0: it has at least one
 packet, and a packet header takes at least a byte.
 
-A related shape is refused by both decoders: a `PPM` segment that ends
-inside a 4-byte `Nppm` field, so that the field continues in the next
-segment. A.7.4 reads: "Every marker segment in this series shall end with a
+## Where a `PPM` segment may end
+
+A `PPM` segment that ends inside a 4-byte `Nppm` field, so that the field
+continues in the next segment, is refused by both decoders. A.7.4 reads: "Every marker segment in this series shall end with a
 completed packet header. However, the series of Ippm parameters described
 by the Nppm does not have to be complete in a given marker segment.
 Therefore, it is possible that the next PPM marker segment will not have a
 Nppm parameter after Zppm, but the continuation of the Ippm series from the
 last PPM marker segment." (ITU-T T.800 (08/2002); T.800 (11/2015) says
-the same, with "an Nppm".) A continuation carries `Ippm` bytes, not the rest of an
-`Nppm`, so this decoder refuses the split field as `Error::Marker`, and
+the same, with "an Nppm".) A continuation carries `Ippm` bytes, not the rest
+of an `Nppm`, so this decoder refuses the split field as `Error::Marker`, and
 OpenJPEG gives "Not enough bytes to read Nppm" (`j2k.c:3958`).
 
 Two other shapes break "Every marker segment in this series shall end with a
-completed packet header" (A.7.4), and both decoders read
-them. They are not departures:
+completed packet header" (A.7.4), and both decoders read them. They are not
+departures:
 
 - a `PPM` segment ends right after a whole `Nppm`, before that packet header
   starts;
 - a `PPM` segment ends partway through a packet header.
 
-No bytes are lost, so the image is complete: with `strict` on, both decoders
-decode each to the same image as the file whose segments end on a completed
-packet header (opj_decompress 2.5.0 gives 176 for each test file, as for
-the conforming one). This is error correction that costs nothing, so the
-decoder does not refuse it, even with `strict` on
+No bytes are lost, so the image is complete. Both decoders decode each to
+the same image as the file whose segments end on a completed packet header;
+this one does so with `strict` on as well (opj_decompress 2.5.0 gives 176 for
+each test file, as for the conforming one). This is error correction that
+costs nothing, so this decoder does not refuse it
 (`ppm_segments_ending_before_or_inside_a_packet_header_decode` in
 `tests/ppm_nppm.rs`).
 
