@@ -57,6 +57,7 @@ refusal under `ColorOutput::Srgb`).
 | [A tile with no sample of a component](#a-tile-with-no-sample-of-a-component) | decodes; OpenJPEG fails some such files, and a reduction that leaves a component no sample | 1 |
 | [A reduction checked against the merged levels](#a-reduction-checked-against-the-merged-levels) | decodes a `COD` too short for the reduction when `COC`s raise every component's levels; OpenJPEG refuses at the `COD` | 1 |
 | [A `PPM` whose `Nppm`s are all 0](#a-ppm-whose-nppms-are-all-0) | reads the header, and with `strict` off returns the image with the packets reported missing; OpenJPEG refuses the file, as a strict decode does | 1 |
+| [Where a `PPM` segment may end](#where-a-ppm-segment-may-end) | refuses a split `Nppm` field, as OpenJPEG does; reads a segment that ends after an `Nppm` or inside a packet header, as OpenJPEG does | 1 |
 | [The JP2 box layer](#the-jp2-box-layer) | `ftyp` without `jp2 ` or `jph `, bytes after `Psot = 0`, deep or mixed-sampling palettes, `cdef` labels, `cdef` `Typ` 3 | 1, 3 |
 | [The `jp2i` and `uinf` boxes](#the-jp2i-and-uinf-boxes) | read from the standard; OpenJPEG skips them | 1 |
 | [The `rreq` box](#the-rreq-box) | read from the standard; OpenJPEG skips it | 1 |
@@ -1701,17 +1702,34 @@ whose tile data holds the packet header OpenJPEG decodes to 176 when it is
 packed. No valid codestream has every `Nppm` 0: it has at least one
 packet, and a packet header takes at least a byte.
 
-A related shape is refused by both decoders: a `PPM` segment that ends
-inside a 4-byte `Nppm` field, so that the field continues in the next
-segment. A.7.4 reads: "Every marker segment in this series shall end with a
-completed packet header. However, the series of Ippm parameters described
+## Where a `PPM` segment may end
+
+A `PPM` segment that ends inside a 4-byte `Nppm` field, so that the field
+continues in the next segment, is refused by both decoders. A.7.4 reads: "Every marker segment in this
+series shall end with a completed packet header. However, the series of Ippm parameters described
 by the Nppm does not have to be complete in a given marker segment.
 Therefore, it is possible that the next PPM marker segment will not have a
 Nppm parameter after Zppm, but the continuation of the Ippm series from the
 last PPM marker segment." (ITU-T T.800 (08/2002); T.800 (11/2015) says
-the same, with "an Nppm".) A continuation carries `Ippm` bytes, not the rest of an
-`Nppm`, so this decoder refuses the split field as `Error::Marker`, and
+the same, with "an Nppm".) A continuation carries `Ippm` bytes, not the rest
+of an `Nppm`, so this decoder refuses the split field as `Error::Marker`, and
 OpenJPEG gives "Not enough bytes to read Nppm" (`j2k.c:3958`).
+
+Two other shapes break "Every marker segment in this series shall end with a
+completed packet header" (A.7.4), and both decoders read them. They are not
+departures:
+
+- a `PPM` segment ends right after a whole `Nppm`, before that packet header
+  starts;
+- a `PPM` segment ends partway through a packet header.
+
+No bytes are lost, so the image is complete. Both decoders decode each to
+the same image as the file whose segments end on a completed packet header;
+this one does so with `strict` on as well (opj_decompress 2.5.0 gives 176 for
+each test file, as for the conforming one). This is error correction that
+costs nothing, so this decoder does not refuse it
+(`ppm_segments_ending_before_or_inside_a_packet_header_decode` in
+`tests/ppm_nppm.rs`).
 
 ## The JP2 box layer
 

@@ -3412,10 +3412,12 @@ fn decode_plt(mut b: Cursor<'_>) -> Result<()> {
 /// records — `Nppm` a 4-byte length, `bytes` that tile-part's packet headers —
 /// one record per tile-part. The payloads are concatenated before the
 /// records are read, so a chunk's bytes may continue in the next segment, as
-/// A.7.4 allows. A segment may not end inside an `Nppm` field: A.7.4 has
-/// each segment end with a completed packet header, and a continuation start
-/// with `Ippm` bytes, so a split `Nppm` is a `Marker` error. OpenJPEG's
-/// `opj_j2k_merge_ppm` refuses it too. A `PPM` whose `Nppm`s are all 0 is
+/// A.7.4 allows. A segment may end right after a whole `Nppm`, or partway
+/// through a packet header: both break A.7.4's "end with a completed packet
+/// header", and both are read, as OpenJPEG reads them. A segment may not end
+/// inside an `Nppm` field: a continuation starts with `Ippm` bytes, so a
+/// split `Nppm` is a `Marker` error. OpenJPEG's `opj_j2k_merge_ppm` refuses
+/// it too. A `PPM` whose `Nppm`s are all 0 is
 /// read as written, every chunk empty; OpenJPEG refuses that one, as
 /// `opj_malloc(0)` returns NULL. Each returned chunk feeds a tile-part's
 /// packet-header stream in [`walk_tiles`], the same role `PPT` plays for a
@@ -3464,7 +3466,7 @@ fn decode_ppm_chunks(mut markers: Vec<(u8, Vec<u8>)>) -> Result<Vec<Vec<u8>>> {
             let next = ends.partition_point(|&(end, _)| end <= at);
             if let Some(&(end, zppm)) = ends.get(next).filter(|&&(end, _)| end < at + 4) {
                 return Err(Error::marker(format!(
-                    "`PPM` with `Zppm` {zppm} ends {} byte(s) into an `Nppm` field; a `PPM` must end with a completed packet header",
+                    "`PPM` with `Zppm` {zppm} ends {} byte(s) into an `Nppm` field; an `Nppm` field may not continue in the next `PPM`",
                     end - at
                 )));
             }
