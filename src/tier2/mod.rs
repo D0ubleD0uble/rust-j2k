@@ -692,10 +692,10 @@ fn walk_packets<'a>(
         sop: header.cod.use_sop,
         eph: header.cod.use_eph,
     };
-    // When the tile carries PPT packed headers, packet headers come from that
-    // buffer and only the bodies stay inline; otherwise both are `data` and the
-    // two cursors move together.
-    let packed = !tile.packed_headers.is_empty();
+    // When the tile's headers are packed (`PPM` or `PPT`), packet headers come
+    // from that buffer and only the bodies stay inline; otherwise both are
+    // `data` and the two cursors move together.
+    let packed = tile.packed;
     let mut streams = PacketStreams {
         header: if packed { &tile.packed_headers } else { data },
         header_pos: 0,
