@@ -8,39 +8,50 @@
 //! in size or depth, such as a subsampled image.
 //!
 //! ```text
-//! cargo run --example decode -- tests/fixtures/multicomponent_lossless.j2k out.ppm
+//! cargo run --example decode -- \
+//!     tests/fixtures/multicomponent_lossless.j2k out.ppm
 //! ```
 //!
 //! The input is a raw codestream (`.j2k`, `.j2c`) or a JP2 file. The values
-//! are written as stored: no color conversion and no scaling to 8 bits.
+//! are written as stored: no color conversion and no scaling to 8 bits. The
+//! example uses the default limits. A file that needs more is refused, and
+//! the error says which limit; raise it with `decode_with` in your own code.
 
+use std::ffi::OsString;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[path = "common/pnm.rs"]
 mod pnm;
 
-fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+fn run(args: &[OsString]) -> Result<(), String> {
     let [input, output] = args else {
         return Err("usage: decode <in.jp2|in.j2k> <out.pgm|out.ppm>".into());
     };
-    let bytes = std::fs::read(input)?;
-    let image = rust_j2k::decode(&bytes)?;
-    std::fs::write(output, pnm::encode(&image)?)?;
+    let (input, output) = (PathBuf::from(input), PathBuf::from(output));
+    let name = input.display();
+    let bytes = std::fs::read(&input).map_err(|e| format!("{name}: {e}"))?;
+    let image = rust_j2k::decode(&bytes).map_err(|e| format!("{name}: {e}"))?;
+    let pnm = pnm::encode(&image).map_err(|e| format!("{name}: {e}"))?;
+    let out_name = output.display();
+    std::fs::write(&output, pnm).map_err(|e| format!("{out_name}: {e}"))?;
+    let n = image.components.len();
     println!(
-        "wrote {output}: {}x{}, {} channels",
+        "wrote {}: {}x{}, {n} {}",
+        output.display(),
         image.width,
         image.height,
-        image.components.len()
+        if n == 1 { "channel" } else { "channels" }
     );
     Ok(())
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("decode: {e}");
+            eprintln!("{e}");
             ExitCode::FAILURE
         }
     }

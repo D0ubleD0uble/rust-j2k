@@ -14,6 +14,7 @@ mod support;
 mod pnm;
 
 use std::path::{Path, PathBuf};
+#[cfg(not(target_family = "wasm"))]
 use std::process::Command;
 
 use support::Expected;
@@ -97,17 +98,20 @@ fn assert_matches(pnm: &Pnm, snapshot: &Expected, magic: &str) {
     let channels = snapshot.components.len();
     assert_eq!(pnm.samples.len(), first.samples.len() * channels);
     for (i, got) in pnm.samples.iter().enumerate() {
-        let want = i64::from(snapshot.components[i % channels].samples[i / channels]) + offset;
+        let plane = &snapshot.components[i % channels];
+        let want = i64::from(plane.samples[i / channels]) + offset;
         assert_eq!(i64::from(*got), want, "sample {i}");
     }
 }
 
 /// (fixture stem, extension, magic): one channel at 8 bits, three channels,
-/// 13 bits (written as two bytes), and signed 16 bits (shifted to unsigned).
-const CASES: [(&str, &str, &str); 4] = [
+/// 13 bits (written as two bytes), unsigned 16 bits, and signed 16 bits
+/// (shifted to unsigned).
+const CASES: [(&str, &str, &str); 5] = [
     ("multilayer_lossless", "j2k", "P5"),
     ("multicomponent_lossless", "j2k", "P6"),
     ("eta_lambert_lossless", "j2k", "P5"),
+    ("jpeg2000_regular_latlon", "j2k", "P5"),
     ("jp2_signed16", "jp2", "P5"),
 ];
 
@@ -130,25 +134,42 @@ fn the_writer_refuses_what_a_pnm_file_cannot_hold() {
         assert!(pnm::encode(&image).is_err(), "{stem}");
     }
     // A depth past 16 bits.
-    let mut image =
-        rust_j2k::decode(&std::fs::read(fixture("multilayer_lossless.j2k")).unwrap()).unwrap();
+    let bytes = std::fs::read(fixture("multilayer_lossless.j2k")).unwrap();
+    let mut image = rust_j2k::decode(&bytes).unwrap();
     image.components[0].bit_depth = 24;
     assert!(pnm::encode(&image).unwrap_err().contains("24-bit"));
 }
 
-/// Run the `decode` example through `cargo run`, which finds the build
-/// wherever the target directory is. `cargo test` has built it already, so
-/// this is a rebuild check and a launch.
+#[test]
+fn the_writer_clamps_values_outside_the_declared_depth() {
+    // A palette channel can hold a value past its depth.
+    let samples = vec![300, -5, 7];
+    let component = rust_j2k::Component::new(3, 1, 8, false, 1, 1, samples);
+    let image = rust_j2k::Image::new(3, 1, vec![component]);
+    let encoded = pnm::encode(&image).unwrap();
+    assert!(encoded.starts_with(b"P5\n3 1\n255\n"));
+    assert_eq!(&encoded[encoded.len() - 3..], [255, 0, 7]);
+}
+
+/// Run the `decode` example through `cargo run`, since Cargo gives a test no
+/// path to an example. `cargo test` has built it already, with the test
+/// profile, so `--profile test` makes this a rebuild check and a launch. The
+/// run follows `CARGO_TARGET_DIR` from the environment, but not a
+/// `--target-dir` flag given to the outer `cargo test`.
+#[cfg(not(target_family = "wasm"))]
 fn run_decode(input: &Path, output: &Path) -> std::process::Output {
-    Command::new(env!("CARGO"))
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    Command::new(cargo)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args(["run", "--quiet", "--example", "decode", "--"])
+        .args(["run", "--quiet", "--offline", "--profile", "test"])
+        .args(["--example", "decode", "--"])
         .arg(input)
         .arg(output)
         .output()
         .unwrap()
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn the_decode_example_writes_the_oracle_samples() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
@@ -161,6 +182,7 @@ fn the_decode_example_writes_the_oracle_samples() {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn the_decode_example_fails_clearly_on_four_channels() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rgba.pnm");
@@ -169,5 +191,6 @@ fn the_decode_example_fails_clearly_on_four_channels() {
     assert!(!run.status.success());
     let message = String::from_utf8_lossy(&run.stderr);
     assert!(message.contains("1 or 3 channels"), "{message}");
+    assert!(message.contains("jp2_cdef_rgba.jp2"), "{message}");
     assert!(!out.exists());
 }

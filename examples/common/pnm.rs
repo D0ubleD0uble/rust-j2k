@@ -54,7 +54,9 @@ pub fn encode(image: &Image) -> Result<Vec<u8>, String> {
     let offset = if first.signed { 1i64 << (depth - 1) } else { 0 };
     let wide = maxval > 255;
 
-    let mut out = format!("{magic}\n{} {}\n{maxval}\n", first.width, first.height).into_bytes();
+    let (w, h) = (first.width, first.height);
+    let header = format!("{magic}\n{w} {h}\n{maxval}\n");
+    let mut out = header.into_bytes();
     let pixels = first.samples.len();
     out.reserve(pixels * channels * if wide { 2 } else { 1 });
     for i in 0..pixels {
