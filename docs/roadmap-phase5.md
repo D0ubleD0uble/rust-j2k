@@ -445,13 +445,13 @@ Settled on 2026-11-17, except where marked proposed.
    default is proposed, to be confirmed in 0.7: the #515 answer of 2026-11-26
    does not decide the encoder default. If it is on by default, a decode-only
    user (fieldglass, or wasm) sets `default-features = false` and compiles
-   none of it. The feature (`encode = []`, in `default`) is declared before
-   P5.0. Every encode test, bench and `src/fuzz.rs` entry is gated on it;
-   `Error::InvalidImage` is not, so the error enum is the same in both builds.
-   CI gains `cargo test` and `cargo clippy --all-targets` with
-   `--no-default-features`. Code only the encoder calls lives in `src/encode/`
-   or behind the feature, so a decode-only build has no dead code. The
-   `Cargo.toml` and CI edits are the maintainer's.
+   none of it. The feature (`encode = []`, in `default` if that is confirmed)
+   is declared before P5.0. Every encode test, bench and `src/fuzz.rs` entry
+   is gated on it; `Error::InvalidImage` is not, so the error enum is the same
+   in both builds. CI builds and tests with and without the `encode` feature.
+   Code only the encoder calls lives in `src/encode/` or behind the feature,
+   so a decode-only build has no dead code. The `Cargo.toml` and CI edits are
+   the maintainer's.
 6. **The reference tools are OpenJPEG, Grok and jpylyzer.** OpenJPEG 2.5.0 is
    the gate. Grok (20.4.25, built for performance.md) is a second decoder in a
    release round. `grk_compress -U` is the field-level oracle for the
@@ -544,12 +544,13 @@ Before P5.0: the `encode` feature declared. Before P5.7: #254 (the origin on Ima
 That is 28 steps: P5.0, P5.0b and P5.1 to P5.26. The diagram's right-hand
 columns are schematic; the dependencies are the ones the lanes below list.
 
-P5.0b opens every decoder seam in one PR, except where a row below names a decoder file, so no two encoder steps edit the
-same decoder file. The stage pieces then land in parallel on disjoint files
-(P5.1 to P5.4 and P5.6), each against its decoder inverse and an external
-oracle, as Phase 2 built the decoder. P5.7 is the first file out and fixes
-the API shape early. Rate control (P5.9) follows a fixed-quantization 9/7
-encode (P5.8), so that a rate bug cannot hide behind a transform bug.
+P5.0b opens every decoder seam in one PR, except where a row below names a
+decoder file, so no two encoder steps edit the same decoder file. The stage
+pieces then land in parallel on disjoint files (P5.1 to P5.4 and P5.6), each
+against its decoder inverse and an external oracle, as Phase 2 built the
+decoder. P5.7 is the first file out and fixes the API shape early. Rate
+control (P5.9) follows a fixed-quantization 9/7 encode (P5.8), so that a rate
+bug cannot hide behind a transform bug.
 
 After P5.7 the work splits into six lanes that can run side by side:
 
@@ -584,7 +585,7 @@ that adds a marker appends its function to `markers.rs` and one call to
 | P5.4 | `src/encode/mq.rs` | uses `QE_TABLE` (already `pub`) and the H.2 vectors, opened in P5.0b |
 | P5.5 | `src/encode/passes.rs` | uses `src/tier1/ebcot/context.rs`, split out in P5.0b |
 | P5.6 | `src/encode/tagtree.rs`, `src/encode/packet.rs` | uses `resolution_geoms` and `for_each_packet` (already re-exported), and `band_rects` and `next_segment` (opened in P5.0b) |
-| P5.7 | `src/encode/mod.rs`, `options.rs`, `codestream.rs`, `markers.rs`; `src/lib.rs` re-exports | `src/codestream/markers.rs`: shared structs; `src/pipeline.rs`: module doc |
+| P5.7 | `src/encode/mod.rs`, `options.rs`, `codestream.rs`, `markers.rs`; `src/lib.rs` re-exports | `src/codestream/markers.rs`: shared structs; `src/pipeline.rs`: module doc; `src/error.rs`: the new `Error::InvalidImage` variant and the widened `InvalidOptions` rustdoc |
 | P5.8 | `src/encode/mod.rs` (9/7 branch) | none |
 | P5.9 | `src/encode/rate.rs` | none |
 | P5.10 | `src/encode/tile.rs` | uses the geometry re-exports |
@@ -596,7 +597,7 @@ that adds a marker appends its function to `markers.rs` and one call to
 | P5.16 | `src/encode/poc.rs`, `packet.rs`, `markers.rs` | uses `check_poc_coverage`, re-exported in P5.0b |
 | P5.17 | `src/encode/roi.rs`, `passes.rs`, `markers.rs` | uses `undo_maxshift` (`pub(crate)`) and `top_coded_plane` (`pub`) as they are |
 | P5.18 | `src/encode/packed.rs`, `codestream.rs` | none |
-| P5.19 | `src/encode/jp2.rs`, `options.rs` | `src/jp2/palette.rs`: a validating `Palette::new` (NE 1..=1024, NPC 1..=255, column depths) and a `PaletteColumn::new`, new API on frozen types (`Palette` has private fields and is `#[non_exhaustive]`; `PaletteColumn` is `#[non_exhaustive]`, so a caller cannot build one). |
+| P5.19 | `src/encode/jp2.rs`, `options.rs` | `src/jp2/palette.rs`: a validating `Palette::new` (NE 1..=1024, NPC 1..=255, column depths) and a `PaletteColumn::new`, new API on frozen types (`Palette` has private fields and is `#[non_exhaustive]`; `PaletteColumn` is `#[non_exhaustive]`, so a caller cannot build one) |
 | P5.20 | `src/encode/profile/mod.rs`, `profile/rules.rs`, `profile/check.rs`, `options.rs` | `src/codestream/mod.rs`: keep `Rsiz` and each tile-part's marker list in the parsed header, `pub(crate)` |
 | P5.21 | `src/encode/profile/cinema.rs` | none |
 | P5.22 | `src/encode/profile/cinema.rs` | none |
