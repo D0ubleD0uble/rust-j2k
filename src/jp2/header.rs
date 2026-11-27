@@ -126,8 +126,8 @@ impl Ihdr {
 /// ignores the boxes it does not know).
 const READ: [[u8; 4]; 6] = [*b"bpcc", *b"colr", *b"pclr", *b"cmap", *b"cdef", *b"res "];
 
-/// The JP2 Header box's contents: `ihdr` parsed, every other child read kept in one
-/// list in the order OpenJPEG reads them. Repeats are kept too, so the code
+/// The JP2 Header box's contents: `ihdr` parsed, every other child it reads
+/// kept in one list in the order OpenJPEG reads them. Repeats are kept too, so the code
 /// that reads a box can apply its own rule (the first `colr` wins; a second
 /// `pclr` is an error).
 ///
@@ -265,5 +265,4 @@ impl<'a> Jp2Header<'a> {
     pub(crate) fn res(&self) -> Vec<&'a [u8]> {
         self.payloads(b"res ")
     }
-
 }
