@@ -60,6 +60,11 @@ fields without a breaking change, so match on it with a `_` arm or `..`.
   the file: when a file has more than one fault, or a fix finds a fault that
   was missed before, the error that file gives can change, variant included
   (see "Which fault wins" below).
+- **Which `Waiting` or `ReportEntry` variant a case gives.** The same
+  holds for these. Each kind of case maps to one `Waiting` variant and to one
+  `ReportEntry` variant, and moving it to another is a breaking change. When
+  a refine has more than one reason to wait, or a gap in the data has more
+  than one cause, which one is reported can still change.
 - **Which limit refused.** The `LimitKind` a refusal names, which kinds an
   option raises (`LimitKind::is_adjustable`), and which option that is.
 - **`retry_with`.** What `LimitDetail::retry_with` means, as its rustdoc
