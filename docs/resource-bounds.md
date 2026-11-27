@@ -700,9 +700,9 @@ volumes and 16385 `PPM` segments keep 13.07 MB. Under the 65536 segments a
 main header may have, the `PPM` segment past 16384 doubles their table (393 KB)
 and costs 3 components (2 KB) (`tests/incremental_header_cache_alloc.rs`).
 The header of a tile-part not yet fed in full, or of a last tile-part whose
-`Psot` is 0, is read again on each call. What it keeps, about 140 bytes for each tile counted under its own header
-and a byte for each other tile, is held until the options
-change. It keeps no copy of the main header, only a key of it (two
+`Psot` is 0, is read again on each call. What it keeps, about 140 bytes for each
+tile counted under its own header and a byte for each other tile, is held until
+the options change. It keeps no copy of the main header, only a key of it (two
 integers). A file whose tiles' sizes show them within the caps keeps nothing
 (`tests/incremental_header_cache_alloc.rs`: 0 bytes held after a call on a
 16.8 MB main header of `PPM` data, where a copy of the parsed header held
