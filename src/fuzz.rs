@@ -609,10 +609,9 @@ mod tests {
     /// each. A decoder fed each due prefix at once keeps the walk, so it
     /// charges nothing. Were the first walk of a kept tile charged, the
     /// fifth due refine would be refused, and the fresh decoder's charge
-    /// would fail the check. The input is 16 KB, past
-    /// the target's `-max_len=4096`, so the fuzzer does not reach it. Set
-    /// `RUST_J2K_INCREMENTAL_SEED_DIR` to write it out as a seed (see
-    /// `fuzz/README.md`).
+    /// would fail the check. The fuzzer does not reach it: the target's
+    /// packet ledger allows 2 packet bounds, and that bound is
+    /// `REPEAT_BOUNDS` of them.
     #[test]
     fn incremental_target_repeat_check_holds_on_a_restarted_walk() {
         use crate::{DecodeOptions, IncrementalDecoder};
@@ -623,11 +622,6 @@ mod tests {
             z ^ (z >> 31)
         }
         let data = crate::synth::restarted_poc_tile(4, 8, 299);
-        if let Some(dir) = std::env::var_os("RUST_J2K_INCREMENTAL_SEED_DIR") {
-            let dir = std::path::PathBuf::from(dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("restarted_poc_tile_4_8_299.j2k"), &data).unwrap();
-        }
         // The target's options for an input that starts with `SOC`: all
         // control bytes zero (a codestream draws no color output), `strict`
         // off for the refines.

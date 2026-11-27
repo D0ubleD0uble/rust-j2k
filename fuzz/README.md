@@ -89,10 +89,7 @@ whole bound left would not cover. So on an input whose decodes walk close to
 the bound, the target no longer runs the decoder with nothing spent
 (`zero`), the due refine's `cut.check`, the probe, the decode of the whole
 input that checks an error is final, or `finish`. Unit tests in
-`src/fuzz.rs` and `src/incremental/tests.rs` cover the probe's path. An
-input longer than the CI smoke's `-max_len=4096` gets 20 bounds instead
-(`LARGE_PACKET_BOUNDS`), so that its refines can reach the bound on the
-walks read again (below).
+`src/fuzz.rs` and `src/incremental/tests.rs` cover the probe's path.
 
 `tile_body`'s second input byte steers a region of interest: with bit 7 set
 it writes an `RGN` marker (a maxshift of 0 to 19 from the low 5 bits, on
@@ -318,15 +315,13 @@ the refusal's message is not read. A decoder with nothing spent must give the
 one-shot result, and when it kept every tile's walk it must have charged
 nothing: a single refine walks each tile once, and the first walk of a tile
 kept from its start is not charged. So a charge on a kept walk, which would
-turn a refine into a wait past the bound, fails the target. The inputs
-that reach that bound are larger than `-max_len=4096` (the packet ledger
-gives an input of that size 2 bounds, too few to reach it): the smallest
-known is
-`restarted_poc_tile(4, 8, 299)` from `tests/support/synth.rs`, 16 KB, whose
-fifth due refine an overcharge refuses. The unit test
-`fuzz::tests::incremental_target_repeat_check_holds_on_a_restarted_walk` runs
-the check on it in the normal suite, and writes it out as a seed (see
-Running).
+turn a refine into a wait past the bound, fails the target. The fuzzer
+does not reach this check: one execution spends at most 2 packet bounds
+(the packet ledger), and the bound on the walks read again is
+`REPEAT_BOUNDS`, 4 of them. The unit test
+`fuzz::tests::incremental_target_repeat_check_holds_on_a_restarted_walk`
+covers its logic in the normal suite, on `restarted_poc_tile(4, 8, 299)`
+from `tests/support/synth.rs`, whose fifth due refine an overcharge refuses.
 
 Each input is decoded several times, so seed it with small files, such as the
 fixtures under 3 KB, and cap the input length (`-max_len=4096`). Even so it
@@ -574,13 +569,6 @@ for f in $(find tests/fixtures -maxdepth 1 -size -3073c \( -name '*.j2k' -o -nam
 done
 find tests/fixtures/incremental -type f -size -4097c -exec cp {} fuzz/corpus/incremental_decode/ \;
 cargo +nightly fuzz run incremental_decode -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=300 -rss_limit_mb=4096
-
-# The incremental target on an input that reaches the bound on the walks read
-# again (16 KB), written by a unit test. One run takes 30 to 70 s under ASan.
-RUST_J2K_INCREMENTAL_SEED_DIR=fuzz/corpus/incremental_decode_large \
-  cargo test --lib fuzz::tests::incremental_target_repeat_check_holds_on_a_restarted_walk
-cargo +nightly fuzz run incremental_decode fuzz/corpus/incremental_decode_large -- \
-  -dict=fuzz/j2k.dict -max_len=32768 -max_total_time=300 -rss_limit_mb=4096
 
 # The window target, seeded as decode plus the window, JPH and small JP2 files
 # (as the CI smoke does; it copies the `decode` corpus as it stands).

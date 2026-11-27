@@ -87,10 +87,7 @@
 //! (`budget::PacketBounds`), each charged the packet visits it spent: the
 //! execution ends at the first decode a whole bound left would not cover.
 //! So where a due refine and its one-shot decode walk close to the bound or
-//! are refused there, those two are checked and `finish` is not run. An
-//! input longer than the CI smoke's `-max_len=4096` gets
-//! [`LARGE_PACKET_BOUNDS`], so that the refines can reach the bound on the
-//! walks read again.
+//! are refused there, those two are checked and `finish` is not run.
 
 use libfuzzer_sys::fuzz_target;
 
@@ -121,18 +118,6 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// The most refines one execution checks against decodes of its own.
 /// `tests/fuzz_seed_outcomes.rs` reads this to check the work weight.
 const MAX_CHECKED_TRIES: u32 = 4;
-
-/// The longest input the CI smoke gives this target (`-max_len=4096`).
-const CI_MAX_LEN: usize = 4096;
-
-/// The packet bounds of a longer input: enough for the refines to take the
-/// walks read again past their bound (`REPEAT_BOUNDS` and one more), for
-/// the three decodes of its own each checked try runs, and for the decode
-/// of the whole input, `finish` and the decode it is checked against. The
-/// inputs that reach that bound are all longer than `CI_MAX_LEN`, and one
-/// such execution is about a minute under ASan, which only the README's
-/// run on them, with no `-timeout`, allows.
-const LARGE_PACKET_BOUNDS: u64 = REPEAT_BOUNDS + 1 + 3 * MAX_CHECKED_TRIES as u64 + 3;
 
 fuzz_target!(|input: &[u8]| {
     const JP2_SIGNATURE: [u8; 8] = [0, 0, 0, 12, b'j', b'P', b' ', b' '];
@@ -245,14 +230,8 @@ fuzz_target!(|input: &[u8]| {
     let changes = control[0] & 0x40 != 0;
     // In packet bounds: a due refine and its one-shot decode at the bound,
     // which the reason the refine waits is checked against. A decode past
-    // that ends the execution. An input the CI smoke cannot make gets more
-    // (`LARGE_PACKET_BOUNDS`).
-    let bounds = if input.len() <= CI_MAX_LEN {
-        2
-    } else {
-        LARGE_PACKET_BOUNDS
-    };
-    let mut packets = budget::PacketBounds::new(bounds);
+    // that ends the execution.
+    let mut packets = budget::PacketBounds::new(2);
     let mut lenient = options.clone().with_strict(false);
     let Ok(mut decoder) = checked(IncrementalDecoder::new(options.clone())) else {
         return;

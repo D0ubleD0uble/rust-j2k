@@ -859,9 +859,10 @@ fn the_inputs_at_each_work_cap_fit_it_and_one_more_row_does_not() {
 /// `incremental_checked_tries_stay_within_the_work_weight` relies on. If it
 /// changed, check that test's count of bounds, then update this hash. The
 /// packet ledger changed it last (#695, charging every decode the visits it
-/// spent, and `finish` and its check asking for a bound each): its checks
-/// only end an execution early, so they add no decode to that count.
-const INCREMENTAL_HASH: u64 = 12040206146271429312;
+/// spent, `finish` and its check asking for a bound each, and 2 bounds for
+/// every input length): its checks only end an execution early, so they add
+/// no decode to that count.
+const INCREMENTAL_HASH: u64 = 9865290406208140497;
 
 /// `target`'s body from its `fuzz_target!` on, trimmed, without blank lines
 /// or comments.
@@ -957,7 +958,9 @@ fn the_packet_ledger_charges_each_decode_what_it_walked() {
     assert!(packets.allows(1));
     let refused = 3 * bound - small - packets.left();
     assert!(refused > bound / 16 * 15 && refused <= bound, "{refused}");
-    // A new ledger does not charge what came before it.
+    // A new ledger does not charge what came before it, here a decode no
+    // ledger was asked after.
+    assert!(decode_with(&fixture("derived_quant_lossy.j2k"), &options).is_ok());
     let mut packets = budget::PacketBounds::new(2);
     assert!(packets.allows(2));
     assert_eq!(packets.left(), 2 * bound);

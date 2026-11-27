@@ -51,6 +51,13 @@ pub const MAX_FUZZ_WORK: u64 = 1 << 28;
 /// decode, as each spends a small part of a bound. The tiles of an input of
 /// 2^19 bytes or more buy a larger bound, which a factor understates; fuzz
 /// inputs are far smaller.
+///
+/// The factor also leaves out one walk the ledger does not see. A JP2 file
+/// whose codestream box ends early may have its last tile's packets walked
+/// once to find where they end (`packets_end_at` in `src/jp2/mod.rs`),
+/// under a meter of its own that is not counted. That probe may spend 2^22
+/// visits at the default limit, a quarter of a bound, scaled by the packet
+/// work limit: one bound under `WorkLimit::Raised(4)`.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct PacketBounds {
