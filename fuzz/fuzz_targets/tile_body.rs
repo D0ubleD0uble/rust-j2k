@@ -57,10 +57,6 @@ use tile_body::wrap_roi;
 
 #[path = "../common/partial.rs"]
 mod partial;
-// For `partial::check`'s packet refusal only: `tile_body` takes no budget.
-#[allow(dead_code)]
-#[path = "../common/budget.rs"]
-mod budget;
 
 fuzz_target!(|data: &[u8]| {
     let Some((&variant, rest)) = data.split_first() else {

@@ -2,10 +2,9 @@
 //!
 //! Three budgets: [`over`] skips an input that declares too many samples,
 //! which bounds memory; [`options`] caps the code-block work its decodes may
-//! do, and [`PacketBounds`] the packet work of an input whose decodes reach
-//! the packet bound, which bound time. Each target divides the first two by
-//! a weight of its own, pinned by `tests/fuzz_seed_outcomes.rs`, and sizes
-//! its own packet ledger.
+//! do, and [`PacketBounds`] the packet work they spend, which bound time.
+//! Each target divides the first two by a weight of its own, pinned by
+//! `tests/fuzz_seed_outcomes.rs`, and sizes its own packet ledger.
 
 use rust_j2k::{DecodeOptions, SampleLimit};
 
@@ -31,57 +30,62 @@ pub const MAX_FUZZ_SAMPLES: u64 = 1 << 28;
 /// passes with room for a loaded machine.
 pub const MAX_FUZZ_WORK: u64 = 1 << 28;
 
-/// The packet work of one execution, in packet bounds, once one of its
-/// decodes is refused at the packet work bound.
+/// The packet work the decodes of one execution may spend between them, in
+/// packet bounds (`rust_j2k::fuzz::PACKET_BOUND` visits each).
 ///
 /// The work cap ([`options`]) prices code-block work only. Every decode may
 /// also walk packets up to the packet work bound, 2^24 visits at the
 /// default for an input under 2^19 bytes. A geometry of many code-blocks
 /// with empty packets reaches that bound in a few hundred bytes, and under
-/// the fuzz build (ASan) one such decode takes about 1 to 3 s, so a target
-/// that decodes such an input a dozen times passes the 30 s `-timeout`.
+/// the fuzz build (ASan) one bound takes about 1 to 4 s, so a target that
+/// runs a dozen such decodes of one input passes the 30 s `-timeout`,
+/// whether the bound refuses them or they pass it just short of it.
 ///
-/// A decode refused at the packet bound has spent it, so the ledger charges
-/// that decode the factor it ran at and marks the input as one that reaches
-/// the bound. From then on a decode runs only if its factor fits in what is
-/// left, and a target ends the execution, or leaves out a check, where it
-/// does not. Before any refusal every decode runs, as a decode that passes
-/// the bound says nothing of what it spent.
+/// So the ledger charges each decode the visits it spent
+/// (`rust_j2k::fuzz::packet_visits`): about its whole bound for a decode
+/// refused there, and what it walked for one that passes. A target asks it
+/// before each decode, which charges what the decodes before spent, and
+/// runs the decode only if the most it can spend, its factor in bounds,
+/// fits in what is left; where it does not, the target ends the execution
+/// or leaves out a check. An input whose decodes walk little runs every
+/// decode, as each spends a small part of a bound. The tiles of an input of
+/// 2^19 bytes or more buy a larger bound, which a factor understates; fuzz
+/// inputs are far smaller.
+///
+/// The factor also leaves out one walk the ledger does not see. A JP2 file
+/// whose codestream box ends early may have its last tile's packets walked
+/// once to find where they end (`packets_end_at` in `src/jp2/mod.rs`),
+/// under a meter of its own that is not counted. That probe may spend 2^22
+/// visits at the default limit, a quarter of a bound, scaled by the packet
+/// work limit: one bound under `WorkLimit::Raised(4)`.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct PacketBounds {
     left: u64,
-    refused: bool,
 }
 
 #[allow(dead_code)]
 impl PacketBounds {
-    /// A ledger of `bounds` packet bounds.
+    /// A ledger of `bounds` packet bounds. What decodes on this thread spent
+    /// before it is not charged to it.
     pub fn new(bounds: u64) -> Self {
+        let _ = rust_j2k::fuzz::packet_visits();
         Self {
-            left: bounds,
-            refused: false,
+            left: bounds.saturating_mul(rust_j2k::fuzz::PACKET_BOUND),
         }
     }
 
-    /// Whether a decode at `factor` packet bounds may run: any decode until
-    /// one is refused at the packet bound, then one that fits in what is left.
-    pub fn allows(&self, factor: u64) -> bool {
-        !self.refused || factor <= self.left
+    /// Charge the visits the decodes on this thread spent since the ledger
+    /// was made or last asked, then say whether a decode at `factor` packet
+    /// bounds may run: whether that many bounds are left.
+    pub fn allows(&mut self, factor: u64) -> bool {
+        self.left = self.left.saturating_sub(rust_j2k::fuzz::packet_visits());
+        factor.saturating_mul(rust_j2k::fuzz::PACKET_BOUND) <= self.left
     }
 
-    /// Whether a decode of this execution was refused at the packet bound.
-    pub fn refused(&self) -> bool {
-        self.refused
-    }
-
-    /// Charge a decode at `factor` packet bounds, if `refused` says the
-    /// packet bound refused it.
-    pub fn charge(&mut self, factor: u64, refused: bool) {
-        if refused {
-            self.refused = true;
-            self.left = self.left.saturating_sub(factor);
-        }
+    /// The packet visits left, as of the last [`allows`](Self::allows).
+    pub fn left(&self) -> u64 {
+        self.left
     }
 }
 

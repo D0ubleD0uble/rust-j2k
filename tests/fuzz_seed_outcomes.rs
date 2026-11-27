@@ -858,9 +858,11 @@ fn the_inputs_at_each_work_cap_fit_it_and_one_more_row_does_not() {
 /// checked tries and the draws of the changes and the probe, which
 /// `incremental_checked_tries_stay_within_the_work_weight` relies on. If it
 /// changed, check that test's count of bounds, then update this hash. The
-/// packet ledger (#692) changed it last: its checks only end an execution
-/// early, so they add no decode to that count.
-const INCREMENTAL_HASH: u64 = 10652251858896192665;
+/// packet ledger changed it last (#695, charging every decode the visits it
+/// spent, `finish` and its check asking for a bound each, and 2 bounds for
+/// every input length): its checks only end an execution early, so they add
+/// no decode to that count.
+const INCREMENTAL_HASH: u64 = 9865290406208140497;
 
 /// `target`'s body from its `fuzz_target!` on, trimmed, without blank lines
 /// or comments.
@@ -876,12 +878,14 @@ fn target_body(target: &str) -> String {
 
 /// Hash of `fuzz/fuzz_targets/decode.rs` from its `fuzz_target!` to the end,
 /// comments left out: its decodes, their work limits and the packet ledger
-/// that holds them to 5 packet bounds (the size of the ledger, a charge for
-/// each decode that may be refused at the packet bound, and the plain
-/// decode's refusal standing in for the strict decode). If it changed,
-/// check that each decode is still charged its factor and that no decode
-/// past the ledger runs, then update this hash.
-const DECODE_HASH: u64 = 7957681324797408435;
+/// that holds them to 5 packet bounds (the size of the ledger, a check of
+/// the factor of each decode that can spend more than one bound, and the
+/// plain decode's refusal standing in for the strict decode). If it
+/// changed, check that every decode past the plain and the strict one asks
+/// the ledger for its factor first, then update this hash. #695 changed it
+/// last: the ledger charges each decode the visits it spent, so the
+/// decode with `strict` off asks for its factor.
+const DECODE_HASH: u64 = 5931843479128370374;
 
 #[test]
 fn the_decode_targets_packet_ledger_is_as_reviewed() {
@@ -925,24 +929,79 @@ fn incremental_checked_tries_stay_within_the_work_weight() {
     );
 }
 
+/// `work_bound/cprl_tall.j2k` with `Ysiz` at 15/16 of its own: the near
+/// miss of `at_most_work_bound_waits.seed` (#695), whose decodes walk about
+/// 15/16 of the packet bound and pass it. Before the ledger charged a decode
+/// that passes, `incremental_decode` took 19 to 26 s on it under ASan.
+fn near_miss() -> Vec<u8> {
+    let mut data = fixture("work_bound/cprl_tall.j2k");
+    // Ysiz is at offset 12 from `SOC`.
+    let ysiz = u32::from_be_bytes(data[12..16].try_into().unwrap());
+    data[12..16].copy_from_slice(&(ysiz / 16 * 15).to_be_bytes());
+    data
+}
+
 #[test]
-fn the_packet_ledger_runs_every_decode_until_a_refusal_then_what_fits() {
-    let mut packets = budget::PacketBounds::new(5);
-    // Before a refusal, a decode that passes costs nothing and any factor runs.
-    packets.charge(4, false);
-    assert!(!packets.refused());
-    assert!(packets.allows(u64::MAX));
-    // The refused decode is charged its factor.
-    packets.charge(1, true);
-    assert!(packets.refused());
-    assert!(packets.allows(4));
-    assert!(!packets.allows(5));
-    packets.charge(4, true);
+fn the_packet_ledger_charges_each_decode_what_it_walked() {
+    let bound = rust_j2k::fuzz::PACKET_BOUND;
+    let options = budget::options(work_weight("incremental_decode"));
+    let mut packets = budget::PacketBounds::new(3);
+    assert_eq!(packets.left(), 3 * bound);
+    // A decode that walks little is charged little.
+    assert!(decode_with(&fixture("derived_quant_lossy.j2k"), &options).is_ok());
+    assert!(packets.allows(2));
+    let small = 3 * bound - packets.left();
+    assert!(small > 0 && small < bound / 1000, "{small}");
+    // A decode refused at the bound is charged about the whole bound.
+    let tall = fixture("work_bound/cprl_tall.j2k");
+    assert!(packet_refused(&decode_with(&tall, &options)));
+    assert!(packets.allows(1));
+    let refused = 3 * bound - small - packets.left();
+    assert!(refused > bound / 16 * 15 && refused <= bound, "{refused}");
+    // A new ledger does not charge what came before it, here a decode no
+    // ledger was asked after.
+    assert!(decode_with(&fixture("derived_quant_lossy.j2k"), &options).is_ok());
+    let mut packets = budget::PacketBounds::new(2);
+    assert!(packets.allows(2));
+    assert_eq!(packets.left(), 2 * bound);
+    // A decode that passes the bound just short of it is charged what it
+    // walked, where before #695 the ledger charged it nothing.
+    let near = near_miss();
+    let passed = decode_with(&near, &options);
+    assert!(!packet_refused(&passed), "{passed:?}");
+    assert!(packets.allows(1));
+    let walked = 2 * bound - packets.left();
+    assert!(walked > bound / 16 * 14 && walked < bound, "{walked}");
+    // The second leaves less than a bound, so the next decode does not run.
+    let _ = decode_with(&near, &options);
     assert!(!packets.allows(1));
     assert!(packets.allows(0));
-    // A charge past what is left leaves nothing, never a wrap.
-    packets.charge(u64::MAX, true);
-    assert!(!packets.allows(1));
+}
+
+/// The `incremental_decode` seed `layers_65535_pass_packet_bound.seed`
+/// (#695), a 4096-byte unit a fuzz run saved: 20 components and 65 535
+/// layers, whose decodes all pass the packet bound at about 0.8 of it. The
+/// target made 9 such decodes of it, 32 to 34 s under ASan, until the ledger
+/// charged a decode that passes the bound; now it makes 2.
+#[test]
+fn the_many_layer_seed_walks_most_of_a_packet_bound_and_passes_it() {
+    let seed = fixture("incremental/layers_65535_pass_packet_bound.seed");
+    assert_eq!(seed.len(), 4096);
+    // A codestream, which the target reads with all-zero control bytes:
+    // 20 components (`Csiz`) and 65 535 layers (the `COD` after `SIZ`).
+    assert_eq!(seed[..4], [0xFF, 0x4F, 0xFF, 0x51]);
+    assert_eq!(u16::from_be_bytes([seed[40], seed[41]]), 20);
+    let cod = 4 + usize::from(u16::from_be_bytes([seed[4], seed[5]]));
+    assert_eq!(seed[cod..cod + 2], [0xFF, 0x52]);
+    assert_eq!(u16::from_be_bytes([seed[cod + 6], seed[cod + 7]]), 65535);
+    let bound = rust_j2k::fuzz::PACKET_BOUND;
+    let options = budget::options(work_weight("incremental_decode")).with_strict(false);
+    let mut packets = budget::PacketBounds::new(2);
+    let decoded = decode_with(&seed, &options);
+    assert!(!packet_refused(&decoded), "{decoded:?}");
+    assert!(packets.allows(1));
+    let walked = 2 * bound - packets.left();
+    assert!(walked > bound / 2 && walked < bound, "{walked}");
 }
 
 /// Whether `result` is a refusal at the packet work bound, by the ledger's
@@ -956,8 +1015,9 @@ fn packet_refused(result: &Result<Image, Error>) -> bool {
 /// sample limit's ceiling and a reduction of 1). Each decode of it is refused
 /// at the default packet work bound, after about 1 to 3 s under ASan: before
 /// the packet ledger, the target made 10 such decodes of it and took 17 to
-/// 31 s. Each decode the ledger charges there, and the strict decode whose
-/// place `decode`'s plain decode takes, must be such a refusal.
+/// 31 s. Each of its decodes, and the strict decode whose place `decode`'s
+/// plain decode takes, must be such a refusal, as the ledger counts on: a
+/// decode refused there spends about the whole bound.
 #[test]
 fn the_packet_bound_seed_is_refused_by_the_decodes_the_ledger_charges() {
     let seed = fixture("incremental/at_most_work_bound_waits.seed");
