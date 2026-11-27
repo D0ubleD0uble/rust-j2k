@@ -39,7 +39,9 @@ pub(crate) fn read_header(bytes: &[u8], options: &DecodeOptions) -> Result<Heade
 /// [`read_header`], going on from what `kept` holds of an earlier call on
 /// bytes that `bytes` extend, and keeping in it what a later call on more
 /// bytes can go on from (see [`HeaderCache`]). It gives what
-/// [`read_header`] gives.
+/// [`read_header`] gives, but that in a JP2 file the message of an
+/// [`Error::Incomplete`] may name where the input cuts the main header, not
+/// where the end of a shorter `jp2c` box does.
 pub(crate) fn read_header_kept(
     bytes: &[u8],
     options: &DecodeOptions,
@@ -677,7 +679,7 @@ pub(crate) struct KeptCut {
     jp2c: Option<usize>,
     /// Where the parse of the main header stopped, for the codestream that
     /// starts at `.0` in the input.
-    main: Option<(usize, codestream::MainCut)>,
+    main: Option<(usize, Box<codestream::MainCut>)>,
 }
 
 impl KeptCut {

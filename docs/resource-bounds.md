@@ -663,10 +663,14 @@ it, about 10 times the input. The decode holds the same parse.
 own headers between calls, and goes on from where the last call stopped.
 Calls after each feed walk the tile-parts about once in all, and each call
 is charged the budgets as a read from the start is: after each 256 KiB fed
-of the 235 MB file above, 66 ms in all. Each call also parses the main
-header again, so the cost of a call is the main header plus the tile-parts
-fed since, up to the budgets; a main header of megabytes of `PPM` data is
-parsed on every call. The header of a tile-part not yet
+of the 235 MB file above, 66 ms in all. Once the main header is whole,
+each call also parses it again, so the cost of a call is the main header
+plus the tile-parts fed since, up to the budgets; a main header of
+megabytes of `PPM` data is parsed on every call from then on. Before that,
+while the bytes fed end inside the main header or before a JP2 file's
+`jp2c`, each call goes on from the last whole marker segment or box, so the
+calls read them about once in all (a 256 KiB `PPM` main header fed 256
+bytes at a time: 506 times over before, once now). The header of a tile-part not yet
 fed in full, or of a last tile-part whose `Psot` is 0, is read again on
 each call. What it keeps, about 140 bytes for each tile counted under its
 own header and a byte for each other tile, is held until the options

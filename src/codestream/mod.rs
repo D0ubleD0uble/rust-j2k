@@ -2465,6 +2465,14 @@ impl MainCut {
     }
 }
 
+/// A parsed main header, the offset of its first `SOT`, and its `PPM`
+/// chunks.
+type MainParts = (MainHeader, usize, Vec<Vec<u8>>);
+
+/// A parse of a main header that failed: the error, and where the input
+/// ends inside the header, where the parse stopped, to go on from.
+pub(crate) type Stopped = (Error, Option<Box<MainCut>>);
+
 /// What the main header's segments set as [`parse_main_header`] judges
 /// them in codestream order: its `SIZ`, and what the segments after it set.
 struct Judge {
@@ -2636,7 +2644,7 @@ impl Judged {
 ///
 /// The header is walked by [`walk_main_header`] first, then each located
 /// segment is interpreted in codestream order.
-fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> {
+fn parse_main_header(bytes: &[u8]) -> Result<MainParts> {
     parse_main_header_from(bytes, None).map_err(|(error, _)| error)
 }
 
@@ -2645,10 +2653,10 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
 /// error comes with where this parse stopped, to go on from.
 fn parse_main_header_from(
     bytes: &[u8],
-    from: Option<MainCut>,
-) -> std::result::Result<(MainHeader, usize, Vec<Vec<u8>>), (Error, Option<MainCut>)> {
+    from: Option<Box<MainCut>>,
+) -> std::result::Result<MainParts, Stopped> {
     let fail = |error: Error| (error, None);
-    let (pos, located, judge, unsupported) = match from {
+    let (pos, located, judge, unsupported) = match from.map(|cut| *cut) {
         Some(cut) => (cut.pos, cut.located, cut.judge, cut.unsupported),
         None => {
             // 0 bytes, or `FF` alone, may still become `SOC`.
@@ -2674,12 +2682,14 @@ fn parse_main_header_from(
     let located = located + walk.segments.len();
     // Where the input ends inside the header, where to go on from.
     let cut = |error: Error, judge: Option<Box<Judge>>, unsupported: Option<Error>| {
-        let cut = matches!(error, Error::Incomplete(_)).then(|| MainCut {
-            len: bytes.len(),
-            pos: walk.stopped,
-            located,
-            judge,
-            unsupported,
+        let cut = matches!(error, Error::Incomplete(_)).then(|| {
+            Box::new(MainCut {
+                len: bytes.len(),
+                pos: walk.stopped,
+                located,
+                judge,
+                unsupported,
+            })
         });
         (error, cut)
     };
@@ -2796,8 +2806,8 @@ fn parse_main_header_from(
 /// about once in all.
 pub(crate) fn parse_header_resumed(
     bytes: &[u8],
-    from: Option<MainCut>,
-) -> std::result::Result<ParsedHeader, (Error, Option<MainCut>)> {
+    from: Option<Box<MainCut>>,
+) -> std::result::Result<ParsedHeader, Stopped> {
     debug_assert!(from.as_ref().is_none_or(|cut| cut.len <= bytes.len()));
     let (header, sot_offset, ppm) = parse_main_header_from(bytes, from)?;
     Ok(ParsedHeader {

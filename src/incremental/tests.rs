@@ -1787,7 +1787,11 @@ fn header_walk_after_each_feed(bytes: &[u8], piece: usize) -> u64 {
         let got = format!("{:?}", decoder.header());
         spent += walked();
         let fed = decoder.bytes_fed();
-        assert_eq!(got, fresh_header(decoder.bytes(), &options), "at {fed} bytes");
+        assert_eq!(
+            got,
+            fresh_header(decoder.bytes(), &options),
+            "at {fed} bytes"
+        );
         walked();
     }
     assert!(matches!(decoder.header(), Ok(Some(_))));
@@ -1899,6 +1903,168 @@ fn header_after_doubling_and_byte_feeds_is_a_read_from_the_start() {
                 fresh_header(&bytes[..point], options),
                 "{name} at {point} bytes"
             );
+        }
+    }
+}
+
+/// Feed `bytes` in pieces of `piece` bytes, calling `header` after each,
+/// and check each call against a read from the start of the same bytes.
+fn header_matches_after_each_feed(name: &str, bytes: &[u8], piece: usize) {
+    let options = DecodeOptions::default();
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    for chunk in bytes.chunks(piece) {
+        decoder.feed(chunk);
+        assert_eq!(
+            format!("{:?}", decoder.header()),
+            fresh_header(decoder.bytes(), &options),
+            "{name} at {} bytes",
+            decoder.bytes_fed()
+        );
+    }
+}
+
+/// A fault that comes in after the calls have found the main header cut
+/// short is the error a read from the start gives, as soon as its bytes are
+/// in: a duplicate `SIZ`, a segment length below 2 or a Part 2 marker in
+/// the middle of a `PPM` header (whose refusal waits for the header to end),
+/// and in a JP2 file a `jp2h` with no `ihdr`, or a box shorter than its
+/// header, among the boxes before the codestream.
+#[test]
+fn a_fault_after_a_cut_main_header_is_given_once_its_bytes_are_in() {
+    use crate::synth;
+    let header = ppm_codestream(16);
+    // After the 8th `PPM` segment.
+    let at = header
+        .windows(2)
+        .enumerate()
+        .filter(|(_, code)| *code == [0xFF, 0x60])
+        .nth(8)
+        .map(|(at, _)| at)
+        .unwrap();
+    let siz = synth::siz_body([64, 64, 0, 0, 64, 64, 0, 0], &[[7, 1, 1]]);
+    for (what, insert) in [
+        ("a duplicate SIZ", synth::seg(0xFF51, &siz)),
+        ("a length below 2", vec![0xFF, 0x64, 0x00, 0x01]),
+        ("a Part 2 marker", synth::seg(0xFF74, &[0, 0])),
+        ("a COM", synth::seg(0xFF64, &[0, 1, b'x'])),
+    ] {
+        let mut bytes = header.clone();
+        bytes.splice(at..at, insert);
+        for piece in [1, 97, 1000] {
+            header_matches_after_each_feed(what, &bytes[..bytes.len().min(40_000)], piece);
+        }
+        header_matches_after_each_feed(what, &bytes, 1000);
+        let jp2 = padded_jp2(&bytes, 300);
+        header_matches_after_each_feed(what, &jp2, 61);
+    }
+    let codestream = ppm_codestream(1);
+    let plain = padded_jp2(&codestream, 300);
+    // After the 150th box of padding.
+    let at = plain
+        .windows(4)
+        .enumerate()
+        .filter(|(_, kind)| *kind == b"free")
+        .nth(150)
+        .map(|(at, _)| at - 4)
+        .unwrap();
+    for (what, insert) in [
+        (
+            "a jp2h with no ihdr",
+            synth::bx(b"jp2h", &synth::bx(b"colr", &synth::colr_enum(17))),
+        ),
+        (
+            "a second jp2h",
+            synth::bx(b"jp2h", &synth::ihdr_for(&codestream)),
+        ),
+        (
+            "a box of length 4",
+            vec![0, 0, 0, 4, b'f', b'r', b'e', b'e'],
+        ),
+        (
+            "a box of length 0",
+            vec![0, 0, 0, 0, b'f', b'r', b'e', b'e'],
+        ),
+        (
+            "a jp2h of length 0",
+            [&[0u8, 0, 0, 0][..], b"jp2h", &synth::ihdr_for(&codestream)].concat(),
+        ),
+    ] {
+        let mut bytes = plain.clone();
+        bytes.splice(at..at, insert);
+        for piece in [1, 7, 64] {
+            header_matches_after_each_feed(what, &bytes, piece);
+        }
+    }
+}
+
+/// A call after one that panicked holding what `header` keeps, and a call
+/// while another holds it, read from the start: each gives what a read from
+/// the start gives, and the calls after them go on as before.
+#[test]
+fn header_after_a_poisoned_or_held_cache_is_a_read_from_the_start() {
+    let bytes = padded_jp2(&ppm_codestream(16), 2000);
+    let options = DecodeOptions::default();
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    for (index, chunk) in bytes.chunks(509).enumerate() {
+        decoder.feed(chunk);
+        if index % 7 == 3 {
+            let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _kept = decoder.header_kept.lock().unwrap();
+                panic!("poison the cache");
+            }));
+            assert!(poison.is_err());
+            assert!(decoder.header_kept.is_poisoned());
+        }
+        let held = (index % 5 == 1).then(|| {
+            decoder
+                .header_kept
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+        let got = format!("{:?}", decoder.header());
+        drop(held);
+        assert_eq!(
+            got,
+            fresh_header(decoder.bytes(), &options),
+            "at {} bytes",
+            decoder.bytes_fed()
+        );
+    }
+}
+
+/// A `jp2c` box whose length ends it inside its main header, then boxes
+/// after it, whole or at fault: each call gives what a read from the start
+/// gives, as the boxes after the `jp2c` come in.
+#[test]
+fn header_on_a_jp2c_box_ending_inside_its_main_header_is_a_read_from_the_start() {
+    use crate::synth;
+    let whole = ppm_codestream(4);
+    let codestream = &whole[..9000];
+    for (what, after) in [
+        ("nothing", vec![]),
+        ("an xml box", vec![synth::bx(b"xml ", b"<a/>")]),
+        (
+            "a box of length 4",
+            vec![vec![0, 0, 0, 4, b'f', b'r', b'e', b'e']],
+        ),
+        (
+            "a box of length 0",
+            vec![vec![0, 0, 0, 0, b'f', b'r', b'e', b'e']],
+        ),
+        ("a jp2h", vec![synth::bx(b"jp2h", &synth::ihdr_for(&whole))]),
+        ("a second jp2c", vec![synth::bx(b"jp2c", &whole)]),
+    ] {
+        let bytes = synth::jp2_file(
+            &[
+                synth::ihdr_for(&whole),
+                synth::bx(b"colr", &synth::colr_enum(17)),
+            ],
+            &[],
+            codestream,
+            &after,
+        );
+        for piece in [1, 13, 500] {
+            header_matches_after_each_feed(what, &bytes, piece);
         }
     }
 }
