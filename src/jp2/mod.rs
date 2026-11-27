@@ -255,7 +255,10 @@ pub(crate) fn parse<'a>(bytes: &'a [u8], packet_work: &WorkLimit) -> Result<Jp2F
 /// of an `ftyp` of length 0 stays open: more bytes add compatibility codes,
 /// one of which may be `jp2 `, and a byte or three leaves the box out of
 /// whole codes. Every other error here is of whole boxes, or of a cut box's
-/// type.
+/// type, which more bytes cannot make right. That one is open only where
+/// the box after the signature is cut inside an `XLBox` that can still be
+/// below 16, a fault a read of the whole box meets first; that of a `jp2c`
+/// cannot be.
 pub(crate) fn parse_boxes<'a>(
     bytes: &'a [u8],
     packet_work: &WorkLimit,
@@ -328,8 +331,10 @@ fn read_file_type(bytes: &[u8]) -> std::result::Result<(Boxes<'_>, FileType), Bo
             check_file_type(&ftyp).map_err(|error| of_box(&boxes, error))?
         }
         Some(Ok(other)) => return Err(not_ftyp(other.kind).into()),
-        // A box cut short is judged on its type once that has arrived. A
-        // fault of its `XLBox`, still to come, would come first.
+        // A box cut short is judged on its type once that has arrived. More
+        // bytes cannot make the type right, so the fault is final, unless a
+        // fault of its `XLBox` can still come, which a read of the whole
+        // box meets first ([`Boxes::cut_in_length`]; never for a `jp2c`).
         Some(Err(error @ Error::Incomplete(_))) => match boxes.cut_kind() {
             Some(kind) if &kind != b"ftyp" => {
                 return Err(BoxFault {
