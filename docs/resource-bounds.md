@@ -670,7 +670,14 @@ megabytes of `PPM` data is parsed on every call from then on. Before that,
 while the bytes fed end inside the main header or before a JP2 file's
 `jp2c`, each call goes on from the last whole marker segment or box, so the
 calls read them about once in all (a 256 KiB `PPM` main header fed 256
-bytes at a time: 506 times over before, once now). The header of a tile-part not yet
+bytes at a time: 506 times over before, once now). For this it keeps
+what the main header's segments read so far set, held while the main
+header stays cut short, whether or not `header` is called again: up to
+about 3 bytes for each byte of the main header read so far (10.9 MB for a
+3.5 MB main header with a `COC` and a `QCC` for each of 16384 components),
+or 24 bytes for each `PPM` segment, which the 65536 segments a main header
+may have cap at 1.6 MB (`tests/incremental_header_cache_alloc.rs`). The
+header of a tile-part not yet
 fed in full, or of a last tile-part whose `Psot` is 0, is read again on
 each call. What it keeps, about 140 bytes for each tile counted under its
 own header and a byte for each other tile, is held until the options

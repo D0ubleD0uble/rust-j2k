@@ -666,11 +666,8 @@ pub(crate) struct HeaderCache {
 /// cut short: the first read that gives anything else drops it.
 #[derive(Default)]
 pub(crate) struct KeptCut {
-    /// The bytes of the input when it was kept, and a hash of the first 64
-    /// of them, which a later input must start with: as cheap a defense as
-    /// [`MainKey`]'s against a read of another input on the same cache.
+    /// The bytes of the input when it was kept.
     len: usize,
-    head: u64,
     /// In a JP2 file, where the walk of the boxes before the codestream
     /// stopped.
     boxes: Option<jp2::BoxesCut>,
@@ -683,24 +680,17 @@ pub(crate) struct KeptCut {
 }
 
 impl KeptCut {
-    /// The hash of the first bytes of `bytes`, up to 64.
-    fn head_of(bytes: &[u8]) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        bytes[..bytes.len().min(64)].hash(&mut hasher);
-        hasher.finish()
-    }
-
     /// Key what is kept on `bytes`, the input it was kept for.
     fn key(&mut self, bytes: &[u8]) {
         self.len = bytes.len();
-        self.head = Self::head_of(bytes);
     }
 
     /// Whether what is kept holds for `bytes`: they are no shorter than the
-    /// input it was kept for, and start with the same bytes.
+    /// input it was kept for. That is enough, as the cache belongs to one
+    /// decoder, whose bytes only grow, through `feed`: a longer input
+    /// extends the one it was kept for.
     fn holds_for(&self, bytes: &[u8]) -> bool {
-        bytes.len() >= self.len && Self::head_of(&bytes[..self.len]) == self.head
+        bytes.len() >= self.len
     }
 
     /// Whether there is anything to go on from.

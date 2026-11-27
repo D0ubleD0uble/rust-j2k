@@ -80,7 +80,8 @@ use crate::{
 /// its calls comes to about 140 bytes for each tile counted under its own
 /// header and a byte for each other tile, plus a key of the main header, its
 /// length and a hash, and while the main header is cut short, what its
-/// segments read so far set. Each refine also holds what [`decode_with`] holds for the
+/// segments read so far set (up to about 3 bytes for each byte of them).
+/// Each refine also holds what [`decode_with`] holds for the
 /// same bytes, so the decoder holds at most one decode's peak plus the walks
 /// kept (twice the image's samples plus twice the walk of the largest tile
 /// walked so far; a change of the region or the reduction keeps that walk),
@@ -394,7 +395,12 @@ impl IncrementalDecoder {
     /// the end of the bytes fed. For this the decoder keeps where the last
     /// call stopped, the first `ihdr`, and what the main header's segments
     /// read so far set (its `PPM` data as offsets into the bytes fed, not a
-    /// copy), until a call finds the main header whole, or an error.
+    /// copy), until a call finds the main header whole, or an error. It is
+    /// held while the main header stays cut short, whether or not `header`
+    /// is called again: up to about 3 bytes for each byte of the main header
+    /// read so far (10.9 MB for 3.5 MB of a `COC` and a `QCC` for each of
+    /// 16384 components), or 24 bytes for each `PPM` segment, whose count
+    /// the 65536 segments a main header may have caps at 1.6 MB.
     ///
     /// Once the main header is whole, each call parses it again (its `PPM`
     /// data included), and in a JP2 file reads the boxes before the

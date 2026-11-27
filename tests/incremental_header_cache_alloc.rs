@@ -9,6 +9,12 @@
 //! Parsed, each record is a `Vec` of 24 bytes, so a copy of the parsed
 //! header would be 100 MB, six times the input.
 //!
+//! While the bytes fed end inside the main header, a call keeps what the
+//! segments read so far set, so the next goes on from there; that is
+//! measured on the main headers that keep the most for their bytes: 16384
+//! components, each with a `COC` and a `QCC`, and 65000 `PPM` segments of
+//! one record each.
+//!
 //! The bytes are counted with a counting global allocator, so this file
 //! holds a single test: a second one running in parallel would count into
 //! the same totals. The shim is in `tests/support/alloc.rs`.
@@ -62,6 +68,58 @@ fn big_tile_file() -> Vec<u8> {
     bytes
 }
 
+/// A main header of 16384 components, each with a `COC` of 32 levels and a
+/// `QCC` of its 97 subbands' steps, cut inside its last `QCC`.
+fn cut_component_header() -> Vec<u8> {
+    let components = 16384u16;
+    let siz = synth::siz_body(
+        [64, 64, 0, 0, 64, 64, 0, 0],
+        &vec![[7, 1, 1]; usize::from(components)],
+    );
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0)),
+        synth::seg(0xFF5C, &synth::qcd_none_body(0, &[8])),
+    ]
+    .concat();
+    for component in 0..components {
+        let mut coc = component.to_be_bytes().to_vec();
+        coc.extend_from_slice(&[0, 32, 0, 0, 0, 1]);
+        bytes.extend(synth::seg(0xFF53, &coc));
+        // Scalar expounded: a 16-bit step for each subband.
+        let mut qcc = component.to_be_bytes().to_vec();
+        qcc.push((1 << 5) | 2);
+        qcc.extend((0..97).flat_map(|_| (8u16 << 11).to_be_bytes()));
+        bytes.extend(synth::seg(0xFF5D, &qcc));
+    }
+    bytes.truncate(bytes.len() - 10);
+    bytes
+}
+
+/// A main header of 65000 `PPM` segments of one empty record each, cut
+/// inside the last.
+fn cut_ppm_header() -> Vec<u8> {
+    let mut bytes = ppm_file();
+    let first = bytes.windows(2).position(|code| code == [0xFF, 0x60]);
+    bytes.truncate(first.expect("a PPM"));
+    for index in 0..65_000u32 {
+        // `Zppm` counts up and wraps; the order is checked once the header
+        // is whole.
+        bytes.extend(synth::seg(0xFF60, &[index as u8, 0, 0, 0, 0]));
+    }
+    bytes.truncate(bytes.len() - 2);
+    bytes
+}
+
+/// The heap `decoder` holds after a call of `header()` that finds the main
+/// header cut short, over what it held before.
+fn held_while_cut(decoder: &IncrementalDecoder) -> usize {
+    let base = CURRENT.load(Ordering::SeqCst);
+    assert!(decoder.header().expect("cut short").is_none());
+    CURRENT.load(Ordering::SeqCst).saturating_sub(base)
+}
+
 /// A decoder whose `header_kept` mutex has been locked once, with nothing fed.
 /// Where std's `Mutex` is pthread-based (macOS, for one), it boxes its
 /// `pthread_mutex_t` on the first lock (64 bytes on aarch64 macOS), which is
@@ -110,11 +168,30 @@ fn header_holds_what_the_files_tiles_need() {
     let mut decoder = warm_decoder(lenient);
     decoder.feed(&bytes);
     let counts = held_after_calls(&decoder, &want);
+    drop(decoder);
+
+    // Main headers cut short: what their segments set is kept.
+    let mut cut = Vec::new();
+    for bytes in [cut_component_header(), cut_ppm_header()] {
+        let mut decoder = warm_decoder(DecodeOptions::default().with_strict(false));
+        decoder.feed(&bytes);
+        cut.push((bytes.len(), held_while_cut(&decoder)));
+    }
 
     // Printed after the measures: the captured output is heap too.
-    println!("size {size}; held {none:?} (PPM file), {counts:?} (big tile)");
+    println!(
+        "size {size}; held {none:?} (PPM file), {counts:?} (big tile), \
+         (bytes, held) {cut:?} (cut headers)"
+    );
     assert_eq!(none, [0; 3]);
     for held in counts {
         assert!((1..=4096).contains(&held), "{held} bytes held");
     }
+    // About 3 times the header's bytes for the components, and 24 bytes a
+    // `PPM` segment.
+    let [(components_len, components), (_, ppm)] = cut[..] else {
+        unreachable!("two cut headers")
+    };
+    assert!(components <= 4 * components_len, "{components} bytes held");
+    assert!(ppm <= 32 * 65_000, "{ppm} bytes held");
 }

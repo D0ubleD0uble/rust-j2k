@@ -1997,25 +1997,21 @@ fn a_fault_after_a_cut_main_header_is_given_once_its_bytes_are_in() {
     }
 }
 
-/// A call after one that panicked holding what `header` keeps, and a call
-/// while another holds it, read from the start: each gives what a read from
-/// the start gives, and the calls after them go on as before.
-#[test]
-fn header_after_a_poisoned_or_held_cache_is_a_read_from_the_start() {
+/// Feed `bytes` 509 bytes at a time, calling `header` after each, with
+/// `before` run on the decoder first and `hold` saying whether to hold the
+/// lock on what `header` keeps through the call: each call gives what a
+/// read from the start gives.
+fn header_around_the_cache(
+    hold: impl Fn(usize) -> bool,
+    before: impl Fn(&mut IncrementalDecoder, usize),
+) {
     let bytes = padded_jp2(&ppm_codestream(16), 2000);
     let options = DecodeOptions::default();
     let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
     for (index, chunk) in bytes.chunks(509).enumerate() {
         decoder.feed(chunk);
-        if index % 7 == 3 {
-            let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _kept = decoder.header_kept.lock().unwrap();
-                panic!("poison the cache");
-            }));
-            assert!(poison.is_err());
-            assert!(decoder.header_kept.is_poisoned());
-        }
-        let held = (index % 5 == 1).then(|| {
+        before(&mut decoder, index);
+        let held = hold(index).then(|| {
             decoder
                 .header_kept
                 .lock()
@@ -2030,6 +2026,36 @@ fn header_after_a_poisoned_or_held_cache_is_a_read_from_the_start() {
             decoder.bytes_fed()
         );
     }
+}
+
+/// A call while another holds what `header` keeps reads from the start,
+/// and the calls after it go on as before.
+#[test]
+fn header_while_the_cache_is_held_is_a_read_from_the_start() {
+    header_around_the_cache(|index| index % 5 == 1, |_, _| {});
+}
+
+/// A call after one that panicked holding what `header` keeps reads from
+/// the start, and the calls after it go on as before.
+#[test]
+#[cfg_attr(
+    target_os = "wasi",
+    ignore = "a panic aborts on wasm32-wasip1, so `catch_unwind` cannot catch it"
+)]
+fn header_after_a_poisoned_cache_is_a_read_from_the_start() {
+    header_around_the_cache(
+        |index| index % 5 == 1,
+        |decoder, index| {
+            if index % 7 == 3 {
+                let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _kept = decoder.header_kept.lock().unwrap();
+                    panic!("poison the cache");
+                }));
+                assert!(poison.is_err());
+                assert!(decoder.header_kept.is_poisoned());
+            }
+        },
+    );
 }
 
 /// A `jp2c` box whose length ends it inside its main header, then boxes

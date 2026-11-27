@@ -296,6 +296,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   256 KiB `PPM` main header fed 256 bytes at a time was walked 506 times
   over and is now walked once. The headers and errors it returns are
   unchanged. Once the main header is whole, each call still parses it.
+  While it is cut short, the decoder holds what its segments read so far
+  set, up to about 3 bytes for each byte of them.
 - A JP2 file padded with boxes holds less memory while its boxes are read.
   The boxes after the codestream are held once instead of twice, and a box
   the decoder neither reads nor reports (an unknown box, a JPX box, an
