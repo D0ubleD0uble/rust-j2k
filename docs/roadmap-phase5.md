@@ -410,7 +410,11 @@ Settled on 2026-11-17.
    encode is a new `Error::InvalidImage`, such as a sample outside its
    declared depth, and bad options are `Error::InvalidOptions`. There is no
    `Encoder` builder until threads (#301) give it state, and no `io::Write`
-   output, since rate control, TLM and `Psot` need lengths first. A borrowed
+   output, since rate control, TLM and `Psot` need lengths first. The
+   `encode` rustdoc must say it ignores `Image::jp2` and `Image::report`.
+   `Error::InvalidOptions` is documented as decode-only (`src/error.rs`, the
+   variant and the error table), so that rustdoc is widened when
+   `EncodeOptions` reuses it. A borrowed
    input view comes with #303. `Image::jp2` and `Image::report` are ignored:
    the boxes come from the options, and a report describes a decode. The
    origin comes from #254, on the grid of `width` and `height`, so component
@@ -438,7 +442,9 @@ Settled on 2026-11-17.
    code-block styles, markers and tile-parts. Each has its own step and
    oracle below. POC and ROI have the weakest external oracles, and [Oracle
    limits](#oracle-limits) says what a cross-decode can and cannot prove.
-5. **The encoder sits behind an `encode` cargo feature, on by default.** A
+5. **The encoder sits behind an `encode` cargo feature, on by default
+   (proposed, to be confirmed in 0.7).** The #515 answer of 2026-11-26 leaves
+   the encoder default open until then. A
    decode-only user (fieldglass, or wasm) sets `default-features = false`
    and compiles none of it. The feature (`encode = []`, in `default`) is
    declared before P5.0. Every encode test, bench and `src/fuzz.rs` entry is
@@ -591,7 +597,7 @@ that adds a marker appends its function to `markers.rs` and one call to
 | P5.16 | `src/encode/poc.rs`, `packet.rs`, `markers.rs` | uses `check_poc_coverage`, re-exported in P5.0b |
 | P5.17 | `src/encode/roi.rs`, `passes.rs`, `markers.rs` | uses `undo_maxshift` (`pub(crate)`) and `top_coded_plane` (`pub`) as they are |
 | P5.18 | `src/encode/packed.rs`, `codestream.rs` | none |
-| P5.19 | `src/encode/jp2.rs`, `options.rs` | none: uses the public `Palette` type |
+| P5.19 | `src/encode/jp2.rs`, `options.rs` | `src/jp2/palette.rs`: a validating `Palette::new` (NE 1..=1024, NPC 1..=255, column depths) and a `PaletteColumn::new`, new API on frozen types (`Palette` has private fields and is `#[non_exhaustive]`; `PaletteColumn` is `#[non_exhaustive]`, so a caller cannot build one). `Jp2Metadata` has no public constructor either: P5.14 and P5.19 need one, or a builder, in `src/jp2/metadata.rs` |
 | P5.20 | `src/encode/profile/mod.rs`, `profile/rules.rs`, `profile/check.rs`, `options.rs` | `src/codestream/mod.rs`: keep `Rsiz` and each tile-part's marker list in the parsed header, `pub(crate)` |
 | P5.21 | `src/encode/profile/cinema.rs` | none |
 | P5.22 | `src/encode/profile/cinema.rs` | none |
