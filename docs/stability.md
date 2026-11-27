@@ -202,9 +202,16 @@ These can change in any release:
 - **The hidden `fuzz` module** and the `__fuzz` feature it needs. They exist
   for the crate's own fuzz targets and tests, and are not part of the API.
 
-The default values of the limits are not covered either, but they change
-only in a minor release. Only the types, the variants and what they mean are
-stable. The values today:
+The default values of the limits are not fixed either. Only the types, the
+variants and what they mean are stable. A value changes by direction:
+
+- Raising one, so that more files pass, can ship in any release.
+- Lowering one, so that some files are refused, needs a minor release,
+  except as a security fix. A security fix that lowers a value can ship in
+  a patch release, and the CHANGELOG lists it (see
+  [SECURITY.md](../SECURITY.md)).
+
+The values today:
 
 - The sample limit: 2^29 samples, or 8 samples per byte of input when that
   is more.

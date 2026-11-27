@@ -25,8 +25,9 @@ It needs Rust 1.87 or newer.
 The crate follows Semantic Versioning. Within a minor version, the types,
 the error variants and limit kinds, and what each means do not change in a
 way that breaks your code. Message text, the minimum Rust version and which
-fault is reported first can change in any release, and the default limit
-values in a minor one.
+fault is reported first can change in any release. A default limit can be
+raised in any release, and lowered only in a minor one or as a security
+fix.
 [docs/stability.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/stability.md)
 lists what is covered and what is not.
 

@@ -185,7 +185,8 @@
 //! limit kinds, the accessors, what [`LimitDetail::retry_with`] means, or
 //! the variant each fault gives. Message and `Display` text, the minimum
 //! Rust version and which fault is reported first can change in any
-//! release, and the default limit values in a minor one.
+//! release. A default limit can be raised in any release, and lowered only
+//! in a minor one or as a security fix.
 //! [What the API covers](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/stability.md)
 //! gives the full list.
 //!
