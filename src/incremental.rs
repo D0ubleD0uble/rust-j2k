@@ -63,9 +63,8 @@ use crate::{
 /// pieces costs up to that many reconstructions.
 ///
 /// Between calls the decoder keeps the bytes fed and the tiles' packet
-/// walks. The walks kept hold at most twice what one decode holds at its
-/// peak: twice the image's samples, plus twice the packet walk of the
-/// largest tile. They also hold at most the larger of 1 MiB and 32 bytes
+/// walks. The walks kept hold at most twice the image's samples plus twice
+/// the walk of the largest tile walked so far. They also hold at most the larger of 1 MiB and 32 bytes
 /// per byte fed, so a short file that declares a large image holds little
 /// between calls: a file of 1228 bytes that declares a 16384 x 16384 image
 /// holds no walk. A tile whose walk would pass either bound is walked from

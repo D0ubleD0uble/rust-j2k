@@ -71,8 +71,9 @@ as input, even in a conformant file (`COM` segments, a JP2 `xml ` box, bytes
 after `EOC`), and it compresses well: 67 MB of zeros gzips to 65 KB. Bound the
 input's size (step 1 of [Running a decode service](#running-a-decode-service)).
 Past 64 MiB the worst-case peak is about 102 times that size, plus up to about
-6.5 bytes for each byte of JP2 metadata boxes, and up to about three times that
-for an `IncrementalDecoder`. A one-tile 1 x 2^30 image
+6.5 bytes for each byte of JP2 metadata boxes, and, for an
+`IncrementalDecoder`, one decode's peak plus the packet walks it keeps and the
+bytes fed (see below). A one-tile 1 x 2^30 image
 followed by 128 MiB of zeros after `EOC` (134,283,241 bytes) decodes at the
 defaults (`strict` on) in 23.5 s with a peak RSS of 8.30 GiB, measured. The
 sample limit also sets how many code-blocks and precincts one tile may hold:
@@ -122,9 +123,10 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    after the codestream, and the image's metadata keeps an entry and a copy
    of the payload for each `xml `, `uuid`, `jp2i`, `uinf` and `colr` box. A
    payload of a few bytes still takes a whole heap block, so a file padded
-   with 9-byte `xml ` boxes holds up to about 9 bytes for each byte of them
-   while the boxes are read, and up to about 6.5 through the decode and
-   after it, measured. A box before the codestream that is neither read nor
+   with 9-byte `xml ` boxes holds up to about 12 bytes for each byte of them
+   while the boxes are read (about 9 unless a `jp2c` box longer than its
+   codestream makes the boxes after it walked twice), and up to about 6.5
+   through the decode and after it, measured. A box before the codestream that is neither read nor
    reported holds nothing (see "JP2 box records" in
    [`docs/resource-bounds.md`](docs/resource-bounds.md)).
 2. **Set a fixed sample ceiling.** Set `DecodeOptions::sample_limit` to

@@ -295,8 +295,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before it went from 68 MB to 19 MB. `SECURITY.md` and
   `docs/resource-bounds.md` now count what remains. The metadata holds up
   to about 6.5 bytes for each byte of metadata boxes through the decode, and
-  the walk up to about 9 while the boxes are read, as a payload of a few
-  bytes takes a whole heap block. They also state the `IncrementalDecoder`
+  the walk up to about 12 while the boxes are read (about 9 unless a `jp2c`
+  box longer than its codestream makes the boxes after it walked twice), as
+  a payload of a few bytes takes a whole heap block. They also state the `IncrementalDecoder`
   bound as one decode's peak plus the packet walks it keeps (at most twice
   the image's samples plus twice the walk of the largest tile walked so
   far), plus up to twice the bytes fed (#678).

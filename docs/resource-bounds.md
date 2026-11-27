@@ -244,8 +244,8 @@ counted are the bytes in memory, not on the wire, and padding compresses well:
 67 MB of zeros gzips to 65 KB. So a service should bound the input size it
 accepts, measured after any decompression. Past 64 MiB the worst-case peak is
 about 102 times that size, plus up to about 6.5 bytes for each byte of JP2
-metadata boxes, and up to about three times that for an
-`IncrementalDecoder`. A one-tile 1 x 2^30 image needs 128 MiB of input to fit
+metadata boxes, and, for an `IncrementalDecoder`, one decode's peak plus the
+packet walks it keeps and the bytes fed (see below). A one-tile 1 x 2^30 image needs 128 MiB of input to fit
 the default. Measured: with 128 MiB of zeros after `EOC` (134,283,241 bytes) it
 decodes at the defaults (`strict` on) in 23.5 s with a peak RSS of 8.30 GiB, and
 at 134,065,513 bytes it is refused, naming `Raised(2)`. Time grows with the
@@ -380,35 +380,46 @@ of payload) holds 24 + 32 = 56 bytes in the metadata, about 6.2 bytes for each
 byte of the box, and 80 with its walk record while the boxes are read, about
 8.9. A 12-byte `colr` (one byte past its three header fields) gives about 5.3
 and 8.7, a `uuid` or `uinf` under 4. So the metadata holds up to about 6.5
-bytes for each byte of metadata boxes, and the walk up to about 9.
+bytes for each byte of metadata boxes.
+
+The walk holds up to about 9 while the boxes are read, unless a `jp2c` box
+longer than its codestream holds a whole box after its `EOC`. Then the walk
+from the codestream's end steps through that box and on past the `jp2c`
+box, and the walk from the box's end records the same boxes again: 24 more
+bytes for each, about 11.6 bytes for each byte of 9-byte boxes. So the walk
+holds up to about 12 bytes for each byte of metadata boxes, and about 9
+unless a `jp2c` box longer than its codestream makes the boxes after it
+walked twice.
 
 Measured on `tests/fixtures/jp2_sycc_422_even.jp2` (390 bytes) with 16 MiB of
 boxes added, all of one shape. Each file was decoded once by a release program
 that reads it and calls `decode`. The peak is `/usr/bin/time -v`'s peak
 resident set. "Held" is the program's resident set after `decode` returns,
 less its resident set before, so it leaves out the input, which the peak
-includes. The zeros row is the baseline.
+includes. The zeros row is the baseline. All figures are in MiB.
 
 | Padding (box size) | Peak before #678 | Peak now | Held now |
 | ------------------ | ---------------- | -------- | -------- |
-| zeros after the `jp2c` box | 19 MB | 19 MB | 0.5 MB |
-| `xml ` after `jp2c` (8 bytes, empty) | 166 MB | 117 MB | 50 MB |
-| `xml ` after `jp2c` (9 bytes) | 208 MB | 165 MB | 102 MB |
-| `xml ` before `jp2c` (8 bytes, empty) | 117 MB | 117 MB | |
-| `xml ` before `jp2c` (9 bytes) | 165 MB | 165 MB | 102 MB |
-| `jp2i` before `jp2c` (9 bytes) | 165 MB | 165 MB | 102 MB |
-| `uuid` before `jp2c` (25 bytes) | | 82 MB | 48 MB |
-| unknown before `jp2c` (8 bytes) | 68 MB | 19 MB | |
-| unknown inside `jp2h` (8 bytes) | 68 MB | 19 MB | |
-| `colr` inside `jp2h` (11 bytes, empty) | 126 MB | 126 MB | |
-| `colr` inside `jp2h` (12 bytes) | 161 MB | 161 MB | 88 MB |
-| unknown after `jp2c` (8 bytes) | 117 MB | 68 MB | |
+| zeros after the `jp2c` box | 18.5 | 18.5 | 0.5 |
+| `xml ` after `jp2c` (8 bytes, empty) | 162.6 | 114.5 | 48.6 |
+| `xml ` after `jp2c` (9 bytes) | 203.4 | 160.7 | 100.1 |
+| `xml ` after a `jp2c` holding an 8-byte box after `EOC` (9 bytes) | 203.3 | 203.3 | 100.1 |
+| `xml ` before `jp2c` (8 bytes, empty) | 114.6 | 114.5 | |
+| `xml ` before `jp2c` (9 bytes) | 160.7 | 160.7 | 100.1 |
+| `jp2i` before `jp2c` (9 bytes) | 160.7 | 160.7 | 100.1 |
+| `uuid` before `jp2c` (25 bytes) | | 79.9 | 46.8 |
+| unknown before `jp2c` (8 bytes) | 66.5 | 18.5 | |
+| unknown inside `jp2h` (8 bytes) | 66.6 | 18.5 | |
+| `colr` inside `jp2h` (11 bytes, empty) | 123.1 | 123.2 | |
+| `colr` inside `jp2h` (12 bytes) | 157.2 | 157.1 | 85.9 |
+| unknown after `jp2c` (8 bytes) | 114.4 | 66.5 | |
 
 Over the baseline, the 9-byte `xml ` boxes peak at 8.9 bytes for each byte of
-them and hold 6.3 after the decode, as the arithmetic above gives. A decode
-whose peak is its samples reaches that peak after the walk, so the walk's term
-does not add to it, but the metadata's does. Before #678, the boxes after the
-codestream were held twice, and every skipped box had a record.
+them (11.6 after the padded `jp2c`) and hold 6.3 after the decode, as the
+arithmetic above gives. A decode whose peak is its samples reaches that peak
+after the walk, so the walk's term does not add to it, but the metadata's
+does. Before #678, the boxes after the codestream were held twice, and every
+skipped box had a record.
 
 ### Segment records
 
