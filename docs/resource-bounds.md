@@ -222,8 +222,10 @@ bytes per byte resident.
 A tiled image peaks lower, as each tile is reconstructed in turn, and a
 one-tile image is also held to the code-blocks and precincts a tile allows
 ([Code-blocks and precincts per tile](#code-blocks-and-precincts-per-tile)),
-which grow with the limit. An `IncrementalDecoder` can hold up to about
-three times one decode's peak, plus the bytes fed.
+which grow with the limit. JP2 metadata boxes add up to 3 bytes for each
+byte of them (see [JP2 box records](#jp2-box-records)). An
+`IncrementalDecoder` can hold up to about three times the largest one-decode
+peak under the options used so far, plus up to twice the bytes fed.
 
 Measured on a release build, a lossless 23171x23171 one-tile 5/3 image of 5
 levels (536.9 M samples, just over 2^29; 234 MB, from `opj_compress -n 5`
@@ -280,9 +282,11 @@ bytes + 2^18 precincts x 750 bytes, from the peaks in [Figures for a decode
 service](#figures-for-a-decode-service)). So below about 2^26 the records, not
 the samples, set the peak. The figure to plan on is 3.2 x 4n for the samples,
 plus about 0.8 GiB for one tile's records, plus up to about 65 bytes for each
-byte of input for [segment records](#segment-records), plus the input. The
-measured peaks against `n` are in that section. An `IncrementalDecoder` can
-hold up to about three times one decode's peak, plus the bytes fed. What to
+byte of input for [segment records](#segment-records), plus up to 3 bytes for
+each byte of JP2 metadata boxes ([JP2 box records](#jp2-box-records)), plus
+the input. The measured peaks against `n` are in that section. An
+`IncrementalDecoder` can hold up to about three times the largest one-decode
+peak under the options used so far, plus up to twice the bytes fed. What to
 set around a decode besides the ceiling (the input size, a timeout, memory for each concurrent decode) is in
 [Running a decode service](../SECURITY.md#running-a-decode-service).
 
@@ -352,6 +356,44 @@ which is above both, so it is on the high side. The 2^20 row holds 261,632 preci
 peaks at 233 MiB, so the two caps together have not been shown to reach the
 estimate; the precinct figure of 750 bytes is from #583's probes and is not
 isolated here.
+
+### JP2 box records
+
+The JP2 box walk keeps a 24-byte record (a type and a slice of the input) for
+each top-level box before the codestream that the metadata reports (`xml `,
+`uuid`, `jp2i`, `uinf` and the first `rreq`), for each `jp2h` child it reads
+(`colr`, `bpcc`, `pclr`, `cmap`, `cdef`, `res `), and for each box after the
+codestream, which OpenJPEG's walk there reads. Other boxes before the
+codestream are skipped without a record. The records are let go before any
+tile is read. The image's metadata keeps one entry for each `xml `, `uuid`,
+`jp2i`, `uinf` and `colr` box through the decode and after it: 24 bytes for an
+`xml ` or `jp2i` box of at least 8 bytes, 32 for a `colr` of at least 11, 40
+for a `uuid` of at least 24 and 56 for a `uinf` of at least 30, each with its
+payload copied. So past the bytes of the payloads, the metadata holds at most
+3 bytes for each byte of such boxes, and the walk, with the metadata built
+from its records, about twice that.
+
+Measured on `tests/fixtures/jp2_sycc_422_even.jp2` (390 bytes) with 2^21 empty
+8-byte boxes added (16 MiB; 11-byte `colr` boxes for that row), decoded once
+by a release program that reads the file and calls `decode`, as
+`/usr/bin/time -v` reports the peak resident set:
+
+| Padding | Before #678 | Now |
+| ------- | ----------- | --- |
+| zeros after the `jp2c` box | 19 MB | 19 MB |
+| `xml ` boxes after `jp2c` | 166 MB | 117 MB |
+| `xml ` boxes before `jp2c` | 117 MB | 117 MB |
+| `jp2i` boxes before `jp2c` | 117 MB | 117 MB |
+| unknown boxes before `jp2c` | 68 MB | 19 MB |
+| unknown boxes inside `jp2h` | 68 MB | 19 MB |
+| `colr` boxes inside `jp2h` | 126 MB | 126 MB |
+| unknown boxes after `jp2c` | 117 MB | 68 MB |
+
+That is up to about 6.5 bytes for each byte of padding while the boxes are
+read, and up to 3 for the rest of the decode. A decode whose peak is its
+samples reaches that peak after the walk, so the walk's term does not add to
+it; the metadata's does. Before #678 the boxes after the codestream were held
+twice and every skipped box had a record, up to about 9 bytes a byte.
 
 ### Segment records
 

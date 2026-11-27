@@ -44,10 +44,12 @@ input may be hostile. With the default limits, the public functions (`decode`,
 the setters) return either a result or a typed `Error` for any input. They
 never panic, read out of bounds or hang, and they allocate at most what the
 limits allow. For the one-shot functions that is about 6.4 GiB at peak for an
-input of up to 64 MiB, and about 102 bytes per byte of input past that. An
-`IncrementalDecoder` holds up to about three times one decode's peak, plus
-the bytes fed. If the machine can't supply that, the process aborts, as any
-Rust program does; that is not a bug. If a panic, an out-of-bounds read, a
+input of up to 64 MiB, and about 102 bytes per byte of input past that, plus
+up to 3 bytes for each byte of JP2 metadata boxes (step 1 of [Running a
+decode service](#running-a-decode-service)). An `IncrementalDecoder` holds up
+to about three times the largest one-decode peak under the options used so
+far, plus up to twice the bytes fed. If the machine can't supply that, the
+process aborts, as any Rust program does; that is not a bug. If a panic, an out-of-bounds read, a
 hang or a larger allocation from any other input happens, report it as
 above.
 
@@ -62,7 +64,8 @@ images; see the [`decode`
 docs](https://docs.rs/rust-j2k/latest/rust_j2k/fn.decode.html)). A file
 that spends its bytes on code-block segments peaks past 43 with square
 tiles too: a 96 MB file of one such tile after 39 tiles of samples peaked
-at about 77 bytes per byte. About 102 is the bound for any file. Padding counts
+at about 77 bytes per byte. About 102 is the bound for any file, plus up to 3
+for each byte of JP2 metadata boxes. Padding counts
 as input, even in a conformant file (`COM` segments, a JP2 `xml ` box, bytes
 after `EOC`), and it compresses well: 67 MB of zeros gzips to 65 KB. Bound the
 input's size (step 1 of [Running a decode service](#running-a-decode-service)).
@@ -80,9 +83,11 @@ around a decode, see [Running a decode service](#running-a-decode-service). A
 file past a limit is refused with `Error::Limit`, which is the guard working,
 not a bug. These figures cover the one-shot decode functions. An
 `IncrementalDecoder` keeps per-tile state between calls and can hold up to
-about three times one decode's peak, plus the bytes fed and a table of 24 bytes
-per tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see "Work
-and memory" in [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
+about three times the largest one-decode peak under the options used so far (a
+change of region or reduction keeps the largest), plus up to twice the bytes
+fed (their `Vec` may hold twice their length in capacity) and a table of 24
+bytes per tile index up to the highest seen, about 1.5 MiB for 65535 tiles
+(see "Work and memory" in [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
 
 For input from a source you trust, `DecodeOptions` can raise these limits
 (`Raised`, on a `SampleLimit` or `WorkLimit`) or remove them (`Unlimited`). A
@@ -109,6 +114,13 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    input and raises the default sample limit, and the tile-part parse keeps a
    record of under 1 KiB for each tile the input carries, at most about 52
    times the input plus 128 KiB (see "The sample limit" in
+   [`docs/resource-bounds.md`](docs/resource-bounds.md)). The JP2 box walk
+   keeps a 24-byte record for each box it reads or reports and for each box
+   after the codestream. With the metadata built from them, a file padded
+   with small boxes holds up to about 6.5 bytes for each byte of them while
+   the boxes are read, and up to 3 through the rest of the decode, measured.
+   A box before the codestream that is neither read nor reported holds
+   nothing (see "JP2 box records" in
    [`docs/resource-bounds.md`](docs/resource-bounds.md)).
 2. **Set a fixed sample ceiling.** Set `DecodeOptions::sample_limit` to
    `SampleLimit::AtMost(n)`. The decode then holds at most `n` samples, `4·n`
@@ -176,7 +188,8 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    once. Count a decode you stopped waiting for as running until it returns:
    a thread past its timeout keeps its memory. Only ending a process gives it
    back. For each live `IncrementalDecoder`, reserve up to about three times
-   one decode's peak during a refine, plus the bytes fed. Between calls it
+   the largest one-decode peak under the options used so far during a
+   refine, plus up to twice the bytes fed. Between calls it
    keeps less (measured: about one peak, 2.7 GiB on a 296 MB file, reported
    in #474). See "Work and memory" in
    [`docs/incremental-decoding.md`](docs/incremental-decoding.md), which also

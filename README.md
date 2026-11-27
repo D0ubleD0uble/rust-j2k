@@ -237,8 +237,8 @@ for an input of up to 64 MiB, or about 102 bytes per byte of input past that.
 If the machine can't supply that, the allocation fails and
 the process aborts, as in any Rust program. Those figures cover the one-shot decode functions;
 `IncrementalDecoder` keeps per-tile state and can hold up to about three times
-one decode's peak, plus the bytes fed and a table of 24 bytes per tile index up
-to the highest seen, about 1.5 MiB for 65535 tiles (see
+the largest one-decode peak under the options used so far, plus up to twice the
+bytes fed and a table of 24 bytes per tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see
 [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)).
 
 `Error::Unsupported` usually means the file is valid JPEG 2000 that uses

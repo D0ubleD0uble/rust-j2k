@@ -284,6 +284,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A JP2 file padded with boxes holds less memory while its boxes are read.
+  The boxes after the codestream are held once instead of twice, and a box
+  the decoder neither reads nor reports (an unknown box, a JPX box, an
+  unknown `jp2h` child) no longer takes a record. 2^21 empty `xml ` boxes
+  after the codestream peaked at 166 MB and now peak at 117 MB; unknown boxes
+  before it went from 68 MB to 19 MB. `SECURITY.md` and
+  `docs/resource-bounds.md` now count what remains: up to 3 bytes for each
+  byte of metadata boxes through the decode. They also state the
+  `IncrementalDecoder` bound as three times the largest one-decode peak
+  under the options used so far, plus up to twice the bytes fed (#678).
 - The published crate's own tests pass. A test that reads a fixture the
   package leaves out (the conformance corpus, the GDAL JP2 files, the OpenJPH
   files and the benchmark inputs) now skips, and says so, in the
