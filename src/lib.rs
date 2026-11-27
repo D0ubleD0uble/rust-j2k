@@ -179,6 +179,19 @@
 //! For a file from a source you trust, lift all three. [`WorkLimit`] and
 //! [`LimitDetail`] have examples that retry after an `Error::Limit`.
 //!
+//! # Stability
+//!
+//! Within a minor version, no change breaks the types, their variants, the
+//! limit kinds, the accessors, what [`LimitDetail::retry_with`] means, or
+//! the variant each fault or wait gives. A fix that brings the output
+//! closer to the standard or OpenJPEG can ship in a patch release. The
+//! minimum Rust version rises only in a minor release. Message and
+//! `Display` text and which fault is reported first can change in any
+//! release. A default limit can be raised in any release, and lowered only
+//! in a minor one or as a security fix.
+//! [What the API covers](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/stability.md)
+//! gives the full list.
+//!
 //! # Conformance
 //!
 //! All 23 codestreams of the ISO/IEC 15444-4 conformance suite decode within
@@ -1413,6 +1426,13 @@ impl DecodeOptions {
     /// address (`isize::MAX` bytes of samples) is still refused, with
     /// [`Error::Limit`]. Use it only for files from a source you trust.
     ///
+    /// On a 32-bit target that address-space cap is 2^29 - 1 samples, below
+    /// the default's floor, so it is the limit at any input size, and
+    /// `Raised` and `Unlimited` cannot lift it. An image past it, and a tile
+    /// past the code-block or precinct caps it sets, are refused as
+    /// [`LimitKind::AddressSpace`], with no retry (see [32-bit
+    /// targets](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/stability.md#32-bit-targets)).
+    ///
     /// [`read_header_with`] checks the sample count as the decode does. It
     /// checks the tile caps below only where the main header shows them (see
     /// the exceptions on [`read_header_with`]), so a header that reads is not
@@ -1704,7 +1724,9 @@ impl DecodeOptions {
     /// assert_eq!(options.sample_limit(), &SampleLimit::Raised(3));
     /// ```
     ///
-    /// `Raised(1)` is stored as `Default`, which sets the same limit.
+    /// `Raised(1)` is stored as `Default`, which sets the same limit. On a
+    /// 32-bit target no setting goes past 2^29 - 1 samples (see
+    /// [`sample_limit`](Self::sample_limit)).
     #[must_use]
     pub fn with_sample_limit(mut self, limit: SampleLimit) -> Self {
         self.sample_limit = limit.normalized();

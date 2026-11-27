@@ -22,12 +22,16 @@ pub type Result<T> = core::result::Result<T, Error>;
 ///
 /// Match on the variant to decide what to do. The [`ErrorDetail`] inside
 /// holds a diagnostic for a log; its wording can change between releases, so
-/// do not parse it or compare it. [`Error::Limit`] holds a [`LimitDetail`]
+/// do not parse it or compare it. The [`Display`](fmt::Display) text, with
+/// the prefix it adds for the variant, is a diagnostic for a log too, not a
+/// stable format: do not parse it. [`Error::Limit`] holds a [`LimitDetail`]
 /// instead, which also says which limit refused the input and, when an
 /// option raises that limit, the [`Raise`] to retry with. `Error` does
 /// not implement `PartialEq`: test the variant with `matches!`, and a limit
 /// by its [`LimitKind`]. Input that is not JPEG 2000 at all, plain text
 /// included, is [`Error::Codestream`]; empty input is [`Error::Incomplete`].
+/// [What the API covers](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/stability.md)
+/// says which of this can change between releases.
 ///
 /// The variant also says what to tell a user:
 ///
@@ -288,7 +292,10 @@ impl Error {
     ///
     /// ```
     /// let error = rust_j2k::decode(b"hello").unwrap_err();
-    /// assert_eq!(error.to_string(), format!("codestream: {}", error.message()));
+    /// // For a log: `Display` names the variant and gives the diagnostic.
+    /// eprintln!("{error}");
+    /// // The diagnostic alone, after a label of your own.
+    /// eprintln!("could not read the file: {}", error.message());
     /// ```
     pub fn message(&self) -> &str {
         match self {
@@ -603,8 +610,8 @@ impl LimitDetail {
         self.refused_at
     }
 
-    /// The diagnostic, without the `limit: ` prefix that the [`Error`]'s
-    /// `Display` adds. Do not parse it: [`kind`](Self::kind),
+    /// The diagnostic, without the prefix the [`Error`]'s `Display` adds. Do
+    /// not parse it: [`kind`](Self::kind),
     /// [`retry_with`](Self::retry_with) and [`refused_at`](Self::refused_at)
     /// hold its data.
     pub fn message(&self) -> &str {
