@@ -42,6 +42,10 @@
 //! the later [`final_shapes`] and the `header_split` inputs
 //! ([`the_header_split_inputs_are_final_once_the_fault_is_in`]).
 
+#[path = "support/inconsistent.rs"]
+mod inconsistent;
+#[path = "support/replaceable.rs"]
+mod replaceable;
 #[path = "support/skip.rs"]
 mod skip;
 #[path = "support/synth.rs"]
@@ -577,16 +581,29 @@ fn a_fault_of_a_box_of_length_0_after_the_codestream_waits() {
 
 /// Why [`held_after_shapes`] wait: with 2^32 bytes or more after the
 /// codestream, OpenJPEG skips a box of length 0 there unread, and the file
-/// decodes. The zeros are allocated lazily and only the start is written,
-/// so the test needs little memory.
+/// decodes. So does the `header_split` input of #722, an `ftyp` of length
+/// 0 there ([`an_ftyp_of_length_0_after_the_codestream_is_held_on_every_prefix`]),
+/// as OpenJPEG 2.5.0 does on it ("Cannot handle box sizes higher than
+/// 2^32", then the image). The zeros are allocated lazily and only the
+/// start is written, so the test needs little memory.
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn a_box_of_length_0_after_the_codestream_past_2_32_bytes_is_skipped() {
-    let shapes = held_after_shapes();
-    for (name, bytes, options, _) in [&shapes[0], &shapes[2], &shapes[6]] {
+    let seed = synth::read_file(synth::fixtures(
+        "incremental/header_split_ftyp_lbox0_after_codestream.seed",
+    ));
+    let mut shapes = held_after_shapes();
+    shapes.push((
+        "the header_split input of #722",
+        seed[12..].to_vec(),
+        DecodeOptions::default(),
+        0,
+    ));
+    for (name, bytes, options, _) in &shapes {
+        let lenient = options.clone().with_strict(false);
+        assert!(decode_with(bytes, &lenient).is_err(), "{name}: whole");
         let mut padded = vec![0u8; bytes.len() + (1 << 32) + 16];
         padded[..bytes.len()].copy_from_slice(bytes);
-        let lenient = options.clone().with_strict(false);
         assert!(decode_with(&padded, &lenient).is_ok(), "{name}");
     }
 }
@@ -601,7 +618,11 @@ fn a_box_of_length_0_after_the_codestream_past_2_32_bytes_is_skipped() {
 ///   codestream: settled by the `Psot` of 0 of its last tile-part, by the
 ///   header of a `jp2c` the walk there stops at, or by the fourth byte of
 ///   an `XLBox` of 2^32 there. Each has a `colr` too short after it, which
-///   would be a fault if it were read.
+///   would be a fault if it were read;
+/// - a whole `ftyp` after the codestream, then an `xml ` of length 0:
+///   settled by the `ftyp`'s last byte. The box of length 0 after it can
+///   still grow, but the `ftyp` before it is whole and refused for its type
+///   alone, so its fault is final.
 fn final_shapes() -> Vec<FinalShape> {
     let short_colr = synth::bx(b"colr", &[1, 0]);
     let default = DecodeOptions::default;
@@ -716,6 +737,12 @@ fn final_shapes() -> Vec<FinalShape> {
             ),
             default(),
             4 + short_colr.len(),
+        ),
+        (
+            "a whole ftyp after the codestream, then an xml of length 0",
+            gray_file(&[synth::ftyp_jp2(), open_box(b"xml ", b"<a/>")].concat()),
+            default(),
+            12,
         ),
     ]
 }
@@ -900,12 +927,13 @@ final_at_once! {
     a_chain_broken_in_a_cut_jp2c_is_final: 9,
     a_tile_part_fault_before_a_second_jp2c_is_final: 10,
     a_tile_part_fault_before_an_xlbox_of_2_32_is_final: 11,
+    a_whole_ftyp_before_a_box_of_length_0_after_the_codestream_is_final: 12,
 }
 
 /// The checks of [`final_at_once!`] on shape `index` of [`final_shapes`].
 fn check_final(index: usize) {
     let shapes = final_shapes();
-    assert_eq!(shapes.len(), 12, "a shape with no test");
+    assert_eq!(shapes.len(), 13, "a shape with no test");
     let (name, bytes, options, after) = shapes.into_iter().nth(index).expect("a shape");
     let settled = bytes.len() - after;
     let lenient = options.clone().with_strict(false);
@@ -1205,6 +1233,104 @@ fn a_jp2c_after_the_signature_cut_in_its_xlbox_is_final() {
     }
 }
 
+/// `incremental/header_split_ftyp_lbox0_after_codestream.seed`, the
+/// `header_split` input of #722: a gray JP2 file whose codestream ends at
+/// its `EOC`, then an `ftyp` box of length 0, which runs to the end of the
+/// file. Its 12 control bytes pick options that do not bear on the boxes,
+/// so the file after them is read under the defaults.
+///
+/// `read_header_with` refuses the file for the `ftyp` alone, as OpenJPEG
+/// does ("The ftyp box must be the second box in the file"). The fault is
+/// held all the same: OpenJPEG skips a box of length 0 after the
+/// codestream unread once 2^32 bytes or more follow it, and the file then
+/// decodes ([`a_box_of_length_0_after_the_codestream_past_2_32_bytes_is_skipped`]).
+/// The `header_split` target built no suffix that long, so it took the
+/// held fault for a wrong answer.
+///
+/// Each prefix is fed to a new decoder, and fed a byte at a time to one
+/// decoder, with `strict` on and off. Before the `ftyp` box's header is
+/// whole, `header` gives what `read_header_with` gives. From there it gives
+/// the header of the file without the `ftyp` box, and a new decoder's
+/// `refine` waits on `Held` with the error `decode_with` gives, the one
+/// `read_header_with` gives. Every error `refine` gives or waits on is the
+/// one `decode_with` gives on the prefix.
+#[test]
+fn an_ftyp_of_length_0_after_the_codestream_is_held_on_every_prefix() {
+    let seed = synth::read_file(synth::fixtures(
+        "incremental/header_split_ftyp_lbox0_after_codestream.seed",
+    ));
+    let bytes = &seed[12..];
+    assert_eq!(&bytes[..12], &synth::JP2_SIGNATURE[..]);
+    // Where the `ftyp` box after the codestream starts, and where its
+    // header ends.
+    let start = bytes.len() - 14;
+    assert_eq!(&bytes[start - 2..start + 8], b"\xFF\xD9\0\0\0\0ftyp");
+    let open = start + 8;
+    let lenient = DecodeOptions::default().with_strict(false);
+    let read = |prefix: &[u8]| match read_header_with(prefix, &lenient) {
+        Ok(header) => format!("{:?}", Ok::<_, Error>(Some(header))),
+        Err(Error::Incomplete(_)) => "Ok(None)".to_string(),
+        Err(error) => format!("{:?}", Err::<Option<()>, _>(error)),
+    };
+    let whole = read(bytes);
+    assert!(
+        whole.contains("the file has an `ftyp` box, which must be the second box"),
+        "{whole}"
+    );
+    let without = read(&bytes[..start]);
+    assert!(without.starts_with("Ok(Some("), "{without}");
+    let check_refine = |refined: Result<Refined, Error>, prefix: &[u8], at: &str| {
+        let one_shot = error_of(&decode_with(prefix, &lenient));
+        match refined {
+            Err(error) => {
+                assert_eq!(Some(format!("{error:?}")), one_shot, "{at}: refine");
+                None
+            }
+            Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
+                assert_eq!(Some(format!("{error:?}")), one_shot, "{at}: wait");
+                Some(())
+            }
+            Ok(Refined::Image(_)) => {
+                assert_eq!(one_shot, None, "{at}: image");
+                None
+            }
+            Ok(_) => None,
+        }
+    };
+    for strict in [false, true] {
+        let options = DecodeOptions::default().with_strict(strict);
+        let mut fed = IncrementalDecoder::new(options.clone()).expect("valid options");
+        for len in 1..=bytes.len() {
+            let prefix = &bytes[..len];
+            let at = format!("strict {strict}, {len} of {} bytes", bytes.len());
+            let expected = read(prefix);
+            let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
+            decoder.feed(prefix);
+            let header = format!("{:?}", decoder.header());
+            let refined = check_refine(decoder.refine(), prefix, &at);
+            if len >= open {
+                assert_eq!(expected, whole, "{at}");
+                assert_eq!(header, without, "{at}: header");
+                assert_eq!(
+                    refined,
+                    Some(()),
+                    "{at}: no wait on the error read_header_with gives"
+                );
+            } else {
+                assert_eq!(header, expected, "{at}: header");
+            }
+            fed.feed(&prefix[len - 1..]);
+            let fed_header = format!("{:?}", fed.header());
+            if len >= open {
+                assert_eq!(fed_header, without, "{at}: fed");
+            } else {
+                assert_eq!(fed_header, expected, "{at}: fed");
+            }
+            check_refine(fed.refine(), prefix, &format!("{at}: fed"));
+        }
+    }
+}
+
 /// A refusal of the sRGB step that more bytes lift, held back from the
 /// boxes while a box after the codestream can still be read: a `colr` too
 /// short there comes first, so `header` gives the header with the channels
@@ -1265,4 +1391,35 @@ fn an_srgb_refusal_more_bytes_lift_waits_for_a_box_after_the_codestream() {
         error_of(&read_header_with(&settled, &lenient)),
         Some(refused)
     );
+}
+
+/// The `header_split` target's [`replaceable::replaceable`] on its
+/// committed inputs. It finds a suffix that changes the error of the #722
+/// input, an `ftyp` of length 0 after the codestream, through the 2^32
+/// bytes past which OpenJPEG skips that box. It finds none for a whole
+/// `ftyp` after the codestream followed by an `xml ` of length 0, nor for a
+/// `jp2h` of length 0 before the codestream with a child of length 4: both
+/// faults are final. A harness that stood in for more than the box of
+/// length 0 after the codestream would pass a decoder that held them.
+#[test]
+fn header_split_finds_a_suffix_only_where_one_changes_the_error() {
+    for (name, expected) in [
+        ("header_split_ftyp_lbox0_after_codestream", true),
+        ("header_split_ftyp_then_xml_lbox0_after_codestream", false),
+        ("header_split_jp2h_lbox0_child_of_length_4", false),
+    ] {
+        let seed = synth::read_file(synth::fixtures(&format!("incremental/{name}.seed")));
+        // All-zero option bytes but the piece sizes' seed: the defaults.
+        assert_eq!(&seed[..6], &[0; 6], "{name}");
+        let bytes = &seed[12..];
+        assert!(
+            read_header_with(bytes, &DecodeOptions::default()).is_err(),
+            "{name}: read"
+        );
+        assert_eq!(
+            replaceable::replaceable(bytes, &DecodeOptions::default()),
+            expected,
+            "{name}"
+        );
+    }
 }

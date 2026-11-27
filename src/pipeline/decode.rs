@@ -179,8 +179,8 @@ pub(crate) fn check_reduction(
         if u32::from(reduction) >= resolutions {
             let place = tile.map_or_else(String::new, |index| format!(" in tile {index}"));
             return Err(Error::invalid_options(format!(
-                "resolution reduction {reduction} discards all {resolutions} resolutions \
-                 of component {component}{place}"
+                "resolution reduction {reduction} leaves no resolution of component \
+                 {component} (it has {resolutions}){place}"
             )));
         }
     }
@@ -1043,8 +1043,8 @@ pub(crate) mod tests {
         assert_eq!(capped_work(&bytes, Some(u16::MAX)), (full, visits));
     }
 
-    /// The reduction check names the component and the resolutions it would
-    /// discard, and the tile only when it runs per tile.
+    /// The reduction check names the component and how many resolutions it
+    /// has, and the tile only when it runs per tile.
     #[test]
     fn check_reduction_message_names_the_tile_only_when_given() {
         let bytes = std::fs::read(concat!(
@@ -1061,9 +1061,25 @@ pub(crate) mod tests {
             Err(Error::InvalidOptions(m)) => m.message().to_owned(),
             other => panic!("{other:?}"),
         };
-        let tail = format!("resolution reduction 2 discards all 2 resolutions of component {last}");
-        assert_eq!(message(None), tail);
-        assert_eq!(message(Some(7)), format!("{tail} in tile 7"));
+        assert_eq!(
+            message(None),
+            format!("resolution reduction 2 leaves no resolution of component {last} (it has 2)")
+        );
+        assert_eq!(
+            message(Some(7)),
+            format!(
+                "resolution reduction 2 leaves no resolution of component {last} (it has 2) in tile 7"
+            )
+        );
+        // A component with a single resolution reads correctly too.
+        header.components[last].coding.decomposition_levels = 0;
+        assert_eq!(
+            match check_reduction(&header, 1, None) {
+                Err(Error::InvalidOptions(m)) => m.message().to_owned(),
+                other => panic!("{other:?}"),
+            },
+            format!("resolution reduction 1 leaves no resolution of component {last} (it has 1)")
+        );
     }
 
     /// The sample-passes the block decoder counts on a decode of `name` (in

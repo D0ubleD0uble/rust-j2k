@@ -292,7 +292,7 @@ fn from_own_header(decode: &rust_j2k::Error) -> bool {
 }
 
 /// The tile a reduction refusal of a tile's own header names: "resolution
-/// reduction R discards ... in tile T".
+/// reduction R leaves no resolution ... in tile T".
 fn reduced_tile(message: &str) -> Option<u32> {
     let (_, tile) = message
         .strip_prefix("resolution reduction ")?

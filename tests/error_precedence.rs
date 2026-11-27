@@ -65,7 +65,8 @@ fn refused_reduction(options: DecodeOptions) -> DecodeOptions {
 }
 
 fn is_reduction_refusal(error: &str) -> bool {
-    error.starts_with("InvalidOptions(") && error.contains("resolution reduction 3 discards")
+    error.starts_with("InvalidOptions(")
+        && error.contains("resolution reduction 3 leaves no resolution")
 }
 
 /// The options whose own refusal, the selection's, the JP2 path gave before
