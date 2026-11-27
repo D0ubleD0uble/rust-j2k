@@ -127,7 +127,7 @@ class Lcms:
 def build_tool() -> Path:
     """Build `scripts/icc_convert` and return the path cargo gave its binary."""
     build = run("cargo", "build", "--release", "--manifest-path", MANIFEST,
-                "--message-format=json", cwd=ROOT)
+                "--message-format=json-render-diagnostics", cwd=ROOT)
     if build.returncode != 0:
         sys.exit(build.stderr)
     path = None
