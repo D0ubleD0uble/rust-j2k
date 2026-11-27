@@ -1,8 +1,8 @@
 //! An `IncrementalDecoder` fed a file in pieces holds what its rustdoc
-//! says: the walks it keeps between calls hold at most about twice what one
-//! decode holds at its peak, and during a refine it holds at most about
-//! three times that, plus the bytes fed (in a `Vec`, so up to twice their
-//! length) in both cases.
+//! says: the walks it keeps between calls hold at most twice the image's
+//! samples plus twice the walk of the largest tile walked so far, and during
+//! a refine it holds one decode's peak plus those walks, plus up to twice
+//! the bytes fed (in a `Vec`, so up to twice their length) in both cases.
 //!
 //! The files have many tiles of one sample each and many components, so a
 //! tile's packet walk is large beside the samples it adds to the image, and
