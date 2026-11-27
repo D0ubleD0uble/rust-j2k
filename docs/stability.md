@@ -81,10 +81,11 @@ hidden `__fuzz` feature is not covered (see "What is not covered").
   named variant, and a JPX file's color space, for example, reaches a caller
   as `Enumerated(12)`. Within a minor version, a value reported under a
   catch-all keeps that variant, unless the value was reported there by
-  mistake, which a fix may correct as the decoded-output rules allow (a JPH
-  `Typ` value that should map to a named variant, for example). Giving it a
-  named variant otherwise needs a minor release, the same rule the `Error`, `Waiting` and `ReportEntry` mappings
-  follow. Match a value you care about by number, and keep a `_` arm.
+  mistake, meaning the crate's own docs already name a variant for it (as
+  with `Typ` 3 in a JPH file). A patch release may correct that, and the
+  CHANGELOG lists it. Otherwise, giving a value a named variant needs a
+  minor release, the same rule the `Error`, `Waiting` and `ReportEntry`
+  mappings follow. Match a value you care about by number, and keep a `_` arm.
 - **Which limit refused.** The `LimitKind` a refusal names, which kinds an
   option raises (`LimitKind::is_adjustable`), and which option that is.
 - **`retry_with`.** What `LimitDetail::retry_with` means, as its rustdoc
@@ -245,10 +246,10 @@ These can change in any release:
 - **Text.** The wording of every message: the text `Error::message`,
   `ErrorDetail::message` and `LimitDetail::message` return, the `Display`
   text of `Error` (with the prefix it adds for the variant), `ErrorDetail`,
-  `LimitDetail` and `ReportEntry`, and all `Debug` output. These are diagnostics for a log,
-  not a stable format: do not parse them or compare them. Match on the
-  variant, and read a limit's data from `kind`, `retry_with` and
-  `refused_at`.
+  `LimitDetail` and `ReportEntry`, and all `Debug` output. These are
+  diagnostics for a log, not a stable format: do not parse them or compare
+  them. Match on the variant, and read a limit's data from `kind`,
+  `retry_with` and `refused_at`.
 - **Which fault wins.** When an input has more than one fault, which one is
   reported, including its variant. The rustdoc of `Error` lists what holds
   today.
