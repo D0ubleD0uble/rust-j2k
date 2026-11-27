@@ -299,6 +299,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `IncrementalDecoder::refine` and `header` give a JP2 file's error at once
+  when the last box after the codestream has length 0 and a type the
+  decode does not check there, such as `xml `, `uuid` or `jp2i`. They held
+  a refusal of the sRGB step, or a fault of the tile-parts, as
+  `Waiting::Held` until `finish`, but no box can follow such a box and its
+  contents are never at fault, so no byte appended changes the error. A
+  `colr`, `jp2h`, `ftyp` or other checked box of length 0 there still
+  holds it (#725).
 - The refusal of a resolution reduction that leaves a component with no
   resolution now reads correctly for a component with one resolution:
   "resolution reduction 1 leaves no resolution of component 0 (it has 1)"

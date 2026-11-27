@@ -165,8 +165,10 @@ use crate::{LimitKind, Raise};
 /// it waits until the bytes fed close the tile-parts with an `EOC`. In a
 /// JP2 file boxes can follow the codestream, and the decode checks them
 /// first, so it waits, and a fault of the tile-parts with it, while a box
-/// there can still be read. None can once the walk there meets a `jp2c` or
-/// an `XLBox` of 2^32 or more, or where the last tile-part has `Psot = 0`
+/// there can still be read. None can once the walk there meets a `jp2c`,
+/// an `XLBox` of 2^32 or more, or a box of length 0 of a type the decode
+/// does not check, such as `xml ` (no box follows it, and its contents are
+/// never at fault), or where the last tile-part has `Psot = 0`
 /// or the tile-part chain is broken on the bytes fed, as OpenJPEG then
 /// reads no box after the codestream. From there the tile-parts wait as a
 /// codestream's do, but where the chain is broken on the bytes fed and the
@@ -1030,7 +1032,9 @@ pub enum Waiting {
     /// the `jp2c` box's length ends it within them, the decode reads that
     /// box's contents whatever follows, so the file closes there. A box of
     /// length 0 there is read while under 2^32 bytes follow it, so it does
-    /// not count.
+    /// not count, unless the decode does not check its type, such as
+    /// `xml `: no box follows it, and its contents are never at fault, so
+    /// none can be read once it is in.
     ///
     /// More bytes can replace the error with one that comes earlier in the
     /// input, and an image can still follow, for example where a later

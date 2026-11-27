@@ -30,7 +30,7 @@
 //!
 //! Nothing read here is applied to the image.
 
-use super::boxes::{Boxes, Jp2Box};
+use super::boxes::{AfterCodestream, Boxes, Jp2Box};
 use super::{BoxFault, Jp2File};
 use super::{channels, color, palette};
 use crate::codestream::markers::marker::{EOC, SOC, SOD, SOT, has_segment, is_marker};
@@ -145,6 +145,7 @@ fn stepped(at: usize, to: usize, bytes: &[u8]) -> usize {
 
 /// What OpenJPEG still holds when it walks the boxes after the codestream,
 /// updated as the walk reads them.
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 struct State {
     /// `ihdr.NC`, which a `bpcc` must match.
     components: usize,
@@ -287,6 +288,39 @@ pub(crate) fn check(file: &Jp2File<'_>, raw_channels: bool) -> core::result::Res
     }
 }
 
+/// The top-level types [`check_box`] reads after the codestream: those it
+/// judges on their type, `jp2h`, and the `jp2h` children it reads at the
+/// top level ([`State::read`]). It takes every other type, `ihdr` included,
+/// whatever the box holds and whatever came before it.
+const CHECKED: [&[u8; 4]; 8] = [
+    b"jP  ", b"ftyp", b"jp2h", b"colr", b"bpcc", b"pclr", b"cmap", b"cdef",
+];
+
+/// Whether no byte appended to the input changes what [`check`] gives on
+/// the walk after the codestream `after`, once OpenJPEG reads it:
+///
+/// - the walk stopped for good on bytes in ([`AfterCodestream::ended`]);
+/// - or it ends on a box of length 0 of a type [`check_box`] does not read
+///   ([`CHECKED`]), such as `xml `. That box runs to the end of the input,
+///   so no box follows it whatever is appended. While under 2^32 bytes
+///   follow its header, the walk takes it and [`check`] passes it; from
+///   2^32 on, the walk ends before it with no fault. Either way [`check`]
+///   reads the same whole boxes before it, in the same state.
+///
+/// A box of length 0 of a type [`check_box`] reads can still change the
+/// answer: its contents grow (a `colr`, a `jp2h`), and from 2^32 bytes on
+/// it is skipped, which takes away a fault of its type alone (an `ftyp`, a
+/// second `pclr`).
+pub(crate) fn settled(after: &AfterCodestream<'_>) -> bool {
+    let open_last = after.open && after.fault.is_none();
+    after.ended
+        || (open_last
+            && after
+                .boxes
+                .last()
+                .is_some_and(|last| !CHECKED.contains(&&last.kind)))
+}
+
 /// Read one top-level box after the codestream.
 fn check_box(state: &mut State, item: &Jp2Box<'_>) -> Result<()> {
     match &item.kind {
@@ -314,5 +348,78 @@ fn check_box(state: &mut State, item: &Jp2Box<'_>) -> Result<()> {
             }
         }
         _ => state.read(item),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jp2::boxes::READ_BY_OPENJPEG;
+
+    /// The states [`check_box`] can meet: nothing held, and a palette with
+    /// its `cmap`, a `colr` and a `cdef` all held.
+    fn states() -> [State; 2] {
+        let empty = State {
+            components: 1,
+            has_color: false,
+            palette: None,
+            mapped: false,
+            channel_definitions: false,
+        };
+        let full = State {
+            components: 3,
+            has_color: true,
+            palette: Some(1),
+            mapped: true,
+            channel_definitions: true,
+        };
+        [empty, full]
+    }
+
+    /// Payloads of each shape a reader tells apart: empty, too short for
+    /// any, a `colr` of `METH` 1, a `pclr`, a `cmap`, a `cdef`, and junk.
+    const PAYLOADS: [&[u8]; 7] = [
+        &[],
+        &[1, 0],
+        &[1, 0, 0, 0, 0, 0, 17],
+        &[0, 1, 1, 7, 0],
+        &[0, 0, 1, 0],
+        &[0, 1, 0, 0, 0, 0, 0, 1],
+        &[0xFF; 24],
+    ];
+
+    /// [`check_box`] passes a box of each type outside [`CHECKED`], whatever
+    /// it holds and in either state, and leaves the state as it was, so
+    /// [`settled`] is right to take a box of length 0 of such a type as
+    /// final. Each type in [`CHECKED`] is at fault on some payload in some
+    /// state, so none is there for nothing, and [`CHECKED`] is every type
+    /// OpenJPEG reads but `ihdr`.
+    #[test]
+    fn check_box_reads_the_checked_types_alone() {
+        let unread = [
+            *b"ihdr", *b"xml ", *b"uuid", *b"jp2i", *b"res ", *b"uinf", *b"rreq", *b"free",
+            *b"jp2c", *b"res\0",
+        ];
+        for kind in CHECKED.iter().map(|kind| **kind).chain(unread) {
+            let checked = CHECKED.contains(&&kind);
+            let mut faults = false;
+            for start in states() {
+                for payload in PAYLOADS {
+                    let mut state = start.clone();
+                    let read = check_box(&mut state, &Jp2Box { kind, payload });
+                    faults |= read.is_err();
+                    if !checked {
+                        assert!(read.is_ok(), "{kind:?}, {payload:?}");
+                        assert_eq!(state, start, "{kind:?}, {payload:?}");
+                    }
+                }
+            }
+            assert_eq!(faults, checked, "{kind:?}");
+        }
+        let read: Vec<_> = READ_BY_OPENJPEG
+            .iter()
+            .filter(|kind| **kind != b"ihdr")
+            .collect();
+        assert_eq!(read, CHECKED.iter().collect::<Vec<_>>());
     }
 }

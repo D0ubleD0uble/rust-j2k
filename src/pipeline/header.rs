@@ -1304,7 +1304,8 @@ pub(super) struct Jp2Prefix<'a> {
 ///   first. It is final where OpenJPEG reads no box there whatever follows
 ///   ([`jp2::Jp2File::after_settled`]): a last tile-part with `Psot = 0`,
 ///   or a walk after the codestream stopped by a `jp2c` or an `XLBox` of
-///   2^32 or more.
+///   2^32 or more, or ending on a box of length 0 of a type it does not
+///   check, such as `xml `.
 ///
 /// The faults before these, and those of whole boxes, are final, as more
 /// bytes change neither the boxes they are in nor the ones before them.
@@ -1342,8 +1343,10 @@ pub(super) fn read_jp2_prefix<'a>(
             // (`after_settled`), a cut main header means the codestream is
             // a whole `jp2c` box's payload, by the arms of
             // `locate_codestream`:
-            // - an end found at `EOC`, a tile-part of `Psot = 0` run to the
-            //   end of the input, or one cut two bytes past the box: the
+            // - an end found at `EOC`, whatever the walk after it met (a
+            //   `jp2c`, an `XLBox` of 2^32 or more, or a box of length 0 of
+            //   a type it does not check), a tile-part of `Psot = 0` run to
+            //   the end of the input, or one cut two bytes past the box: the
             //   walk stepped through the main header to an `SOT` in the
             //   codestream, so the header is whole, not cut;
             // - a payload that ends in `FF D9` before a tile-part of
