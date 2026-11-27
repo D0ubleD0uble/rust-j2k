@@ -663,7 +663,9 @@ pub(crate) struct HeaderCache {
 /// stopped ([`codestream::MainCut`]). A read on more bytes then reads each
 /// box and marker segment once over the reads, and gives what a read from
 /// the start gives. It is kept only while the reads find the main header
-/// cut short: the first read that gives anything else drops it.
+/// cut short: the first read that gives anything else drops it. Where the
+/// `jp2c` box ends inside its own main header and no byte after it can
+/// change the codestream, it keeps that error instead ([`Self::ended`]).
 #[derive(Default)]
 pub(crate) struct KeptCut {
     /// The bytes of the input when it was kept.
@@ -677,6 +679,12 @@ pub(crate) struct KeptCut {
     /// Where the parse of the main header stopped, for the codestream that
     /// starts at `.0` in the input.
     main: Option<(usize, Box<codestream::MainCut>)>,
+    /// In a JP2 file whose codestream no appended byte changes
+    /// ([`jp2::Jp2File::after_settled`]), and whose main header that
+    /// codestream, the `jp2c` box's payload, cuts short, the error every
+    /// read of more bytes gives: the boxes before the codestream, the box
+    /// and its payload are all in and do not change.
+    ended: Option<Error>,
 }
 
 impl KeptCut {
@@ -695,7 +703,7 @@ impl KeptCut {
 
     /// Whether there is anything to go on from.
     fn keeps(&self) -> bool {
-        self.boxes.is_some() || self.main.is_some()
+        self.boxes.is_some() || self.main.is_some() || self.ended.is_some()
     }
 
     /// The error a read of `bytes` gives where the walk of the boxes before
@@ -720,7 +728,16 @@ impl KeptCut {
     /// started, and runs at most to the end of the input, so where the
     /// input still ends inside the main header, so does the codestream: a
     /// main header the input cuts short is cut short in any shorter input.
+    ///
+    /// Where the `jp2c` box ends inside its main header, the parse here runs
+    /// on past the box, as the codestream does where the bytes after the box
+    /// go on with the header. Once they do not, this gives `None`, and the
+    /// read from the start finds the codestream fixed to the box's payload
+    /// and keeps its error in [`Self::ended`], which every later call gives.
     fn main_still_cut(&mut self, bytes: &[u8]) -> Option<Error> {
+        if let Some(ended) = &self.ended {
+            return Some(ended.clone());
+        }
         let start = self.jp2c?;
         let (at, main) = self.main.take()?;
         let tail = bytes.get(start..).filter(|_| at == start)?;
@@ -1453,7 +1470,31 @@ fn read_jp2_prefix<'a>(
                 .addr()
                 .wrapping_sub(bytes.as_ptr().addr());
             cut.jp2c = Some(start);
-            cut.parse_main(file.codestream, start)?
+            let parsed = cut.parse_main(file.codestream, start);
+            // The main header is cut short and no byte appended changes the
+            // codestream, so every read of more bytes gives this error:
+            // the boxes before it are whole and pass, and nothing it parses
+            // changes. Where the walk after the codestream is settled
+            // (`after_settled`), a cut main header means the codestream is
+            // a whole `jp2c` box's payload, by the arms of
+            // `locate_codestream`:
+            // - an end found at `EOC`, a tile-part of `Psot = 0` run to the
+            //   end of the input, or one cut two bytes past the box: the
+            //   walk stepped through the main header to an `SOT` in the
+            //   codestream, so the header is whole, not cut;
+            // - a payload that ends in `FF D9` before a tile-part of
+            //   `Psot = 0`, or a broken walk: the codestream is the payload.
+            //   Where the box is whole, it is fixed. Where the input cuts the
+            //   box, the payload is the rest of the input, the walk's own
+            //   bytes, which reach an `SOT` or a fault, so the parse does not
+            //   stop cut short.
+            if let Err(error @ Error::Incomplete(_)) = &parsed {
+                if file.after_settled {
+                    cut.main = None;
+                    cut.ended = Some(error.clone());
+                }
+            }
+            parsed?
         }
         None => codestream::parse_header(file.codestream)?,
     };

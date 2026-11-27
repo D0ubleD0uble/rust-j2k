@@ -22,7 +22,10 @@
 //! `PPM` segments of one record each, and on about the most a main header can
 //! keep at once: the last shape on 16381 components, a `CRG`, a `POC` of 32
 //! volumes and 16385 `PPM` segments, 13.07 MB. Each header is cut inside a
-//! `COM` after its segments, so all of them are read.
+//! `COM` after its segments, so all of them are read. Where a JP2 file's
+//! `jp2c` box ends inside such a header and no byte after it can change the
+//! codestream, the call that finds that lets the parse go and keeps only the
+//! error, under 4 KB.
 //!
 //! The bytes are counted with a counting global allocator, so this file
 //! holds a single test: a second one running in parallel would count into
@@ -203,6 +206,50 @@ fn cut_joint_header() -> Vec<u8> {
     bytes
 }
 
+/// A JP2 file whose `jp2c` box holds [`cut_ppm_header`] and ends there,
+/// so inside the main header, and the input up to the box's end.
+fn jp2c_ending_in_ppm_header() -> (Vec<u8>, usize) {
+    let codestream = cut_ppm_header();
+    let mut bytes = synth::jp2_file(
+        &[
+            synth::ihdr_for(&codestream),
+            synth::bx(b"colr", &synth::colr_enum(17)),
+        ],
+        &[],
+        &codestream,
+        &[],
+    );
+    let box_end = bytes.len();
+    bytes.extend(synth::bx(b"free", &[]));
+    (bytes, box_end)
+}
+
+/// The heap a decoder holds after a call of `header()` on the input of
+/// [`jp2c_ending_in_ppm_header`] up to the box's end, then one on the whole
+/// input, over what a decoder fed the same pieces with no call holds. The
+/// first call keeps the parse of the main header; the second finds the
+/// codestream fixed to the box's payload, and keeps only its error.
+fn held_once_the_jp2c_box_is_whole() -> (usize, usize) {
+    let (bytes, box_end) = jp2c_ending_in_ppm_header();
+    let options = DecodeOptions::default().with_strict(false);
+    let base = CURRENT.load(Ordering::SeqCst);
+    let mut decoder = warm_decoder(options.clone());
+    decoder.feed(&bytes[..box_end]);
+    decoder.feed(&bytes[box_end..]);
+    let fed = CURRENT.load(Ordering::SeqCst).saturating_sub(base);
+    drop(decoder);
+    let base = CURRENT.load(Ordering::SeqCst);
+    let mut decoder = warm_decoder(options);
+    decoder.feed(&bytes[..box_end]);
+    assert!(decoder.header().expect("cut short").is_none());
+    let cut = CURRENT.load(Ordering::SeqCst).saturating_sub(base);
+    decoder.feed(&bytes[box_end..]);
+    assert!(decoder.header().expect("cut short").is_none());
+    let ended = CURRENT.load(Ordering::SeqCst).saturating_sub(base);
+    drop(decoder);
+    (cut.saturating_sub(box_end), ended.saturating_sub(fed))
+}
+
 /// The heap `decoder` holds after a call of `header()` that finds the main
 /// header cut short, over what it held before.
 fn held_while_cut(decoder: &IncrementalDecoder) -> usize {
@@ -279,13 +326,15 @@ fn header_holds_what_the_files_tiles_need() {
     let narrow = held_for(&bytes);
     let ppm = held_for(&cut_ppm_header());
     let joint = held_for(&cut_joint_header());
+    let (box_cut, box_ended) = held_once_the_jp2c_box_is_whole();
 
     // Printed after the measures: the captured output is heap too.
     println!(
         "size {size}; held {none:?} (PPM file), {counts:?} (big tile), \
          (name, header bytes, segment bytes, held) {cut:?}, \
          {narrow} for {narrow_segments} (129 one-step QCC), {ppm} (65000 PPM), \
-         {joint} (16381 components and 16385 PPM)"
+         {joint} (16381 components and 16385 PPM), \
+         {box_cut} then {box_ended} (a jp2c box ending in 65000 PPM)"
     );
     assert_eq!(none, [0; 3]);
     for held in counts {
@@ -320,4 +369,12 @@ fn header_holds_what_the_files_tiles_need() {
         (13_000_000..=13_150_000).contains(&joint),
         "{joint} bytes held"
     );
+    // Once the `jp2c` box that cuts the main header is whole and nothing
+    // after it can change the codestream, the parse is let go: what is kept
+    // is the error, not the 1.5 MB of the parse.
+    assert!(
+        (16 * 65_000..=32 * 65_000).contains(&box_cut),
+        "{box_cut} bytes held"
+    );
+    assert!(box_ended <= 4096, "{box_ended} bytes held");
 }
