@@ -6,8 +6,9 @@
 //! converts, and checks each gives the same samples as on a normal thread.
 //!
 //! The test catches a table built on the stack only at opt-level 0. At the
-//! test profile's opt-level 1 the compiler moves such a table to the heap,
-//! so the test passes either way. To check for the regression, run:
+//! test profile's opt-level 1 the compiler builds such a table on the heap
+//! directly, so the test passes either way. To check for the regression,
+//! run:
 //!
 //! ```sh
 //! CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo test --test srgb_small_stack

@@ -682,11 +682,11 @@ parsed form: up to about 20 bytes for each byte of `COC`, `QCC` and `RGN`
 segments, plus under 1 KB. The highest ratio is for a one-step `QCC` on
 each of 129 components. Its component index is one byte, as in any file of
 at most 256 components, and the tables that hold the overrides grow by
-doubling, so 129 entries leave
-the most spare room: 903 bytes of segments keep 17.7 KB, 19.6 bytes for
-each byte. With two-byte indexes, the ratio is 17.0 at 257 components and
-16.8 at 4097. At 16384 components, a power of two, 128 KiB of one-step
-`QCC` segments keep 1.54 MB, about 12 bytes for each byte. A component
+doubling, so 129 entries leave the most spare room: 903 bytes of segments
+keep 17.7 KB, 19.6 bytes for each byte. With two-byte indexes, the ratio is
+17.0 at 257 components and 16.8 at 4097. At 16384 components, a power of
+two, 128 KiB of one-step `QCC` segments keep 1.54 MB, about 12 bytes for
+each byte. A component
 holds at most one `COC`, one `QCC` and one `RGN`, so the total is about
 12 MB at most: a `COC` of precincts, a 97-step `QCC` and an `RGN` for each
 of 16384 components, 4.2 MB of segments, keep 12.2 MB. `PPM` segments keep
