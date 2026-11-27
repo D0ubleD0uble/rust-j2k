@@ -16,7 +16,7 @@ others miss, so a release runs all of them:
 | 4 | [Whole-crate reviews](#4-whole-crate-reviews) | problems that span files and PRs | once per release |
 | 5 | [Readiness check](#5-readiness-check) | a release that would fail to build or publish, or a breaking change the CHANGELOG does not list | once per release |
 | 6 | [Manual rounds](#6-manual-rounds) | problems only a real user, a real file or a person's eye finds | once per release, on the final candidate |
-| 7 | [Package contents](#7-package-contents) | files in the `.crate` that should not ship | once per release; the conformance-corpus rule also runs on every PR (`package-hygiene`) |
+| 7 | [Package contents](#7-package-contents) | files in the `.crate` that should not ship | once per release; the conformance-corpus rule and the packaged tests also run on every PR (`package-hygiene`) |
 | 8 | [Differential checks](#8-differential-checks) | undocumented changes since the last release, inputs that exceed the resource bounds, a different answer on malformed input, on a 32-bit target, or from a second HTJ2K decoder | once per release, on the final candidate |
 | 9 | [Mutation testing](#9-mutation-testing) | tests that do not fail when new code is broken | once per release, on the code added since the last one |
 
@@ -69,10 +69,11 @@ cargo deny check
 ```
 
 CI (`.github/workflows/ci.yml`) runs these, plus `cargo test --doc`, a `cargo
-check` on the minimum Rust version, the package hygiene check and packaged tests ([layer
-7](#7-package-contents)), the fuzz smoke ([layer 3](#3-fuzzing)), `cargo test`
-on macOS aarch64, and on `wasm32-wasip1` the library tests (`--lib`) and the
-`jp2_icc`, `sample_limit` and `limit_32bit` test binaries.
+check` on the minimum Rust version, the package hygiene check and
+packaged tests ([layer 7](#7-package-contents)), the fuzz smoke ([layer
+3](#3-fuzzing)), `cargo test` on macOS aarch64, and on `wasm32-wasip1` the
+library tests (`--lib`) and the `jp2_icc`, `sample_limit` and `limit_32bit`
+test binaries.
 Coverage, CodeQL and Semgrep run in their own workflows.
 
 Each PR also gets an independent review by a reviewer who did not write it.
@@ -306,8 +307,12 @@ tests from the unpacked package.
 
 That job runs them on every PR: it packages the crate, unpacks the `.crate`
 into a fresh directory with its own `CARGO_TARGET_DIR`, runs `cargo test` there
-and prints the skip-line count. For a release, run them by hand too, to read
-the skip count against the last release:
+and prints the skip-line count. The step fails if the count is 0, which would
+mean excluded fixtures shipped or the skip helper stopped firing. The packaged
+run builds without the `__fuzz` feature, and two test files
+(`fuzz_partial_oracle`, `fuzz_seed_outcomes`) are not in the package, so it
+runs about 50 fewer tests than the repo. This is expected. For a release, run
+them by hand too, to read the skip count against the last release:
 
 ```sh
 cargo package --allow-dirty

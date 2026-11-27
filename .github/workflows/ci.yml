@@ -82,6 +82,7 @@ jobs:
   package-hygiene:
     name: package hygiene
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
@@ -111,8 +112,20 @@ jobs:
           mkdir "$RUNNER_TEMP/pkg"
           tar -xzf target/package/rust-j2k-*.crate -C "$RUNNER_TEMP/pkg" --strip-components=1
           cd "$RUNNER_TEMP/pkg"
+          # Print the skip count even when the tests fail.
+          set +e
           CARGO_TARGET_DIR="$RUNNER_TEMP/pkg-target" cargo test 2>&1 | tee "$RUNNER_TEMP/pkg-test.log"
-          echo "skip lines: $(grep -o 'left out of the published package' "$RUNNER_TEMP/pkg-test.log" | wc -l)"
+          status=${PIPESTATUS[0]}
+          set -e
+          skips=$(grep -o 'left out of the published package' "$RUNNER_TEMP/pkg-test.log" | wc -l || true)
+          echo "skip lines: $skips"
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          if [ "$skips" -eq 0 ]; then
+            echo "::error::no test skipped in the packaged crate; excluded fixtures shipped or the skip helper stopped firing"
+            exit 1
+          fi
 
   fuzz-smoke:
     name: fuzz smoke
