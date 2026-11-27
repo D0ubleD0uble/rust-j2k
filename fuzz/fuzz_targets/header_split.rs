@@ -37,6 +37,17 @@
 //! against the oracle on the prefix fed so far, and on one feed in five a
 //! second call is checked too, which must give the same again.
 //!
+//! A change of options that `read_header_with` refuses outright on the
+//! bytes so far (a reduction past the image's resolutions, a tile it does
+//! not have) stays in force until a later change lifts it, and the checks
+//! meanwhile meet that refusal. So the first time the oracle gives
+//! `InvalidOptions` where the options the input starts with are not
+//! refused, a shadow decoder under those options is fed the bytes so far,
+//! then each later piece, and checked after each feed as the decoder is.
+//! The refusal is not taken as final: more bytes can bring an error that
+//! comes first. After the last feed, a fresh decoder fed the whole input
+//! at once under the starting options is checked too, with a second call.
+//!
 //! Random bytes seldom reach a tile over a cap under the main header, which
 //! is what the cache exists for, so seed it from
 //! `scripts/gen-header-split-seeds.py` (see `fuzz/README.md`).
@@ -47,27 +58,17 @@ use libfuzzer_sys::fuzz_target;
 mod held;
 #[path = "../../tests/support/inconsistent.rs"]
 mod inconsistent;
+#[path = "../../tests/support/pieces.rs"]
+mod pieces;
 #[path = "../../tests/support/replaceable.rs"]
 mod replaceable;
+use pieces::{Change, Feed, Pieces};
 use replaceable::replaceable;
 use inconsistent::checked;
 use rust_j2k::{
     read_header_with, ColorOutput, DecodeOptions, Error, Header, IncrementalDecoder, LimitKind,
     Raise, Region, SampleLimit, Window,
 };
-
-/// splitmix64: the same stream on every platform, from a seed in the input.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-}
 
 /// A region from two input bytes, and `salt` (the bytes fed or the file's
 /// length) for the small window. The windows are laid out for tiles 1040
@@ -116,11 +117,17 @@ fn oracle(prefix: &[u8], options: &DecodeOptions) -> String {
 /// past the fuzz input size, so no suffix here tries it). A
 /// JP2 file's `None` for an error needs such a suffix too: a fault in a
 /// box of length 0 before the codestream that more bytes do not change,
-/// such as one of a whole child of a `jp2h`, is final.
-fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOptions, at: &str) {
+/// such as one of a whole child of a `jp2h`, is final. Returns what the
+/// oracle gives.
+fn check(
+    got: &Result<Option<Header>, Error>,
+    prefix: &[u8],
+    options: &DecodeOptions,
+    at: &str,
+) -> String {
     let want = oracle(prefix, options);
     if format!("{got:?}") == want {
-        return;
+        return want;
     }
     let lenient = options.clone().with_strict(false);
     let refused = matches!(
@@ -162,6 +169,50 @@ fn check(got: &Result<Option<Header>, Error>, prefix: &[u8], options: &DecodeOpt
         Ok(None) if held && !codestream => {}
         _ => panic!("{at}: {got:?}, where read_header_with gives {want}"),
     }
+    want
+}
+
+/// Check `decoder`'s `header()` once it holds the first `fed` bytes of
+/// `data`, under its options ([`check`]), and, where `again`, a second
+/// call, which must give the same. Returns what the oracle gives.
+fn check_call(
+    decoder: &IncrementalDecoder,
+    data: &[u8],
+    fed: usize,
+    again: bool,
+    at: &str,
+) -> String {
+    let got = checked(decoder.header());
+    let want = check(&got, &data[..fed], decoder.options(), at);
+    // An error is final: more bytes do not change it, so it is what
+    // `read_header_with` gives on the whole input. A tile-cap refusal
+    // more bytes lift, given once the input closes, can still be lifted
+    // by bytes after the `EOC` (about 128 MiB for the tile of #649),
+    // which is past the fuzz input size limit.
+    if let Err(error) = &got {
+        let whole = checked(read_header_with(
+            data,
+            &decoder.options().clone().with_strict(false),
+        ));
+        assert_eq!(
+            format!("{:?}", Err::<Header, _>(error)),
+            format!("{:?}", whole.as_ref()),
+            "{at}: an error the whole input does not give",
+        );
+    }
+    if again {
+        assert_eq!(
+            format!("{:?}", checked(decoder.header())),
+            format!("{got:?}"),
+            "{at}: again"
+        );
+    }
+    want
+}
+
+/// Whether the oracle's answer is a refusal of the options.
+fn refuses_options(want: &str) -> bool {
+    want.starts_with("Err(InvalidOptions(")
 }
 
 fuzz_target!(|input: &[u8]| {
@@ -192,62 +243,58 @@ fuzz_target!(|input: &[u8]| {
         options = options.with_max_quality_layers(Some(1));
     }
     // Options the decoder refuses at the start leave nothing to check.
-    let Ok(mut decoder) = checked(IncrementalDecoder::new(options)) else {
+    let Ok(mut decoder) = checked(IncrementalDecoder::new(options.clone())) else {
         return;
     };
-    let mut rng = Rng(u64::from_le_bytes([
-        c[6], c[7], c[8], c[9], c[10], c[11], 0, 0,
-    ]));
+    let mut fed = 0;
+    // A decoder under the starting options, started the first time the
+    // oracle refuses the decoder's options but not those.
+    let mut shadow: Option<IncrementalDecoder> = None;
     // About 24 feeds on average, so the oracle's reads from the start cost
     // about that many passes over the input.
-    let most = (data.len() / 24).max(1);
-    let mut fed = 0;
-    while fed < data.len() {
-        let piece = 1 + (rng.next() as usize) % (2 * most);
-        let to = (fed + piece).min(data.len());
+    for Feed { to, change, again } in Pieces::new(c, data.len()) {
         decoder.feed(&data[fed..to]);
         fed = to;
-        let r = rng.next();
-        if r % 8 == 0 {
-            let arg = (r >> 8) as u8;
-            // A change that is refused leaves the options as they were, and
-            // the oracle reads them back from the decoder.
-            let _ = match (r >> 16) % 3 {
-                0 => checked(decoder.set_region(region((r >> 24) as u8, arg, fed))),
-                1 => checked(decoder.set_resolution_reduction(arg % 3)),
-                _ => checked(decoder.set_max_quality_layers(Some(1 + u16::from(arg % 3)))),
-            };
-        }
-        let got = checked(decoder.header());
-        check(
-            &got,
-            &data[..fed],
-            decoder.options(),
-            &format!("at {fed} of {}", data.len()),
-        );
-        // An error is final: more bytes do not change it, so it is what
-        // `read_header_with` gives on the whole input. A tile-cap refusal
-        // more bytes lift, given once the input closes, can still be lifted
-        // by bytes after the `EOC` (about 128 MiB for the tile of #649),
-        // which is past the fuzz input size limit.
-        if let Err(error) = &got {
-            let whole = checked(read_header_with(
-                data,
-                &decoder.options().clone().with_strict(false),
-            ));
-            assert_eq!(
-                format!("{:?}", Err::<Header, _>(error)),
-                format!("{:?}", whole.as_ref()),
-                "at {fed} of {}: an error the whole input does not give",
-                data.len()
-            );
-        }
-        if r % 5 == 0 {
-            assert_eq!(
-                format!("{:?}", checked(decoder.header())),
-                format!("{got:?}"),
-                "again at {fed}"
-            );
+        // A change that is refused leaves the options as they were, and
+        // the oracle reads them back from the decoder.
+        let _ = match change {
+            Some(Change::Region { code, arg }) => {
+                checked(decoder.set_region(region(code, arg, fed)))
+            }
+            Some(Change::Reduction(levels)) => checked(decoder.set_resolution_reduction(levels)),
+            Some(Change::Layers(layers)) => checked(decoder.set_max_quality_layers(Some(layers))),
+            None => Ok(()),
+        };
+        let at = format!("at {fed} of {}", data.len());
+        let want = check_call(&decoder, data, fed, again, &at);
+        match &mut shadow {
+            Some(shadow) => {
+                shadow.feed(&data[shadow.bytes_fed()..fed]);
+                check_call(shadow, data, fed, again, &format!("{at}, shadow"));
+            }
+            // While the decoder's options stay refused, its checks meet that
+            // refusal, so the starting options are checked alongside from
+            // here on, where they are not refused too.
+            None if refuses_options(&want) && !refuses_options(&oracle(&data[..fed], &options)) => {
+                let mut started =
+                    checked(IncrementalDecoder::new(options.clone())).expect("accepted above");
+                started.feed(&data[..fed]);
+                check_call(&started, data, fed, again, &format!("{at}, shadow"));
+                shadow = Some(started);
+            }
+            None => {}
         }
     }
+    // A refused change of options can hide what the checks after it test,
+    // so the whole input is checked once more under the options it starts
+    // with, which the decoder accepted above.
+    let mut whole = checked(IncrementalDecoder::new(options)).expect("accepted above");
+    whole.feed(data);
+    check_call(
+        &whole,
+        data,
+        data.len(),
+        true,
+        &format!("the whole {} at once", data.len()),
+    );
 });
