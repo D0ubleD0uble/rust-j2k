@@ -299,6 +299,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The refusal of a resolution reduction that leaves a component with no
+  resolution now reads correctly for a component with one resolution:
+  "resolution reduction 1 leaves no resolution of component 0 (it has 1)"
+  (#715).
 - sRGB output no longer builds its 98 KB shaper table on the stack, which
   could overflow a thread with a small stack (#683).
 - `IncrementalDecoder::header` called after every feed no longer reads the
