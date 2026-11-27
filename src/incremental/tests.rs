@@ -3,8 +3,10 @@
 
 use super::*;
 use crate::error::keyed;
-use crate::tier2::resume::REPEAT_BOUNDS;
+use crate::tier2::Meter;
+use crate::tier2::resume::{REPEAT_BOUNDS, Repeats, Walks};
 use crate::{LimitKind, WorkLimit, codestream, tier1, tier2};
+use std::cell::Cell;
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!(
