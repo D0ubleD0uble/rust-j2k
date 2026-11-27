@@ -247,6 +247,8 @@ pub enum MappingKind {
     /// An `MTYP` other than 0 and 1, which the standard reserves. Only
     /// reported under [`raw_channels`](crate::DecodeOptions::raw_channels),
     /// which does not check the mapping; a normal decode refuses such a file.
+    /// A value reported here stays here within a minor version, unless it
+    /// was reported here by mistake.
     Reserved {
         /// The `MTYP` value.
         mtyp: u8,
