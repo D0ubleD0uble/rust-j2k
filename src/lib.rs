@@ -204,6 +204,7 @@
 //! never half-decoded. GRIB2 §5.40 (`grid_jpeg`) payloads, the crate's original
 //! target, are raw codestreams and decode directly. The feature map is in
 //! [`docs/scope.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md).
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 // The pipeline modules are crate-internal: the public API is `decode`,

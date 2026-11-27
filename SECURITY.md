@@ -90,7 +90,8 @@ decode under a raised or removed limit may take as long, and allocate as much,
 as the file asks. If an allocation fails under `SampleLimit::Unlimited`, the
 process aborts, as Rust's allocation failures do.
 
-Three things back the promise. The library has no `unsafe` code, so a
+Three things back the promise. The library has no `unsafe` code (`#![forbid(unsafe_code)]` enforces it at
+compile time), so a
 malformed input cannot cause undefined behavior: a bug can give a wrong value,
 panic, hang or allocate too much, but not corrupt memory. It has no runtime
 dependencies, Rust or C, so no third-party codec brings its own memory-safety
