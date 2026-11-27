@@ -379,6 +379,20 @@ fn a_whole_box_at_fault_is_final() {
             "a colr too short in the jp2h",
             synth::jp2_file(&[ihdr.clone(), synth::bx(b"colr", &[1, 0])], &[], &one, &[]),
         ),
+        // A fault a later child could lift in a `jp2h` of length 0.
+        (
+            "a jp2h with no ihdr",
+            synth::jp2_file(&[gray()], &[], &one, &[]),
+        ),
+        (
+            "a child that runs past the end of the jp2h",
+            synth::jp2_file(
+                &[ihdr.clone(), vec![0, 0, 0, 40, b'x', b'x', b'x', b'x']],
+                &[],
+                &one,
+                &[],
+            ),
+        ),
         (
             "a child of length 4 in the jp2h",
             synth::jp2_file(
