@@ -128,7 +128,8 @@ inputs against a tighter limit.
 
 Before a release, every target runs locally for 60 s, one after another,
 seeded as fuzz/README.md describes. This is the pre-release fuzz run, which
-fuzz/README.md calls the pre-release smoke. The CI smoke does not replace it. Record the result in the "Recorded runs" table in
+fuzz/README.md calls the pre-release smoke. The CI smoke does not replace it.
+Record the result in the "Recorded runs" table in
 [fuzz/README.md](../fuzz/README.md#recorded-runs).
 
 **Cost:** about 6 minutes of fuzzing per push in CI, plus the build. The
@@ -268,7 +269,7 @@ one, records what the maintainer finds and routes it.
 
 **Run:** an agent that sees only the `cargo package` tarball and the rendered
 rustdoc writes a small program covering each main task (decode, options,
-header, region, retrying with `DecodeOptions::with_retry` after an
+header, region, retrying with `DecodeOptions::raised_for` after an
 `Error::Limit`, partial and incremental decode) and reports where the docs
 fell short. In 0.5.0 it found a false scope claim, a missing tile grid on
 `Header`, and doctests that read internal fixtures (#428).
@@ -436,18 +437,16 @@ longest binaries are the library's unit tests and `incremental`, each about
 100 s. The run does not execute the `#[ignore]`d tests, as on every target
 (the attributes read `"slow: about ..."`, and the one in
 `tests/tile_geometry_cap.rs` reads `"decodes 1.6 x 10^9 samples..."`). Run the
-three slow tests of `work_limit`
-(`the_large_ht_bomb_decodes_at_the_default_bound`,
-`the_issue_bomb_decodes_with_the_limit_lifted` and
-`a_ladder_over_many_tiles_that_each_reach_the_bound_takes_log_steps`) as well,
-in a release build:
+two ignored tests of `work_limit`
+(`the_large_ht_bomb_decodes_at_the_default_bound` and
+`the_issue_bomb_decodes_with_the_limit_lifted`) as well, in a release build:
 
 ```sh
 CARGO_TARGET_WASM32_WASIP1_RUNNER="wasmtime run --dir=$PWD::$PWD" \
   cargo test --release --target wasm32-wasip1 --test work_limit -- --include-ignored
 ```
 
-It passes 42 tests in about 66 s. The ignored test in
+It passes 44 tests in about 80 s. The ignored test in
 `tests/tile_geometry_cap.rs` (a 40000-square tile) is gated to 64-bit, because
 the caps never rise above their floor on 32-bit and the tile is
 `AddressSpace` there. The ignored test in `src/image.rs` (about 30
@@ -562,8 +561,8 @@ passed on the final candidate.
 ## Not done, and why
 
 - A docs.rs-style build: `Cargo.toml` passes `--cfg docsrs`, but no code
-  uses it and the crate has no features, so `cargo doc` already shows what
-  docs.rs builds.
+  uses it, and the crate's only feature, the hidden `__fuzz`, adds nothing to
+  the docs, so `cargo doc` already shows what docs.rs builds.
 - Windows CI and Miri: the library is pure Rust with no `unsafe` and no OS
   calls.
 - `-Z minimal-versions`: the crate has no runtime dependencies.
@@ -576,10 +575,10 @@ passed on the final candidate.
 
 ## Open ideas
 
-Checks that are not part of a release today. Each is a candidate to try. One
-that finds real problems joins the layers above, as the malformed-input
+Checks that are not part of a release go here as candidates to try. One that
+finds real problems joins the layers above, as the malformed-input
 differential, the 32-bit run, the second HTJ2K oracle and the mutation run did.
-- Property tests: a `Region` decode equals the crop of the whole image, and
-  retrying with `DecodeOptions::with_retry` after each `Error::Limit` never
-  loops and ends at the same image as a decode with the limit already
-  raised.
+None is open now. The last two, a check that a `Region` decode equals the crop
+of the whole image and one that the retry ladder of `DecodeOptions::raised_for`
+never loops and ends at the image a decode with no limits gives, now run as the
+`window_crop` and `retry_ladder` fuzz targets.

@@ -230,13 +230,13 @@ and MSE Kakadu quotes against its source.
 OpenJPEG 2.5.0 decodes there only the tiles that lie wholly inside the
 window and fills the rest of the window with mid-gray (128 at 8 bits): the
 value of zero coefficients after the DC level shift. It does so on tiled and
-untiled files alike. Against the crop of its own whole decode the error reaches 127
-at 8 bits and 32768 at 16 bits (126 on `ds0_ht_01_b11` with `-d
-10,10,60,60`). A tile-aligned window is unaffected. For an HT window, the
-oracle is OpenJPEG's whole decode, cropped. This decoder's window equals
-the crop of its own whole decode, which the ratchets above grade:
-`tests/decode_window_random.rs` checks that on two OpenJPH codestreams and
-11 ISO ones, eight HT and three MIXED. No HT test uses `-d` as its reference.
+untiled files alike. Against the crop of its own whole decode the error reaches
+127 at 8 bits and 32768 at 16 bits (126 on `ds0_ht_01_b11` with `-d
+10,10,60,60`). A tile-aligned window is unaffected. For an HT window, the oracle
+is OpenJPEG's whole decode, cropped. This decoder's window equals the crop of
+its own whole decode, which the ratchets above grade:
+`tests/decode_window_random.rs` checks that on two OpenJPH codestreams and 11
+ISO ones, eight HT and three MIXED. No HT test uses `-d` as its reference.
 
 ## A passing entry is not proof the feature works
 
@@ -299,7 +299,8 @@ for both flags is weaker than one carrying `segsym` alone. Where features
 compose, the fixture that isolates each one is the one that grades it.
 
 So an entry is the oracle for a feature only if some change to that feature's
-code would make the entry fail. [development.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/development.md#check-that-a-fixture-tests-the-feature)
+code would make the entry fail.
+[development.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/development.md#check-that-a-fixture-tests-the-feature)
 says how to check that before adding an entry to `IN_CLASS`.
 
 ## Per-stage golden tests
@@ -330,9 +331,10 @@ golden tests, which point at the stage that broke:
 
 The test suite needs no reference decoder at run time. Fixtures and their
 oracle snapshots are committed, and OpenJPEG or eccodes is needed only to
-regenerate a snapshot ([development.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/development.md)). Each fixture records
-its provenance, the source file and the exact command that produced its
-oracle, so the corpus can be rebuilt.
+regenerate a snapshot
+([development.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/development.md)).
+Each fixture records its provenance, the source file and the exact command that
+produced its oracle, so the corpus can be rebuilt.
 
 A single fixture is a file in `tests/fixtures/`, a `.j2k` codestream or a
 `.jp2` file, with a sibling `<name>.expected.json` that holds the image area,
@@ -364,20 +366,20 @@ A decoder parses bytes it did not produce, so malformed input is an ordinary
 case, not an edge case.
 
 This decoder is fuzzed with `cargo fuzz` (libFuzzer) in the detached
-[`fuzz/`](https://github.com/D0ubleD0uble/rust-j2k/tree/main/fuzz) workspace, with thirteen targets: `decode`, `header`,
-`decode_partial`, `incremental_decode`, `header_split`, `window_crop` and
-`retry_ladder` over the public entry points, and
-`tile_body`, `tier1_block`, `ht_block`, `mq`, `jp2_boxes` and `icc_srgb` over
-single stages. See
-[`fuzz/README.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/fuzz/README.md) to run them. The bar is no panics, no
-unbounded allocation and no infinite loops: every rejected input returns a
-typed `Error`. A malformed SIZ cannot steer the buffers into an overflowing
-or out-of-memory allocation. SIZ's declared image area,
-`(Xsiz − XOsiz)·(Ysiz − YOsiz)`, is held to the sample limit before any tile
-is read, or under a window or a tile the area of the tiles read ([The sample
-limit](resource-bounds.md#the-sample-limit)), and the
-Table A-9 constraints on the image and tile origins are enforced before any
-geometry reaches the DWT.
+[`fuzz/`](https://github.com/D0ubleD0uble/rust-j2k/tree/main/fuzz) workspace,
+with thirteen targets: `decode`, `header`, `decode_partial`,
+`incremental_decode`, `header_split`, `window_crop` and `retry_ladder` over the
+public entry points, and `tile_body`, `tier1_block`, `ht_block`, `mq`,
+`jp2_boxes` and `icc_srgb` over single stages. See
+[`fuzz/README.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/fuzz/README.md)
+to run them. The bar is no panics, no unbounded allocation and no infinite
+loops: every rejected input returns a typed `Error`. A malformed SIZ cannot
+steer the buffers into an overflowing or out-of-memory allocation. SIZ's
+declared image area, `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, is held to the sample
+limit before any tile is read, or under a window or a tile the area of the tiles
+read ([The sample limit](resource-bounds.md#the-sample-limit)), and the Table
+A-9 constraints on the image and tile origins are enforced before any geometry
+reaches the DWT.
 
 Every failure is typed. The flat `Error` enum names the kind of failure, so a
 caller can tell a damaged codestream (`Codestream`), input that ends before

@@ -248,8 +248,11 @@ fn header_holds_what_the_files_tiles_need() {
     for held in counts {
         assert!((1..=4096).contains(&held), "{held} bytes held");
     }
-    // Up to about 12 bytes for each byte of the segments, at least 2 for
-    // what is kept to count at all, and about 24 bytes a `PPM` segment.
+    // Up to about 12 bytes for each byte of these segments, whose component
+    // indexes are two bytes, at least 2 for what is kept to count at all, and
+    // about 24 bytes a `PPM` segment. The 13x bound covers only these
+    // 16384-component shapes: with a one-byte index (at most 256 components)
+    // a one-step `QCC` keeps about 14, the figure the docs give.
     for (name, _, segments, held) in cut {
         assert!(
             (2 * segments..=13 * segments).contains(&held),
