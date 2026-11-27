@@ -4,18 +4,18 @@
 //! The crate root's [`decode_with`](crate::decode_with) and
 //! [`read_header_with`](crate::read_header_with) are thin wrappers over
 //! [`decode_metered`] and [`read_header`]. The incremental decoder calls
-//! [`decode_metered`] with its [`Ledger`](incremental::Ledger), and
+//! [`decode_metered`] with its [`Ledger`], and
 //! [`check_options`] when it is built.
 
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 
+use super::meter::{self, Ledger, Refusal};
 use super::report::{Scope, report_part, report_tile};
-use crate::incremental::Refusal;
 use crate::{
     ColorOutput, ComponentInfo, DecodeOptions, DecodeReport, Error, Header, Image, Jp2Metadata,
-    ReportEntry, Result, SampleLimit, TileGrid, WorkLimit, codestream, dwt, header, image,
-    incremental, jp2, limit_hint, mct, samples, tier1, tier2, window,
+    ReportEntry, Result, SampleLimit, TileGrid, WorkLimit, codestream, dwt, header, image, jp2,
+    limit_hint, mct, samples, tier1, tier2, window,
 };
 
 /// How far above its cap `fuzz::with_code_block_work_cap` lets a code-block
@@ -358,7 +358,7 @@ fn check_geometry(
             // whether or not more bytes would lift the refusal.
             None if hold == Hold::UntilClosed && !faults.closed => Ok(()),
             None if hold == Hold::Liftable
-                && matches!(&error, Error::Limit(limit) if incremental::lifts_with_bytes(limit)) =>
+                && matches!(&error, Error::Limit(limit) if meter::lifts_with_bytes(limit)) =>
             {
                 Ok(())
             }
@@ -380,7 +380,7 @@ enum Hold {
     /// It holds a tile refusal until the tile-parts close.
     UntilClosed,
     /// It holds only a tile refusal more bytes lift, a cap that grows with
-    /// the input ([`incremental::lifts_with_bytes`]), as `refine` waits on
+    /// the input ([`meter::lifts_with_bytes`]), as `refine` waits on
     /// it: the tile-parts never close, and no byte changes them
     /// ([`jp2::Jp2File::codestream_fixed`]).
     Liftable,
@@ -1202,11 +1202,11 @@ fn max_reduction(header: &codestream::MainHeader) -> u8 {
 
 /// [`decode_with`](crate::decode_with), with the code-block work also held
 /// to what `ledger` has left of its bound, and the packet walks with
-/// `strict` off kept on it, when there is one (see [`incremental::Ledger`]).
+/// `strict` off kept on it, when there is one (see [`Ledger`]).
 pub(crate) fn decode_metered(
     bytes: &[u8],
     options: &DecodeOptions,
-    ledger: Option<&incremental::Ledger>,
+    ledger: Option<&Ledger>,
 ) -> Result<Image> {
     check_options(options)?;
     // A codestream opens with SOC; anything else that carries the signature
@@ -1248,11 +1248,7 @@ pub(crate) fn decode_metered(
 /// A JP2 file's error of the boxes that more bytes can replace is noted the
 /// same way, as never `closed`, and so is an error of its tile-parts while
 /// a box after the codestream can still be read.
-fn held_unless<T>(
-    closed: bool,
-    ledger: Option<&incremental::Ledger>,
-    decoded: Result<T>,
-) -> Result<T> {
+fn held_unless<T>(closed: bool, ledger: Option<&Ledger>, decoded: Result<T>) -> Result<T> {
     if let (Err(_), Some(ledger)) = (&decoded, ledger) {
         ledger.hold(closed);
     }
@@ -1551,11 +1547,7 @@ fn read_jp2_prefix<'a>(
 
 /// Decode a JP2 file: read it up to its tile data, decode the codestream,
 /// and apply the channel plans, then any sRGB step, to the samples.
-fn decode_jp2(
-    bytes: &[u8],
-    options: &DecodeOptions,
-    ledger: Option<&incremental::Ledger>,
-) -> Result<Image> {
+fn decode_jp2(bytes: &[u8], options: &DecodeOptions, ledger: Option<&Ledger>) -> Result<Image> {
     // A refine reads a stream that may still grow, and holds an error that
     // more bytes can replace.
     let prefix = match read_jp2_prefix(bytes, options, ledger.is_some(), None) {
@@ -1607,7 +1599,7 @@ fn decode_codestream(
     options: &DecodeOptions,
     selection: &window::Selection,
     cap: samples::Cap,
-    ledger: Option<&incremental::Ledger>,
+    ledger: Option<&Ledger>,
 ) -> Result<Image> {
     let reduction = options.resolution_reduction;
     let layers = options.max_quality_layers;
@@ -1638,7 +1630,7 @@ fn decode_codestream(
     // The walk is not cut by what earlier decodes of an incremental decoder
     // spent: those decodes' walks are kept, and this one goes on from them,
     // so that what they all spend is what one walk spends (see
-    // [`incremental::Ledger`]).
+    // [`Ledger`]).
     let meter = tier2::Meter::new(packet_bound).under(cap);
     // What the walks spend, for the fuzz targets' packet ledger.
     #[cfg(any(test, feature = "__fuzz"))]

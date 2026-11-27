@@ -15,6 +15,7 @@
 //! inverse DWT through the color transform to image assembly.
 
 pub(crate) mod decode;
+pub(crate) mod meter;
 mod report;
 
 /// One subband (or the coarsest LL): a row-major coefficient grid plus its
