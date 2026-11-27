@@ -13,11 +13,18 @@ use rust_j2k::{DecodeOptions, Image, ReportEntry, Result};
 /// - the report stays within `entry_bound`: five entries per tile-part plus
 ///   two, plus a piece for each row of tiles a window reads. Every tile-part
 ///   starts with the bytes `FF 90`, so their count bounds the first part.
-pub fn check(bytes: &[u8], options: &DecodeOptions, strict: &Result<Image>) {
+///
+/// Returns whether the packet work bound refused the decode with `strict`
+/// off, for a target's packet ledger.
+pub fn check(bytes: &[u8], options: &DecodeOptions, strict: &Result<Image>) -> bool {
     let lenient = super::inconsistent::checked(rust_j2k::decode_with(
         bytes,
         &options.clone().with_strict(false),
     ));
+    let refused = matches!(
+        &lenient,
+        Err(rust_j2k::Error::Limit(m)) if m.kind() == rust_j2k::LimitKind::PacketWork
+    );
     if let Ok(image) = strict {
         assert_eq!(image.report, rust_j2k::DecodeReport::default());
         let partial = lenient.as_ref().expect("strict decodes, so partial does");
@@ -57,6 +64,7 @@ pub fn check(bytes: &[u8], options: &DecodeOptions, strict: &Result<Image>) {
             );
         }
     }
+    refused
 }
 
 /// The most entries a report can hold, for a codestream with at most `sots`

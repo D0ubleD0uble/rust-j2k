@@ -600,8 +600,11 @@ extension, so the sweeps of the fixtures skip it. Replay it with
 `A0 00 00 00 00 00` (`AtMost` and a reduction of 1) in front of
 `work_bound/cprl_tall.j2k`. Under `AtMost` a refusal by a work bound still
 grows with the bytes, so the target must expect the refine to wait where the
-one-shot decode is refused, as under any other sample limit. It takes about 11
-s to replay under ASan. Replay it with the command above.
+one-shot decode is refused, as under any other sample limit. Each of its
+decodes is refused at the packet work bound, so the target's packet ledger
+(`fuzz/common/budget.rs`) ends the execution after that first refine and its
+one-shot decode: about 2 to 6 s to replay under ASan, where it took 17 to
+31 s before the ledger. Replay it with the command above.
 
 `incremental/t1bomb_row_128_8.seed` (331 bytes, SHA-256
 `8ee10b73fa03f98398a482e04bd39b8d706388f625a301012ab8b539aa5f7482`) is a
