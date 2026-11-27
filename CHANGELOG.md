@@ -222,7 +222,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on `sample_limit` move them at any size. `LimitKind::TileCodeBlocks` and
   `LimitKind::TilePrecincts` are now adjustable: a refusal names a
   `Raised` factor of `DecodeOptions::sample_limit` as its
-  `retry_with`, which `with_retry` sets, and under `SampleLimit::AtMost(n)`
+  `retry_with`, which `raised_for` sets, and under `SampleLimit::AtMost(n)`
   the caps are set from `n` and a refusal names no retry. An
   `IncrementalDecoder` waits on such a refusal (`Waiting::SampleLimit`)
   rather than failing, unless under `AtMost`. `read_header_with` now counts
@@ -297,7 +297,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   over and is now walked once. The headers and errors it returns are
   unchanged. Once the main header is whole, each call still parses it.
   While it is cut short, the decoder holds what its segments read so far
-  set: up to about 12 bytes for each byte of `COC`, `QCC` and `RGN`
+  set: up to about 13 bytes for each byte of `COC`, `QCC` and `RGN`
   segments, about 12 MB at most, plus 24 bytes for each `PPM` segment,
   1.6 MB at most.
 - A JP2 file padded with boxes holds less memory while its boxes are read.
@@ -524,8 +524,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   samples stays within the bound of about 6.4 GiB up to 64 MiB of input
   and about 102 bytes for each byte past it. In a one-shot decode, a
   packet's notes of its segments are freed before the records Tier-1
-  reads are built, and the records before the inverse wavelet. Decoded images do not change
-  (#585).
+  reads are built, and the records before the inverse wavelet. Decoded
+  images do not change (#585).
 - `read_header_with` gives the decode's error for a file where the
   tile-part header it reads to count a tile is at fault (a Part 2 marker
   such as `MCC`, a reserved marker, or a tile `COC` that mixes the wavelets
@@ -538,8 +538,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (cut, or with a `Psot` of 0) too (#578, #560).
 - `IncrementalDecoder::header` keeps the walk for the decode's error for
   the tile-parts between calls. A call that refuses a tile, stops at the
-  count's budget, or meets a tile whose own header is at fault walked every tile-part fed again, so calls after each feed took
-  time quadratic in the input: 21.5 s for calls after each 1 MiB of a
+  count's budget, or meets a tile whose own header is at fault walked
+  every tile-part fed again, so calls after each feed took time quadratic
+  in the input: 21.5 s for calls after each 1 MiB of a
   235 MB file with tile 0 refused, now 170 ms; with tile 1's own header
   at fault as well, 18 s, now 1.3 ms, as the walk stops at the faulty
   header and is kept there.
@@ -628,15 +629,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   few levels for, or, with `strict`
   off, for the charge for the tiles read that have no tile-part; the
   `read_header_with` docs list these cases (#501).
-- `DecodeOptions::with_retry` no longer climbs a work bound one factor at a
-  time. A refusal of the packet work or code-block work bound, including the
-  charge for missing tiles, names the larger of what the tiles seen so far
-  need and twice the factor it ran under (`Raised(2)`, `Raised(4)`,
-  `Raised(8)`, ...), so a loop of retries takes about log2 of the factor the
-  file needs, not that many steps, and no longer a step for each tile of a
-  multi-tile file. The message no longer says "at least": the factor can be
-  more than the file needs. Measured on a release build, a loop from the
-  defaults, one thread:
+- `DecodeOptions::raised_for` (`with_retry` in 0.5) no longer climbs a
+  work bound one factor at a time. A refusal of the packet work or
+  code-block work bound, including the charge for missing tiles, names the
+  larger of what the tiles seen so far need and twice the factor it ran
+  under (`Raised(2)`, `Raised(4)`, `Raised(8)`, ...), so a loop of retries
+  takes about log2 of the factor the file needs, not that many steps, and
+  no longer a step for each tile of a multi-tile file. The message no
+  longer says "at least": the factor can be more than the file needs.
+  Measured on a release build, a loop from the defaults, one thread:
   `cprl_tall_poc31` (needs 32) took 31 steps and 70 s and now takes 5 steps
   and 8.5 s; `pocvol_1024x512_1000_2` (strict off) was still refused after
   46 steps and 120 s and now takes 5 steps and 8.0 s;

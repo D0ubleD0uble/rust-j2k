@@ -140,11 +140,11 @@ each such error waits while a box after the codestream can still be read.
 None can once OpenJPEG's walk there meets a `jp2c` or an `XLBox` of 2^32
 or more, and none ever is where the last tile-part has `Psot` 0, which runs
 to the end of the file, or where the tile-part chain is broken on the bytes
-fed, so that OpenJPEG's walk cannot reach the boxes after it. A box of length 0 after the
-codestream is still read while under 2^32 bytes follow it, so it does not
-end the wait. Once no box there can be read, the tile-parts are held as a
-codestream's are: a fault of the tile-parts is final, and an error in a
-tile waits until they close.
+fed, so that OpenJPEG's walk cannot reach the boxes after it. A box of length 0
+after the codestream is still read while under 2^32 bytes follow it, so it does
+not end the wait. Once no box there can be read, the tile-parts are held as a
+codestream's are: a fault of the tile-parts is final, and an error in a tile
+waits until they close.
 
 Until the input closes, `refine` waits on the error as `Waiting::Held`,
 which carries the error `decode_with` gives on the bytes fed, and `header`
@@ -366,12 +366,12 @@ refused once its `jp2c` box header is in), and `bytes` borrows the bytes fed.
   decode charges to the packet bound. So a change of the reduction alone
   keeps every walk, and each walk charges the code-blocks the new
   reduction drops, counted from the geometry it holds. A walk whose
-  geometry failed holds none to count from, and is let go. The public API does not reach this: a decoder keeps a walk
-  only after `check_tile` has built the same geometry and passed the caps. A
-  larger reduction has a smaller image, so the walks kept may no longer fit in
-  the room (see [Work and memory](#work-and-memory)). Then the next refine
-  lets go of the walks it reads that no longer fit, and walks those tiles
-  from the start until there is room.
+  geometry failed holds none to count from, and is let go. The public API does
+  not reach this: a decoder keeps a walk only after `check_tile` has built the
+  same geometry and passed the caps. A larger reduction has a smaller image, so
+  the walks kept may no longer fit in the room (see [Work and
+  memory](#work-and-memory)). Then the next refine lets go of the walks it reads
+  that no longer fit, and walks those tiles from the start until there is room.
 - The walks do not depend on the region. A tile the new region reads goes
   on from where its walk stopped, and the walks of the tiles it does not
   read stay for a later change back. A smaller region has a smaller image,
@@ -536,21 +536,21 @@ reduction or the window keeps the largest walk, which still bounds the walks
 kept. Of the
 committed fixtures fed 1 KB at a time, this keeps fewer walks than the image
 bound alone only for files made to test the work bounds, and for a
-6000 x 4000 RGB file of 148 KB until 64 KB of it are in. On top of these bounds the decoder keeps a table of 24
-bytes for each tile index up to the highest it has seen (`size_of::<Slot>()`
-in `src/tier2/resume.rs`). That is about 1.5 MiB for the 65535 tiles a file
-can have, and up to twice that in capacity as the table grows: an 82-byte
-file of 1 x 1 tiles whose one tile-part is tile 65534 holds 1.57 MB between
-calls. Each refine holds what `decode_with` holds for the same bytes on top
-of the walks kept, so the decoder holds at most one decode's peak plus the
-walks kept (twice the image's samples plus twice the walk of the largest
-tile walked so far; a change of the region or the reduction keeps that
+6000 x 4000 RGB file of 148 KB until 64 KB of it are in. On top of these bounds
+the decoder keeps a table of 24 bytes for each tile index up to the highest it
+has seen (`size_of::<Slot>()` in `src/tier2/resume.rs`). That is about 1.5 MiB
+for the 65535 tiles a file can have, and up to twice that in capacity as the
+table grows: an 82-byte file of 1 x 1 tiles whose one tile-part is tile 65534
+holds 1.57 MB between calls. Each refine holds what `decode_with` holds for the
+same bytes on top of the walks kept, so the decoder holds at most one decode's
+peak plus the walks kept (twice the image's samples plus twice the walk of the
+largest tile walked so far; a change of the region or the reduction keeps that
 walk), plus up to twice the bytes fed. `tests/incremental_alloc.rs` counts the
-bytes held on files of many one-sample tiles of 512 components, in LRCP
-order and under 32 PCRL `POC` volumes, fed in pieces, and
-`tests/incremental_kept_alloc.rs` on a file of 1228 bytes that declares a
-2048 x 2048 image of 4 x 4 code-blocks. The decoder is `Send` and `Sync`.
-The ledger's counters live only for the length of a decode.
+bytes held on files of many one-sample tiles of 512 components, in LRCP order
+and under 32 PCRL `POC` volumes, fed in pieces, and
+`tests/incremental_kept_alloc.rs` on a file of 1228 bytes that declares a 2048 x
+2048 image of 4 x 4 code-blocks. The decoder is `Send` and `Sync`. The ledger's
+counters live only for the length of a decode.
 
 A file of 1228 bytes that declares a 16384 x 16384 image, in 64 tiles of
 4 x 4 code-blocks with every packet empty, holds no walk between calls: each

@@ -13,7 +13,8 @@ advisory that only you and we can see. Include:
 - the affected version;
 - the `DecodeOptions` you used, such as `strict` off or a raised limit;
 - the input bytes. For a fuzzer find, send the artifact and name the target
-  that found it. We replay it with `cargo +nightly fuzz run <target> <artifact>`.
+  that found it. We replay it with
+  `cargo +nightly fuzz run <target> <artifact>`.
 
 We aim to acknowledge a report within a few days and to agree on a fix and
 disclosure timeline with you.
@@ -80,7 +81,8 @@ sample limit also sets how many code-blocks and precincts one tile may hold:
 one for each 512 and each 2048 samples it allows, and at least 2^20 and 2^18.
 Their bookkeeping comes to at most about a third of the output the same limit
 allows past the 2^29 floor, the same share at every size (see "Code-blocks
-and precincts per tile" in [`docs/resource-bounds.md`](docs/resource-bounds.md)).
+and precincts per tile" in
+[`docs/resource-bounds.md`](docs/resource-bounds.md)).
 For a ceiling that does not grow with the input, and the other limits to put
 around a decode, see [Running a decode service](#running-a-decode-service). A
 file past a limit is refused with `Error::Limit`, which is the guard working,
@@ -113,7 +115,8 @@ lists the targets.
 
 The limits above bound each decode on its own. None of them bounds time. To
 decode files from outside, put these around the decode. The method behind each
-figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-a-decode-service).
+figure is in [Figures for a decode
+service](docs/resource-bounds.md#figures-for-a-decode-service).
 
 1. **Cap the input.** Bound the size of the input you accept, measured in
    memory after any decompression. The decode holds it, padding counts as
@@ -162,7 +165,8 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
      `tests/sample_limit.rs`
      (`at_most_holds_the_codestream_and_the_palette_expansion`) asserts both
      refusals, `read_header_with` and `decode_with`, on the same header. The
-     method is in [Figures for a decode service](docs/resource-bounds.md#figures-for-a-decode-service).
+     method is in [Figures for a decode
+     service](docs/resource-bounds.md#figures-for-a-decode-service).
    - `read_header_with` under the same options is a quick early check. The
      decode can still refuse a file it admits: the header read checks the
      samples as the decode does, but the tile caps only where the main header
@@ -189,8 +193,8 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    code-block) measured 13 s at the defaults, about 108 µs a byte.
    `Raised(n)` on a work bound multiplies the time by up to `n`. Pick the
    timeout from your largest legitimate file, not from these figures. The
-   method is in
-   [Figures for a decode service](docs/resource-bounds.md#figures-for-a-decode-service).
+   method is in [Figures for a decode
+   service](docs/resource-bounds.md#figures-for-a-decode-service).
 4. **Size memory as concurrency times peak.** The bounds hold for each
    decode: nothing is shared between decodes, threads or decoders. So
    reserve one decode's peak (with its input) for each decode you run at

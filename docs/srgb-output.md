@@ -20,10 +20,11 @@ This table is the complete list of what `Srgb` does. The rustdoc and the README
 link here and summarize it. The checks run in the order of the rows, and the
 first row that matches decides. "Channels" are the output channels, after the
 palette and the channel definitions; the color channels are the ones the `cdef`
-labels color 1, 2 and 3 ([rows 8 and 21](#rows-8-and-21-color-channels-are-picked-by-their-labels)).
-OpenJPEG means `opj_decompress -force-rgb` 2.5.0 with LittleCMS 2.14, which
-follows `opj_decompress.c:1620-1716` and `color.c`. Each row number links to
-the evidence for that row.
+labels color 1, 2 and 3 ([rows 8 and
+21](#rows-8-and-21-color-channels-are-picked-by-their-labels)). OpenJPEG means
+`opj_decompress -force-rgb` 2.5.0 with LittleCMS 2.14, which follows
+`opj_decompress.c:1620-1716` and `color.c`. Each row number links to the
+evidence for that row.
 
 | # | Input | OpenJPEG | `Srgb` here | Why |
 | - | ----- | -------- | ----------- | --- |
@@ -501,5 +502,6 @@ convert: CMYK (12) on four channels gives three RGB planes
 (`color_cmyk_to_rgb`), CIELab (14) on three gives 16-bit RGB
 (`color_cielab_to_rgb`), and e-sYCC (24) on three converts
 (`color_esycc_to_rgb`). This decoder has no such conversion (they are out of
-scope for JP2, [roadmap-phase3.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase3.md)); without one, sRGB
-output would be a wrong image.
+scope for JP2,
+[roadmap-phase3.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase3.md));
+without one, sRGB output would be a wrong image.

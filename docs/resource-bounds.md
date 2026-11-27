@@ -53,8 +53,8 @@ refused with `Limit` of kind `TileCodeBlocks` or `TilePrecincts`, which
 Where the sample limit that would admit the tile is past what the target
 can address, the kind is `AddressSpace` instead, with nothing to retry with
 and a `refused_at` whose amount and unit are the count that is past the
-address space, the code-blocks or the precincts. On a 32-bit target, where that is 2^29 - 1
-samples, every tile past a cap is refused so.
+address space, the code-blocks or the precincts. On a 32-bit target, where that
+is 2^29 - 1 samples, every tile past a cap is refused so.
 
 A few fixed guards also return `Limit`, and no option lifts them: 32 POC
 progression volumes, 30 coded bit-planes per code-block, and an image too
@@ -129,12 +129,12 @@ included. Below that, under `Unlimited`, an allocation the system cannot
 satisfy aborts the process.
 
 The default admits a Sentinel-2 true-color image (10980x10980 in three
-components, 361.7 M samples) and RGB images up to about 179 MP, and a reduced decode of a larger image
-when the reduced image fits: GDAL's `single_block_32769_16385.jp2` (537 M
-samples) decodes at reduction 3 (4097x2049), bit-exact against
-`opj_decompress -r 3` (#281, 2026-11-12). Measured on a release build against
-`opj_decompress` 2.5.0 (wall time on a shared, loaded machine; peak resident
-memory from `/usr/bin/time -v`):
+components, 361.7 M samples) and RGB images up to about 179 MP, and a reduced
+decode of a larger image when the reduced image fits: GDAL's
+`single_block_32769_16385.jp2` (537 M samples) decodes at reduction 3
+(4097x2049), bit-exact against `opj_decompress -r 3` (#281, 2026-11-12).
+Measured on a release build against `opj_decompress` 2.5.0 (wall time on a
+shared, loaded machine; peak resident memory from `/usr/bin/time -v`):
 
 | File | Decode | Time | Peak RSS | OpenJPEG time | OpenJPEG peak RSS |
 | ---- | ------ | ---- | -------- | ------------- | ----------------- |
@@ -290,8 +290,9 @@ plus the input. The measured peaks against `n` are in that section. An
 `IncrementalDecoder` can hold one decode's peak plus the packet walks it
 keeps, at most twice the image's samples plus twice the walk of the largest
 tile walked so far, plus up to twice the bytes fed. What to
-set around a decode besides the ceiling (the input size, a timeout, memory for each concurrent decode) is in
-[Running a decode service](../SECURITY.md#running-a-decode-service).
+set around a decode besides the ceiling (the input size, a timeout, memory for
+each concurrent decode) is in [Running a decode
+service](../SECURITY.md#running-a-decode-service).
 
 A refusal under `AtMost(n)` has kind `Samples` (or `TileCodeBlocks` or
 `TilePrecincts`, for a tile's geometry) and names the ceiling and the count.
@@ -300,8 +301,8 @@ caller set the ceiling. In an `IncrementalDecoder` a refusal of the image
 is an error, not a wait, as more bytes do not raise it. A tile's refusal
 waits as `Waiting::Held` until the bytes fed reach the `EOC`, and in a
 JP2 file until `finish`, as a later fault comes before it in the decode;
-the refine that waits does not build the tile. A refusal from a later tile while a refine
-counts the code-block work ends the count as `Waiting::BoundSpent` (see
+the refine that waits does not build the tile. A refusal from a later tile while
+a refine counts the code-block work ends the count as `Waiting::BoundSpent` (see
 [Incremental decoding](incremental-decoding.md)). `AtMost(0)`, and `AtMost` on
 `packet_work_limit` or `code_block_work_limit`, is `InvalidOptions`.
 
@@ -355,10 +356,10 @@ sample buffers of a square tile are about 1.35 x 4n = 86 MiB, which leaves
 resident memory. On the heap alone the same file is 241 bytes a code-block
 over the output (see [Code-blocks and precincts per
 tile](#code-blocks-and-precincts-per-tile)). The 0.8 GiB estimate uses 560,
-which is above both, so it is on the high side. The 2^20 row holds 261,632 precincts and about 800,000 code-blocks, nearly both caps, and
-peaks at 233 MiB, so the two caps together have not been shown to reach the
-estimate; the precinct figure of 750 bytes is from #583's probes and is not
-isolated here.
+which is above both, so it is on the high side. The 2^20 row holds 261,632
+precincts and about 800,000 code-blocks, nearly both caps, and peaks at 233 MiB,
+so the two caps together have not been shown to reach the estimate; the precinct
+figure of 750 bytes is from #583's probes and is not isolated here.
 
 ### JP2 box records
 
@@ -494,17 +495,17 @@ it with `/usr/bin/time -v cargo test --release --test sample_limit --
 **Zero bytes inside a code-block.** Zero bytes in a code-block's data count as
 tile data, so they raise the work bound, and the decode still runs its passes
 over them. `t1bomb(8192, 6, 88)` with a 120,000-byte last code-block of zeros
-is 196,526 bytes, gzips to about 930 bytes with `gzip -9`, and decodes at the defaults in 13.0 s
-(peak 269 MiB), about 108 µs a byte. The same file without the zeros (76,525
-bytes) is refused in 10 ms by the code-block work bound. The file was made by
-`scripts/gen-tier1-work-bound-fixtures.py --memory DIR`
+is 196,526 bytes, gzips to about 930 bytes with `gzip -9`, and decodes at the
+defaults in 13.0 s (peak 269 MiB), about 108 µs a byte. The same file without
+the zeros (76,525 bytes) is refused in 10 ms by the code-block work bound. The
+file was made by `scripts/gen-tier1-work-bound-fixtures.py --memory DIR`
 (`zeros_8192_6_88.j2k`, and `zeros_none_8192_6_88.j2k` without the zeros). A
 length of 120,000 needs its Lblock raised: Lblock starts at 3 and the length
-field is Lblock + floor(log2(88)) bits, so 8 increments (eight 1 bits and a
-0) put the field at 17 bits, enough for 120,000. Neither file is committed.
-Reproduce the time with `PEAK_FILE=DIR/zeros_8192_6_88.j2k /usr/bin/time -v cargo test --release
---test sample_limit -- --ignored decode_the_file_in_peak_file` (13.1 s, 269
-MiB).
+field is Lblock + floor(log2(88)) bits, so 8 increments (eight 1 bits and a 0)
+put the field at 17 bits, enough for 120,000. Neither file is committed.
+Reproduce the time with `PEAK_FILE=DIR/zeros_8192_6_88.j2k /usr/bin/time -v
+cargo test --release --test sample_limit -- --ignored
+decode_the_file_in_peak_file` (13.1 s, 269 MiB).
 
 **The retry loop.** The README's loop makes at most five decodes (the first
 and four retries). Each of the three bounds can be raised to 4 times its
@@ -673,50 +674,50 @@ calls read them about once in all (a 256 KiB `PPM` main header fed 256
 bytes at a time: 506 times over before, once now). For this it keeps
 what the main header's segments read so far set, held while the main
 header stays cut short, whether or not `header` is called again. Each
-override of a component's coding keeps its parsed form: up to about 12
-bytes for each byte of `COC`, `QCC` and `RGN` segments, the most for a
-one-step `QCC` (1.54 MB for 128 KiB of them, one for each of 16384
-components). A component holds one of each, so the most is about 12 MB: a
-`COC` of precincts, a 97-step `QCC` and an `RGN` for each of 16384
-components, 4.2 MB of segments, keep 12.2 MB. `PPM` segments keep 24 bytes
-each, 1.6 MB at most under the 65536 segments a main header may have; the
-rest (`POC`, of 32 volumes at most, `CRG`, the `TLM` count) is small
-(`tests/incremental_header_cache_alloc.rs`). The
-header of a tile-part not yet
-fed in full, or of a last tile-part whose `Psot` is 0, is read again on
+override of a component's coding keeps its parsed form: up to about 13
+bytes for each byte of `COC`, `QCC` and `RGN` segments. The highest ratio
+is for a one-step `QCC` in a file of at most 256 components, whose
+component index is one byte. With 16384 components the index is two
+bytes, and 128 KiB of one-step `QCC` segments keep 1.54 MB, about 12
+bytes for each byte. A component holds at most one `COC`, one `QCC` and
+one `RGN`, so the total is about 12 MB at most: a `COC` of precincts, a
+97-step `QCC` and an `RGN` for each of 16384 components, 4.2 MB of
+segments, keep 12.2 MB. `PPM` segments keep 24 bytes each, 1.6 MB at most
+under the 65536 segments a main header may have; the rest (`POC`, of 32
+volumes at most, `CRG`, the `TLM` count) is small
+(`tests/incremental_header_cache_alloc.rs`). The header of a tile-part not
+yet fed in full, or of a last tile-part whose `Psot` is 0, is read again on
 each call. What it keeps, about 140 bytes for each tile counted under its
 own header and a byte for each other tile, is held until the options
 change. It keeps no copy of the main header, only a key of it (two
 integers). A file whose tiles' sizes show them within the caps keeps nothing
 (`tests/incremental_header_cache_alloc.rs`: 0 bytes held after a call on a
 16.8 MB main header of `PPM` data, where a copy of the parsed header held
-100 MB); any other keeps a few hundred bytes, plus the per-tile counts. The walk for the
-decode's error for the tile-parts is kept too, with its heap above, where
-it stood after the last tile-part it read whose `Psot` is not 0 and whose
-end is followed by an `SOT`: every step before there read only bytes a
-longer input holds the same. Each call that refuses a tile, stops at a
-budget or meets a tile whose own header is at fault goes on from there,
-reading the tile-parts fed since and the one it was kept before. It checks
-each tile's own header as it reads the tile's first tile-part, and the
-tile's `POC` volumes as each later one adds to them, so a walk that stops
-on a fault is kept at the start of that tile-part and reads it again on
-the next call. The walk depends on no option but
-`strict`, which the header read always has off, so it is kept over a
-change of options. With tile 0 refused and `Region::Tile(0)`, calls after
-each 1 MiB fed of the 235 MB file took 21.5 s in all with a walk from the
-start on each, and take 170 ms. With tile 1's own header at fault as
-well they took 18 s and take 1.3 ms: the walk stops at that header and
-is kept there, so a call reads only the tile-part at fault. On a file of
-65535 tiles of 4096 components and 255 tile-parts each (233 MB), whose
-count runs out of its budget and whose header reads, they took 6.9 s and
-take 410 ms, most of it the budget each call spends. These are in `tests/incremental_header_cost.rs`, which bounds each by 8 times
-one read of the whole file. With `strict` off, as
-`IncrementalDecoder::header` reads, the `TNsot` look-ahead is not taken:
-it would read past the tile-parts walked, and it changes no step and no
-error of that walk, as "tile N declares A tile-parts in one `SOT` and B
-in another" gives the counts the two `SOT`s state.
-In an `IncrementalDecoder` a refusal under the default or a `Raised` limit
-is a wait (`Waiting::SampleLimit`), as the caps grow with the bytes fed.
+100 MB); any other keeps a few hundred bytes, plus the per-tile counts. The walk
+for the decode's error for the tile-parts is kept too, with its heap above,
+where it stood after the last tile-part it read whose `Psot` is not 0 and whose
+end is followed by an `SOT`: every step before there read only bytes a longer
+input holds the same. Each call that refuses a tile, stops at a budget or meets
+a tile whose own header is at fault goes on from there, reading the tile-parts
+fed since and the one it was kept before. It checks each tile's own header as it
+reads the tile's first tile-part, and the tile's `POC` volumes as each later one
+adds to them, so a walk that stops on a fault is kept at the start of that
+tile-part and reads it again on the next call. The walk depends on no option but
+`strict`, which the header read always has off, so it is kept over a change of
+options. With tile 0 refused and `Region::Tile(0)`, calls after each 1 MiB fed
+of the 235 MB file took 21.5 s in all with a walk from the start on each, and
+take 170 ms. With tile 1's own header at fault as well they took 18 s and take
+1.3 ms: the walk stops at that header and is kept there, so a call reads only
+the tile-part at fault. On a file of 65535 tiles of 4096 components and 255
+tile-parts each (233 MB), whose count runs out of its budget and whose header
+reads, they took 6.9 s and take 410 ms, most of it the budget each call spends.
+These are in `tests/incremental_header_cost.rs`, which bounds each by 8 times
+one read of the whole file. With `strict` off, as `IncrementalDecoder::header`
+reads, the `TNsot` look-ahead is not taken: it would read past the tile-parts
+walked, and it changes no step and no error of that walk, as "tile N declares A
+tile-parts in one `SOT` and B in another" gives the counts the two `SOT`s state.
+In an `IncrementalDecoder` a refusal under the default or a `Raised` limit is a
+wait (`Waiting::SampleLimit`), as the caps grow with the bytes fed.
 
 A refusal names the `SampleLimit::Raised` factor of `sample_limit` that admits
 both the tile's precincts and its code-blocks, or twice the factor it ran
@@ -892,11 +893,11 @@ packet, and decodes as the standard defines it (#595). OpenJPEG 2.5.0
 agrees where it decodes such a file, and fails some
 ([openjpeg-departures.md](openjpeg-departures.md#a-tile-with-no-sample-of-a-component)).
 Its setup and decode still cost about 0.3 µs, plus 0.1 µs for each
-resolution, and no byte pays for them. So each resolution of a tile-component with no sample costs
-32 steps, as the end of a tile's data does with `strict` off: the default
-bound's 2^24 steps hold about a quarter of a second of it. A tile-component
-that holds a sample has a packet, which pays for it, so a file without an
-empty one spends no more than it did.
+resolution, and no byte pays for them. So each resolution of a tile-component
+with no sample costs 32 steps, as the end of a tile's data does with `strict`
+off: the default bound's 2^24 steps hold about a quarter of a second of it. A
+tile-component that holds a sample has a packet, which pays for it, so a file
+without an empty one spends no more than it did.
 
 Measured on release builds. Each shape is one-sample tiles from the origin,
 component 0 full size and the others sub-sampled 255 both ways, so each of
@@ -1008,9 +1009,9 @@ shapes; that table's memory for the shapes past the bitmap is from before
 the counts.
 
 `read_header`'s walk keeps no counts: past its bitmap, only where the decode
-would keep them, it gives up. For a `Psot = 0` codestream in a JP2 file the codestream
-then runs to the end of the file, like the other tiles too costly to walk
-(`a_psot_zero_tile_too_costly_to_walk_reads_to_the_end` in
+would keep them, it gives up. For a `Psot = 0` codestream in a JP2 file the
+codestream then runs to the end of the file, like the other tiles too costly to
+walk (`a_psot_zero_tile_too_costly_to_walk_reads_to_the_end` in
 `tests/psot_zero.rs`): boxes after `jp2c` are not reported, and the decode
 refuses their bytes as left after the last packet. `setskip(1024, 31)` (the
 shape in the last row of the table below, with 1024 layers and 31 identical
@@ -1086,11 +1087,11 @@ So raising the limit can change the outcome of a decode without any
 `Error::Limit` having asked for it. At the default,
 `tests/fixtures/psot0/jp2_t2_sweep_cprl_poc.jp2` and
 `tests/fixtures/work_bound/jp2_t2skip_512_20000.jp2` give
-`Codestream: tile 0 has 6 byte(s) left after the last packet`, and with `strict` off, a report with
-a `LeftoverBytes` entry. Under `WorkLimit::Raised(2)` both decode completely,
-with an empty report. OpenJPEG reads every such tile-part to the end of the
-file and ignores the bytes left after the last packet, whatever its walk costs
-([`Psot = 0` at the end of
+`Codestream: tile 0 has 6 byte(s) left after the last packet`, and with `strict`
+off, a report with a `LeftoverBytes` entry. Under `WorkLimit::Raised(2)` both
+decode completely, with an empty report. OpenJPEG reads every such tile-part to
+the end of the file and ignores the bytes left after the last packet, whatever
+its walk costs ([`Psot = 0` at the end of
 `jp2c`](openjpeg-departures.md#psot--0-at-the-end-of-jp2c)), and decodes the
 first file. It fails on the second for another reason ("segment too long" in a
 code-block).
@@ -1217,8 +1218,9 @@ about 5 times as long as OpenJPEG on these files.
 decodes at the default as OpenJPEG decodes it, and
 `the_large_ht_bomb_decodes_at_the_default_bound` (ignored) the 8192x8192 row.
 No file is refused by the bound for its HT blocks, so there is no public-API
-test of such a refusal; `every_committed_file_decodes_far_below_the_tier1_work_bound`
-measures every HT corpus file against it with the others.
+test of such a refusal;
+`every_committed_file_decodes_far_below_the_tier1_work_bound` measures every HT
+corpus file against it with the others.
 
 ## Incremental decoding
 

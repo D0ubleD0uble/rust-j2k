@@ -433,14 +433,15 @@ follows the standard.
 | Tests and fixtures | `tests/override_order.rs`, `tests/fixtures/override_order/` |
 | Decided | #338 |
 
-A.6.1 and A.6.4 rank the markers by class (A.6.2 and A.6.5 say a COC or QCC is "for the specific component"): a tile-part COC outranks a
-tile-part COD, which outranks a main-header COC, which outranks a main-header
-COD, and likewise for QCC and QCD. The ranking is between classes, not between
-positions in a header, and Figure A.3 fixes only SOC first and SIZ second, so nothing says a COC must follow the COD. So a
-COC placed first still overrides a COD that follows. This decoder reads a
-header's markers into one set, then lays them over each component with the COD
-and QCD first and the COC, QCC and RGN after (`Overrides::lay_over` in
-`src/codestream/mod.rs`).
+A.6.1 and A.6.4 rank the markers by class (A.6.2 and A.6.5 say a COC or QCC is
+"for the specific component"): a tile-part COC outranks a tile-part COD, which
+outranks a main-header COC, which outranks a main-header COD, and likewise for
+QCC and QCD. The ranking is between classes, not between positions in a header,
+and Figure A.3 fixes only SOC first and SIZ second, so nothing says a COC must
+follow the COD. So a COC placed first still overrides a COD that follows. This
+decoder reads a header's markers into one set, then lays them over each
+component with the COD and QCD first and the COC, QCC and RGN after
+(`Overrides::lay_over` in `src/codestream/mod.rs`).
 
 OpenJPEG applies each marker as it reads it. `opj_j2k_read_cod` ends by calling
 `opj_j2k_copy_tile_component_parameters` (`j2k.c:2767`) and `opj_j2k_read_qcd`
@@ -537,9 +538,10 @@ OpenJPEG fills the gap with invented values. Four checks on HT cleanup
 segments and one on HT refinement segments are of the same kind ([HT cleanup
 segments](#ht-cleanup-segments), [HT refinement
 segments](#ht-refinement-segments)). A color transform over mixed wavelets is
-One check is of a third kind: OpenJPEG decodes it to a wrong image with no warning ([A color
-transform over mixed wavelets](#a-color-transform-over-mixed-wavelets)).
-The entries below give each one.
+One check is of a third kind: OpenJPEG decodes it to a wrong image with no
+warning ([A color transform over mixed
+wavelets](#a-color-transform-over-mixed-wavelets)). The entries below give each
+one.
 
 ### SOP sequence numbers
 
@@ -581,8 +583,8 @@ Tile-part bytes left over after the last packet are refused with a
 
 openjpeg-data's `kodak_2layers_lrcp.j2c` (DCP-Werkstatt) has 975304 bytes left
 after its last packet, and this decoder refuses the file with a `Codestream`
-error that gives that count; OpenJPEG ignores them. With the check turned off, this
-decoder's image is within 1 of OpenJPEG's (it is 9/7).
+error that gives that count; OpenJPEG ignores them. With the check turned off,
+this decoder's image is within 1 of OpenJPEG's (it is 9/7).
 
 ### A tile-part that ends before its last packet
 
@@ -676,13 +678,14 @@ present (T.814 A.3.4), so an `RGN` in the main header, before or after the
 bound `B` (A.3.7), and an HT cleanup magnitude at or past `2^B` (or the
 per-level bound 8.7.3 gives an irreversible subband) is refused.
 
-OpenJPEG treats the two refusals differently. Past the magnitude bound it decodes
-on. An `RGN` on HT code-blocks it refuses ("We do not support ROI in decoding
-HT codeblocks", `ht_dec.c:1143`) whatever the `CAP` says, so the two decoders
-give the same outcome on the `RGN` case. Grok does not refuse it. `grk_compress -R c=0,U=8 -M 64 -H 2` (grok
-19cbf05) writes an `RGN` with `Ccap15` bit 12 clear, and `grk_decompress`
-decodes the file. A file with the bit set decodes here
-([Region of interest on HT code-blocks](#region-of-interest-on-ht-code-blocks)).
+OpenJPEG treats the two refusals differently. Past the magnitude bound it
+decodes on. An `RGN` on HT code-blocks it refuses ("We do not support ROI in
+decoding HT codeblocks", `ht_dec.c:1143`) whatever the `CAP` says, so the two
+decoders give the same outcome on the `RGN` case. Grok does not refuse it.
+`grk_compress -R c=0,U=8 -M 64 -H 2` (grok 19cbf05) writes an `RGN` with
+`Ccap15` bit 12 clear, and `grk_decompress` decodes the file. A file with the
+bit set decodes here ([Region of interest on HT
+code-blocks](#region-of-interest-on-ht-code-blocks)).
 
 ### HT cleanup segments
 
@@ -912,10 +915,11 @@ only when it changes nothing in either reading, and is then dropped
 - a COC or QCC must equal what its component already has.
 
 A marker that differs from the one in force is a `Codestream` error naming
-the tile and the marker. OpenJPEG applies it to the whole tile, including the parts read before it; which values the encoder
-meant is not in the file, so this decoder does not guess. An RGN in a later
-part is still refused, as before. This is safe because an accepted
-restatement leaves every value the decode reads as it was.
+the tile and the marker. OpenJPEG applies it to the whole tile, including the
+parts read before it; which values the encoder meant is not in the file, so this
+decoder does not guess. An RGN in a later part is still refused, as before. This
+is safe because an accepted restatement leaves every value the decode reads as
+it was.
 
 ### The color transform on one or two components
 
@@ -964,8 +968,8 @@ of `2/K`, every stage agrees bit for bit and the file decodes bit-exact.
 | - | - |
 | This decoder | with `DecodeOptions::strict` off, takes missing data and leftover bytes and reports them on `Image::report` |
 | OpenJPEG 2.5.0 | `opj_decompress -allow-partial` |
-| Standard | B.11 (whole packets may be dropped from the end of a tile) |
-| Rule | 1 for a cut packet (B.11); 3 for a packed-header overrun |
+| Standard | B.11 (whole packets may be dropped from the end of a tile); A.4.2 (`TNsot` is the number of the tile's tile-parts) |
+| Rule | 1 for a cut packet (B.11) and for tile-parts past `TNsot` (A.4.2); 3 for a packed-header overrun |
 | Tests and fixtures | `tests/partial_decode.rs`, `src/tier2/partial_tests.rs`, `tests/packed_overrun.rs`, `tests/tnsot_extra_part.rs`; `tests/fixtures/partial/`, `tests/fixtures/poc_coverage/`, `tests/fixtures/packed_overrun/`, `tests/fixtures/tnsot_extra_part/` |
 | Decided | #214, #634 |
 
@@ -1057,9 +1061,10 @@ whether another tile is still to come:
   it never reads the third part. On a 32x32 file of three tile-parts, with
   `TNsot` set to 1 on each, 917 of its 1024 samples differ from the image of
   the unedited file.
-- Another tile follows (here tile 0 states 1 and tile 1 states 2): it refuses with "In SOT marker, TPSot (2) is not valid
-  regards to the previous number of tile-part (2), giving up" and "Fail to read
-  the current marker segment (0xff90)" ("failed to decode image!").
+- Another tile follows (here tile 0 states 1 and tile 1 states 2): it
+  refuses with "In SOT marker, TPSot (2) is not valid regards to the previous
+  number of tile-part (2), giving up" and "Fail to read the current marker
+  segment (0xff90)" ("failed to decode image!").
 
 Here the image from all three parts equals the unedited file's, which is the
 source image (the file is lossless), and `opj_decompress` on the unedited
@@ -1078,9 +1083,10 @@ keeps only the layers before the cut packet, so each code-block decodes as a
 codestream truncated after some whole layer would. OpenJPEG 2.5.0 warns
 `segment too long`, then drops the code-block whose contribution is cut and
 every code-block after it in the packet, with their earlier layers
-(`opj_t2_read_packet_data` in `t2.c` empties the block's chunks). The two images can differ in the code-blocks the cut packet
-reaches; they agree when those blocks have no earlier layer, as in a packet of
-layer 0. The report says the tile is incomplete either way.
+(`opj_t2_read_packet_data` in `t2.c` empties the block's chunks). The two images
+can differ in the code-blocks the cut packet reaches; they agree when those
+blocks have no earlier layer, as in a packet of layer 0. The report says the
+tile is incomplete either way.
 `a_cut_packet_keeps_each_code_blocks_whole_layers` in
 `src/tier2/partial_tests.rs` checks each code-block of a cut three-layer packet
 against layer-limited walks.
@@ -1129,9 +1135,9 @@ of the data is the data ending, and the packet adds nothing.
 With `strict` off, a tile-part header that the input ends inside decodes:
 the codestream ends at that tile-part, none of the tile-part is read, and the
 report names it as `TruncatedTilePart` with `header_cut` set (and `declared`
-`None` when its `Psot` is 0). OpenJPEG 2.5.0 refuses such a file with "Stream too short", even under
-`-allow-partial`. This is what lets every prefix of a file decode as it
-streams in.
+`None` when its `Psot` is 0). OpenJPEG 2.5.0 refuses such a file with "Stream
+too short", even under `-allow-partial`. This is what lets every prefix of a
+file decode as it streams in.
 
 A fault in the header is read as the input ending only when the input ends
 inside what the error depends on. For most markers that is the marker
@@ -1337,8 +1343,8 @@ reaches it. `roi_band_s31.j2k` is the 8x8 stream above with `SPrgn = 31`:
 this decoder returns the source, and `opj_decompress` 2.5.0 returns 128 for
 all 64 samples. HT blocks cannot reach it: one with coded passes is refused as a
 `Limit` when `Mb + s` is over 30, and one with no passes returns zeros before
-`undo_maxshift`. No conformance file or encoder output is known to carry a shift this
-large.
+`undo_maxshift`. No conformance file or encoder output is known to carry a shift
+this large.
 
 None of the conformance or HT ROI codestreams has a coefficient in the band:
 the eight HT references, `p0_03`, `p0_06`, `p0_13` and `p0_15` all decode as
@@ -1356,7 +1362,7 @@ an encode with the marker and the zero bit-planes added by script.
 | OpenJPEG 2.5.0 | refuses the COD or COC ("Unsupported Mixed HT code-block style found", `opj_j2k_read_SPCod_SPCoc` in `j2k.c`) |
 | Standard | T.814 A.4, B.3, and A.3.2 for `Ccap15` bits 15-14 |
 | Rule | 1 |
-| Tests and fixtures | `src/tier2/tests/ht.rs` (the MIXED section); `a_mixed_style_under_an_htdeclared_cap_is_codestream` in `src/codestream/tests.rs`; `tests/conformance_ht.rs` on `ds0_hm_06_b11`, `ds0_hm_06_b18` and `ds0_hm_15_b8` |
+| Tests and fixtures | `src/tier2/tests/ht.rs` (the MIXED section); `a_mixed_style_under_an_htdeclared_cap_is_marker` in `src/codestream/tests.rs`; `tests/conformance_ht.rs` on `ds0_hm_06_b11`, `ds0_hm_06_b18` and `ds0_hm_15_b8` |
 | Decided | #344 |
 
 Under MIXED each code-block is an HT block or a Part 1 block (T.814 A.4). The
@@ -1482,7 +1488,8 @@ VLC and MEL stuffing bits in (`mel_init`, `ht_dec.c:328`), so it decodes such
 blocks differently in general; on the two fixtures below it decodes as this
 decoder does. T.814 7.1.3 (`importMELBit`) skips the MEL stuffing bit with no
 error, and this decoder decodes the block. In every case seen (33 of the
-24,000 random-byte blocks), that 0xFF also carries a set VLC stuffing bit. Two are fixtures, both 5/3:
+24,000 random-byte blocks), that 0xFF also carries a set VLC stuffing bit. Two
+are fixtures, both 5/3:
 
 - A 4x16 12-bit block, 13 bit-planes with 7 zero, and the segment
   `C6 A5 D9 FF C0 1F 65 78 00`.
@@ -1516,8 +1523,8 @@ the same bytes as without it. This decoder
 refuses the file, as it does every Part 2 marker (`DCO`, `VMS`, `DFS`, `ADS`,
 `MCT`, `MCC`, `MCO`, `CBD`, `ATK`; 0xFF70 to 0xFF79), in either header. The
 message names the marker. OpenJPEG defines only `MCT`, `MCC`, `MCO` and `CBD`
-in `j2k.h`. It reads those four (`j2k.c:1426-1431`), and skips the other six (`DCO`, `VMS`,
-`DFS`, `ADS`, `NLT`, `ATK`) with "[WARNING] Unknown marker"
+in `j2k.h`. It reads those four (`j2k.c:1426-1431`), and skips the other six
+(`DCO`, `VMS`, `DFS`, `ADS`, `NLT`, `ATK`) with "[WARNING] Unknown marker"
 ([below](#an-unknown-marker-in-the-main-header)).
 
 ## An unknown marker in the main header
@@ -1557,10 +1564,10 @@ format from the first four bytes, `FF4F FF51`.)
 The refusal waits for the main header to reach its first `SOT`. If the walk
 stops on a structural fault first (a length below 2, a byte that is not a
 marker, `SOC`, `SOD` or `EOC`, or more than 65536 marker segments), the
-code was most likely damage, such as a damaged first `SOT`, and that fault is reported as `Codestream` or `Marker`
-(`tests/main_header_fault_order.rs`). OpenJPEG skips the code there too, and
-reports the first fault after it (a bad segment or a structural fault) or
-decodes on.
+code was most likely damage, such as a damaged first `SOT`, and that fault is
+reported as `Codestream` or `Marker` (`tests/main_header_fault_order.rs`).
+OpenJPEG skips the code there too, and reports the first fault after it (a bad
+segment or a structural fault) or decodes on.
 
 Repro: add `FF7F 0002` (an unassigned code, length 2, no body) before the
 `COD` of `tests/fixtures/multicomponent_lossless.j2k`. `opj_decompress`
@@ -1581,11 +1588,12 @@ They may use values that the marker's part defines, so Part 1 rules could
 refuse a valid Part 2 file with the wrong error. A segment there that Part 1
 refuses, such as a `COD` with 33 decomposition levels, loses to a later
 structural fault, or to the `Unsupported` refusal where the header reaches
-`SOT`. After an unknown marker OpenJPEG judges it: it warns "Unknown marker", then fails with
-"Invalid value for numresolutions : 34, max value is set in openjpeg.h at 33"
-and "Error reading COD marker". The file is refused either way; only the
-error differs (`tests/main_header_fault_order.rs`). OpenJPEG reads `MCT` itself, so
-after one it reports that marker's own error first, if its body is bad.
+`SOT`. After an unknown marker OpenJPEG judges it: it warns "Unknown marker",
+then fails with "Invalid value for numresolutions : 34, max value is set in
+openjpeg.h at 33" and "Error reading COD marker". The file is refused either
+way; only the error differs (`tests/main_header_fault_order.rs`). OpenJPEG reads
+`MCT` itself, so after one it reports that marker's own error first, if its body
+is bad.
 
 The Part 2 markers OpenJPEG does not define (`DCO`, `VMS`, `DFS`, `ADS`,
 `NLT`, `ATK`; codes in ITU-T T.801, Table A.19) get the same outcome from
@@ -1606,9 +1614,9 @@ marker](#the-nlt-marker)).
 `opj_j2k_read_siz` computes the tile count with `opj_int_ceildiv` on values it
 casts to `OPJ_INT32` (`j2k.c:2336`). A `YTsiz` of `0xFFFFFFFF` is -1 as a signed
 int, so the quotient is negative, wraps to a huge unsigned count, and the file
-fails the 65535-tile check. This decoder does the sum in wider integers and finds
-one tile. The output is byte-identical to OpenJPEG's decode of the same file
-with `YTsiz` patched to the image height.
+fails the 65535-tile check. This decoder does the sum in wider integers and
+finds one tile. The output is byte-identical to OpenJPEG's decode of the same
+file with `YTsiz` patched to the image height.
 
 ## A tile with no sample of a component
 
@@ -1695,25 +1703,26 @@ tile-part that holds no packet (`an_nppm_of_0_beside_one_that_is_not_decodes`).
 This decoder reads the `PPM` as written. A tile-part whose `Nppm` is 0 has no
 packet header, and its packet headers are still taken as packed: the data
 after its `SOD` is never read for packet headers, as A.7.4 rules out. So
-the all-zero files in `tests/ppm_nppm.rs` give, with `strict` on, "the packed packet
-headers of tile 0 end before the last packet", and with `strict` off the sample 128 (every
-coefficient 0) and a report that is not complete. That includes a file
-whose tile data holds the packet header OpenJPEG decodes to 176 when it is
-packed. No valid codestream has every `Nppm` 0: it has at least one
+the all-zero files in `tests/ppm_nppm.rs` give, with `strict` on, "the packed
+packet headers of tile 0 end before the last packet", and with `strict` off the
+sample 128 (every coefficient 0) and a report that is not complete. That
+includes a file whose tile data holds the packet header OpenJPEG decodes to 176
+when it is packed. No valid codestream has every `Nppm` 0: it has at least one
 packet, and a packet header takes at least a byte.
 
 ## Where a `PPM` segment may end
 
 A `PPM` segment that ends inside a 4-byte `Nppm` field, so that the field
-continues in the next segment, is refused by both decoders. A.7.4 reads: "Every marker segment in this
-series shall end with a completed packet header. However, the series of Ippm parameters described
-by the Nppm does not have to be complete in a given marker segment.
-Therefore, it is possible that the next PPM marker segment will not have a
-Nppm parameter after Zppm, but the continuation of the Ippm series from the
-last PPM marker segment." (ITU-T T.800 (08/2002); T.800 (11/2015) says
-the same, with "an Nppm".) A continuation carries `Ippm` bytes, not the rest
-of an `Nppm`, so this decoder refuses the split field as `Error::Marker`, and
-OpenJPEG gives "Not enough bytes to read Nppm" (`j2k.c:3958`).
+continues in the next segment, is refused by both decoders. A.7.4 reads: "Every
+marker segment in this series shall end with a completed packet header. However,
+the series of Ippm parameters described by the Nppm does not have to be complete
+in a given marker segment. Therefore, it is possible that the next PPM marker
+segment will not have a Nppm parameter after Zppm, but the continuation of the
+Ippm series from the last PPM marker segment." (ITU-T T.800 (08/2002); T.800
+(11/2015) says the same, with "an Nppm".) A continuation carries `Ippm` bytes,
+not the rest of an `Nppm`, so this decoder refuses the split field as
+`Error::Marker`, and OpenJPEG gives "Not enough bytes to read Nppm"
+(`j2k.c:3958`).
 
 Two other shapes break "Every marker segment in this series shall end with a
 completed packet header" (A.7.4), and both decoders read them. They are not
@@ -2132,7 +2141,8 @@ gray, sYCC at full resolution, ICC) works with a window.
 Two `opj_compress` 2.5.0 encodes produce a stream that `opj_decompress` decodes
 with exit 0 to a wrong image, and this decoder refuses. Neither is a decoder
 bug. Both fixtures are in `tests/fixtures/opj_encoder_bugs/`, with the
-commands and the OpenJPEG output ([its README](../tests/fixtures/opj_encoder_bugs/README.md)).
+commands and the OpenJPEG output ([its
+README](../tests/fixtures/opj_encoder_bugs/README.md)).
 
 ### `-TP` with mixed sub-sampling and explicit precincts
 

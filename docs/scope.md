@@ -1,10 +1,10 @@
 # Feature scope
 
 This page lists the JPEG 2000 features, grouped by part of the standard, and
-says whether this decoder reads each one today. The [roadmap](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md)
-says which features are planned. A file that
-needs a feature this decoder doesn't read is refused with
-`Error::Unsupported` rather than decoded wrongly.
+says whether this decoder reads each one today. The
+[roadmap](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md)
+says which features are planned. A file that needs a feature this decoder
+doesn't read is refused with `Error::Unsupported` rather than decoded wrongly.
 
 "Yes, with limits" means the feature decodes, but a few inputs inside it are
 refused or handled partly. The text under each table names them.
@@ -232,5 +232,6 @@ HT and Part 1 code-blocks, and refuses more than one HT set with
 ## Speed
 
 The decoder aims for correct output first and OpenJPEG's speed second.
-Optimizations go only into hot paths a profile has measured, and `unsafe` code
-and SIMD wait until a benchmark shows they're needed.
+Optimizations go only into hot paths a profile has measured, and SIMD waits
+until a benchmark shows it's needed. The library has no `unsafe` code
+(`#![forbid(unsafe_code)]`).

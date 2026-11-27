@@ -9,9 +9,8 @@ finished. Phase 3 shipped as the 0.4.0 release, and Phase 4 shipped as 0.5.0.
 Each phase has a goal, the work it contains and a gate: the test that must
 pass before the phase counts as done. A gate always compares against an
 external reference, never against the crate's own output, for the reasons in
-[correctness.md](correctness.md). [scope.md](scope.md) lists every feature,
-whether it decodes today, and the phase that plans each one that doesn't. This
-page gives the order and the gates.
+[correctness.md](correctness.md). [scope.md](scope.md) lists every feature
+and whether it decodes today. This page gives the order and the gates.
 
 ## Finished phases
 
@@ -39,8 +38,8 @@ checked it.
 
 ## Phase 5: Part 1 encoder
 
-The goal is to encode Part 1 codestreams and JP2 files ([plan](roadmap-phase5.md)).
-The work:
+The goal is to encode Part 1 codestreams and JP2 files
+([plan](roadmap-phase5.md)). The work:
 
 - forward 5/3 and 9/7 DWT, and forward scalar quantization;
 - the MQ arithmetic encoder and EBCOT pass encoding;
