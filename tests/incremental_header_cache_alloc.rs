@@ -10,10 +10,14 @@
 //! header would be 100 MB, six times the input.
 //!
 //! While the bytes fed end inside the main header, a call keeps what the
-//! segments read so far set, so the next goes on from there; that is
-//! measured on the main headers that keep the most for their bytes: 16384
-//! components, each with a `COC` and a `QCC`, and 65000 `PPM` segments of
-//! one record each.
+//! segments read so far set, so the next goes on from there. That is
+//! measured on main headers of 16384 components, each with segments that
+//! override its coding: a `QCC` of one, two or 97 steps, a `COC`, an `RGN`,
+//! or a `COC` of precincts, a 97-step `QCC` and an `RGN`. A one-step `QCC`
+//! keeps the most for each of its bytes, about 12; the last shape keeps the
+//! most a component can, 12.2 MB in all. It is also measured on 65000 `PPM`
+//! segments of one record each. Each header is cut inside a `COM` after its
+//! segments, so all of them are read.
 //!
 //! The bytes are counted with a counting global allocator, so this file
 //! holds a single test: a second one running in parallel would count into
@@ -68,9 +72,10 @@ fn big_tile_file() -> Vec<u8> {
     bytes
 }
 
-/// A main header of 16384 components, each with a `COC` of 32 levels and a
-/// `QCC` of its 97 subbands' steps, cut inside its last `QCC`.
-fn cut_component_header() -> Vec<u8> {
+/// A main header of 16384 components, each with the segments `overrides`
+/// gives for it, then a `COM` the input ends inside. With the bytes of the
+/// segments `overrides` gave.
+fn cut_component_header(overrides: impl Fn(u16) -> Vec<Vec<u8>>) -> (Vec<u8>, usize) {
     let components = 16384u16;
     let siz = synth::siz_body(
         [64, 64, 0, 0, 64, 64, 0, 0],
@@ -83,18 +88,69 @@ fn cut_component_header() -> Vec<u8> {
         synth::seg(0xFF5C, &synth::qcd_none_body(0, &[8])),
     ]
     .concat();
+    let before = bytes.len();
     for component in 0..components {
-        let mut coc = component.to_be_bytes().to_vec();
-        coc.extend_from_slice(&[0, 32, 0, 0, 0, 1]);
-        bytes.extend(synth::seg(0xFF53, &coc));
-        // Scalar expounded: a 16-bit step for each subband.
-        let mut qcc = component.to_be_bytes().to_vec();
-        qcc.push((1 << 5) | 2);
-        qcc.extend((0..97).flat_map(|_| (8u16 << 11).to_be_bytes()));
-        bytes.extend(synth::seg(0xFF5D, &qcc));
+        bytes.extend(overrides(component).concat());
     }
-    bytes.truncate(bytes.len() - 10);
-    bytes
+    let segments = bytes.len() - before;
+    bytes.extend(synth::seg(0xFF64, &[0, 1, b'x', b'x']));
+    bytes.truncate(bytes.len() - 2);
+    (bytes, segments)
+}
+
+/// The segments that override a component's coding, for each component.
+type Overrides = Box<dyn Fn(u16) -> Vec<Vec<u8>>>;
+
+/// The `COC`, `QCC` and `RGN` shapes [`cut_component_header`] is measured
+/// on, by name.
+fn component_shapes() -> Vec<(&'static str, Overrides)> {
+    let index = |component: u16| component.to_be_bytes().to_vec();
+    // `Sqcc` and one exponent for the one subband of no levels.
+    let one_step = move |c: u16| [index(c), vec![1 << 5, 8 << 3]].concat();
+    // Scalar derived: one 16-bit step.
+    let derived = move |c: u16| [index(c), vec![(1 << 5) | 1, 0x40, 0]].concat();
+    // Scalar expounded: a 16-bit step for each of 97 subbands.
+    let expounded = move |c: u16| -> Vec<u8> {
+        let steps = (0..97).flat_map(|_| (8u16 << 11).to_be_bytes());
+        [index(c), vec![(1 << 5) | 2]]
+            .into_iter()
+            .flatten()
+            .chain(steps)
+            .collect()
+    };
+    let coc = move |c: u16, levels: u8| [index(c), vec![0, levels, 0, 0, 0, 1]].concat();
+    // `Scoc` of user precincts: a size for each of 33 resolutions.
+    let precincts = move |c: u16| [index(c), vec![1, 32, 0, 0, 0, 1], vec![0x77; 33]].concat();
+    let rgn = move |c: u16| [index(c), vec![0, 4]].concat();
+    vec![
+        (
+            "one-step QCC",
+            Box::new(move |c| vec![synth::seg(0xFF5D, &one_step(c))]),
+        ),
+        (
+            "derived QCC",
+            Box::new(move |c| vec![synth::seg(0xFF5D, &derived(c))]),
+        ),
+        (
+            "97-step QCC",
+            Box::new(move |c| vec![synth::seg(0xFF5D, &expounded(c))]),
+        ),
+        (
+            "COC",
+            Box::new(move |c| vec![synth::seg(0xFF53, &coc(c, 0))]),
+        ),
+        ("RGN", Box::new(move |c| vec![synth::seg(0xFF5E, &rgn(c))])),
+        (
+            "COC of precincts, 97-step QCC and RGN",
+            Box::new(move |c| {
+                vec![
+                    synth::seg(0xFF53, &precincts(c)),
+                    synth::seg(0xFF5D, &expounded(c)),
+                    synth::seg(0xFF5E, &rgn(c)),
+                ]
+            }),
+        ),
+    ]
 }
 
 /// A main header of 65000 `PPM` segments of one empty record each, cut
@@ -171,27 +227,39 @@ fn header_holds_what_the_files_tiles_need() {
     drop(decoder);
 
     // Main headers cut short: what their segments set is kept.
-    let mut cut = Vec::new();
-    for bytes in [cut_component_header(), cut_ppm_header()] {
+    let held_for = |bytes: &[u8]| {
         let mut decoder = warm_decoder(DecodeOptions::default().with_strict(false));
-        decoder.feed(&bytes);
-        cut.push((bytes.len(), held_while_cut(&decoder)));
+        decoder.feed(bytes);
+        held_while_cut(&decoder)
+    };
+    let mut cut = Vec::new();
+    for (name, overrides) in component_shapes() {
+        let (bytes, segments) = cut_component_header(overrides);
+        cut.push((name, bytes.len(), segments, held_for(&bytes)));
     }
+    let ppm = held_for(&cut_ppm_header());
 
     // Printed after the measures: the captured output is heap too.
     println!(
         "size {size}; held {none:?} (PPM file), {counts:?} (big tile), \
-         (bytes, held) {cut:?} (cut headers)"
+         (name, header bytes, segment bytes, held) {cut:?}, {ppm} (65000 PPM)"
     );
     assert_eq!(none, [0; 3]);
     for held in counts {
         assert!((1..=4096).contains(&held), "{held} bytes held");
     }
-    // About 3 times the header's bytes for the components, and 24 bytes a
-    // `PPM` segment.
-    let [(components_len, components), (_, ppm)] = cut[..] else {
-        unreachable!("two cut headers")
-    };
-    assert!(components <= 4 * components_len, "{components} bytes held");
-    assert!(ppm <= 32 * 65_000, "{ppm} bytes held");
+    // Up to about 12 bytes for each byte of the segments, at least 2 for
+    // what is kept to count at all, and about 24 bytes a `PPM` segment.
+    for (name, _, segments, held) in cut {
+        assert!(
+            (2 * segments..=13 * segments).contains(&held),
+            "{name}: {held} bytes held for {segments}"
+        );
+        // The most a component can hold, 16384 times: about 12 MB.
+        assert!(held <= 13_000_000, "{name}: {held} bytes held");
+    }
+    assert!(
+        (16 * 65_000..=32 * 65_000).contains(&ppm),
+        "{ppm} bytes held"
+    );
 }

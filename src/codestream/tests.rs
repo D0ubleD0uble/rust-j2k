@@ -6105,6 +6105,11 @@ fn check_resumed_parses(name: &str, codestream: &[u8]) {
         .filter(|&at| at <= codestream.len())
         .collect();
     points.push(codestream.len());
+    check_resumed_at(name, codestream, points);
+}
+
+/// [`check_resumed_parses`] at `points` only.
+fn check_resumed_at(name: &str, codestream: &[u8], mut points: Vec<usize>) {
     points.sort_unstable();
     points.dedup();
     for stride in [1, 3] {
@@ -6396,10 +6401,48 @@ fn a_main_header_parse_resumed_over_cuts_is_a_parse_from_the_start() {
             ],
         ),
     ];
-    for (name, segments) in cases {
-        let mut bytes = codestream(&segments);
+    let with_sot = |segments: &[Vec<u8>]| {
+        let mut bytes = codestream(segments);
         // A whole `SOT` after the header, so the parse can end.
         bytes.extend_from_slice(&[0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
-        check_resumed_parses(name, &bytes);
+        bytes
+    };
+    for (name, segments) in cases {
+        check_resumed_parses(name, &with_sot(&segments));
+    }
+
+    // `TLM` entries of `ST = 0` count the tiles over every `TLM`: two that
+    // a cut splits name two tiles of a grid of one.
+    let tlm = || seg(marker::TLM, &tlm_body(0x00, &[0, 0]));
+    let bytes = with_sot(&[
+        siz.clone(),
+        tlm(),
+        comment(),
+        tlm(),
+        cod.clone(),
+        qcd.clone(),
+    ]);
+    assert!(matches!(parse_header(&bytes), Err(Error::Marker(_))));
+    check_resumed_parses("two TLMs naming two tiles of one", &bytes);
+
+    // The cap on the main header's segments counts those before each cut:
+    // one past it, and one under it, cut at a few points through the run.
+    for (name, run, over) in [
+        ("one segment past the cap", MAX_MAIN_HEADER_SEGMENTS, true),
+        (
+            "one segment under the cap",
+            MAX_MAIN_HEADER_SEGMENTS - 4,
+            false,
+        ),
+    ] {
+        let mut segments = vec![siz.clone(), cod.clone(), qcd.clone()];
+        segments.push(be16(0xFF30).repeat(run));
+        let bytes = with_sot(&segments);
+        assert_eq!(parse_header(&bytes).is_err(), over, "{name}");
+        // The cap is reached near the end of the run, so the last cuts are
+        // around it.
+        let mut points: Vec<usize> = (1..=16).map(|part| bytes.len() * part / 17).collect();
+        points.extend(bytes.len() - 40..=bytes.len());
+        check_resumed_at(name, &bytes, points);
     }
 }

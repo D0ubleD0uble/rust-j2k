@@ -672,11 +672,16 @@ while the bytes fed end inside the main header or before a JP2 file's
 calls read them about once in all (a 256 KiB `PPM` main header fed 256
 bytes at a time: 506 times over before, once now). For this it keeps
 what the main header's segments read so far set, held while the main
-header stays cut short, whether or not `header` is called again: up to
-about 3 bytes for each byte of the main header read so far (10.9 MB for a
-3.5 MB main header with a `COC` and a `QCC` for each of 16384 components),
-or 24 bytes for each `PPM` segment, which the 65536 segments a main header
-may have cap at 1.6 MB (`tests/incremental_header_cache_alloc.rs`). The
+header stays cut short, whether or not `header` is called again. Each
+override of a component's coding keeps its parsed form: up to about 12
+bytes for each byte of `COC`, `QCC` and `RGN` segments, the most for a
+one-step `QCC` (1.54 MB for 128 KiB of them, one for each of 16384
+components). A component holds one of each, so the most is about 12 MB: a
+`COC` of precincts, a 97-step `QCC` and an `RGN` for each of 16384
+components, 4.2 MB of segments, keep 12.2 MB. `PPM` segments keep 24 bytes
+each, 1.6 MB at most under the 65536 segments a main header may have; the
+rest (`POC`, of 32 volumes at most, `CRG`, the `TLM` count) is small
+(`tests/incremental_header_cache_alloc.rs`). The
 header of a tile-part not yet
 fed in full, or of a last tile-part whose `Psot` is 0, is read again on
 each call. What it keeps, about 140 bytes for each tile counted under its
