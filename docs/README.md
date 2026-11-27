@@ -27,6 +27,8 @@ If you use the crate:
 - [resource-bounds.md](resource-bounds.md) gives the memory and work limits,
   how each is counted and what it costs a valid file. Start here if a file is
   refused with `Error::Limit`.
+- [stability.md](stability.md) says which parts of the API stay the same
+  within a minor version and which can change.
 - [incremental-decoding.md](incremental-decoding.md) explains how
   `IncrementalDecoder` decodes a file while it arrives, and what each refine
   costs.

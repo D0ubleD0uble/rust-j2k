@@ -72,6 +72,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `docs/stability.md` says what the API covers within a minor version and
+  what can change: message and `Display` text, which fault is reported
+  first, and the default limit values (raised in any release, lowered only
+  in a minor one or as a security fix). The minimum Rust version rises only
+  in a minor release. The `Error::message` example no longer pins the
+  `Display` format (#515).
+- SECURITY.md's promise that a decode never panics or hangs now covers the
+  `IncrementalDecoder` methods too, and says a security fix may lower a
+  default limit in a patch release (#515).
 - `IncrementalDecoder::header` reads the header of the bytes fed so far
   (`Ok(None)` until the main header is whole), and
   `IncrementalDecoder::bytes` borrows them.

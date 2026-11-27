@@ -20,6 +20,19 @@ cargo add rust-j2k
 
 It needs Rust 1.87 or newer.
 
+## Stability
+
+The crate follows Semantic Versioning. Within a minor version, the types,
+the error variants and limit kinds, what each means, and the variant each
+fault or wait gives do not change in a way that breaks your code. A fix
+that brings the output closer to the standard or OpenJPEG can ship in a
+patch release. The minimum Rust version rises only in a minor release.
+Message text and which fault is reported first can change in any release.
+A default limit can be raised in any release, and lowered only in a minor
+one or as a security fix.
+[docs/stability.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/stability.md)
+lists what is covered and what is not.
+
 ## Decode a file
 
 Pass the bytes to `decode` and you get back an `Image`, with one `Component`
