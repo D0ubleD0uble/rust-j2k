@@ -152,9 +152,11 @@ fn the_writer_clamps_values_outside_the_declared_depth() {
 }
 
 /// Run the `decode` example through `cargo run`, since Cargo gives a test no
-/// path to an example. `cargo test` has built it already, with the test
-/// profile, so `--profile test` makes this a rebuild check and a launch. The
-/// run follows `CARGO_TARGET_DIR` from the environment, but not a
+/// path to an example. The nested build compiles the example binary itself
+/// (about 0.2 s), because a run of one test target or `--all-targets` may not
+/// build it. `--profile test` reuses the library the tests already built, so
+/// only the example is compiled and then launched. The run follows
+/// `CARGO_TARGET_DIR` from the environment, but not a
 /// `--target-dir` flag given to the outer `cargo test`.
 #[cfg(not(target_family = "wasm"))]
 fn run_decode(input: &Path, output: &Path) -> std::process::Output {
