@@ -465,7 +465,7 @@ What the seeds catch, measured with the file put back after each change:
 with `FirstPart::is_whole` (`src/codestream/mod.rs`) returning `true`, so a
 tile-part cut short is taken for whole and its header never read again, a
 seed fails on replay. With the tile index of the `known` lookup in
-`Rescue::count` (`src/pipeline/decode.rs`) shifted by one, no seed fails on
+`Rescue::count` (`src/pipeline/header.rs`) shifted by one, no seed fails on
 replay but the target fails within a minute. The reduction, area, start and
 length that key the cache are not reached by this target: a change of options
 drops the cache before the key is checked, and the input only grows. The unit

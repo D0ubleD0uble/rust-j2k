@@ -587,7 +587,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// assert!(read_header_with(b"not a codestream", &options).is_err());
 /// ```
 pub fn read_header_with(bytes: &[u8], options: &DecodeOptions) -> Result<Header> {
-    pipeline::decode::read_header(bytes, options)
+    pipeline::header::read_header(bytes, options)
 }
 
 /// What color space a JP2 file's color channels come out in: the

@@ -1713,7 +1713,7 @@ fn options_changed_back_and_forth_stay_within_the_bound_on_walks_read_again() {
 /// those bytes, with nothing kept, and a main header cut short as `None`.
 fn fresh_header(prefix: &[u8], options: &DecodeOptions) -> String {
     let lenient = options.clone().with_strict(false);
-    let read = match crate::pipeline::decode::read_header_streamed(prefix, &lenient, None) {
+    let read = match crate::pipeline::header::read_header_streamed(prefix, &lenient, None) {
         Ok(header) => Ok(Some(header)),
         Err(Error::Incomplete(_)) => Ok(None),
         Err(error) => Err(error),

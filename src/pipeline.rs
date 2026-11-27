@@ -4,7 +4,9 @@
 //! [`decode`] runs a decode from the input bytes to an image: the header
 //! checks, then each tile through Tier-2, Tier-1, the inverse DWT and the
 //! color transform, then image assembly. `report` builds what a decode with
-//! `strict` off says is missing.
+//! `strict` off says is missing. `header` reads a header without decoding, and
+//! keeps what the incremental decoder reads again as its input grows. `meter`
+//! holds the work bounds that the decodes of one incremental decoder share.
 //!
 //! The types here flow *between* stages, so they live apart from any one stage
 //! that happens to produce them. The coefficient pyramid ([`Band`],
@@ -15,6 +17,7 @@
 //! inverse DWT through the color transform to image assembly.
 
 pub(crate) mod decode;
+pub(crate) mod header;
 pub(crate) mod meter;
 mod report;
 
