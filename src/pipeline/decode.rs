@@ -643,11 +643,12 @@ impl Over {
 /// stopped ([`KeptCut`]). The bytes fed only grow, so what a call found in
 /// them stays so, and a call gives what a read from the start gives. That
 /// holds for every field here: any future way to truncate, reset or rewrite
-/// the bytes fed must clear the whole cache. [`MainKey`] checks the main header against a hash, and
-/// [`KeptCut`] checks the prefix it was kept for in a debug build, but
-/// neither makes a cache safe to reuse over other bytes. It is kept for one
-/// codestream, main header, selection and reduction; a call that reads
-/// another, as after a change of region, starts again.
+/// the bytes fed must clear the whole cache. [`MainKey`] checks the main
+/// header against a hash, and [`KeptCut`] checks the prefix it was kept for
+/// in a debug build, but neither makes a cache safe to reuse over other
+/// bytes. It is kept for one codestream, main header, selection and
+/// reduction; a call that reads another, as after a change of region,
+/// starts again.
 #[derive(Default)]
 pub(crate) struct HeaderCache {
     /// Boxed, so a decoder with nothing kept holds a pointer.
@@ -2735,6 +2736,10 @@ pub(crate) mod tests {
     /// kept input, and not one between them.
     #[cfg(debug_assertions)]
     #[test]
+    #[cfg_attr(
+        target_os = "wasi",
+        ignore = "a panic aborts on wasm32-wasip1, so `catch_unwind` cannot catch it"
+    )]
     fn a_kept_cut_sees_a_change_at_either_end_of_a_long_input() {
         let jp2 = |fill: u8, flip: Option<usize>| {
             let mut bytes = vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
@@ -2768,7 +2773,13 @@ pub(crate) mod tests {
                 let mut kept = kept_for(&base);
                 let _ = read_header_kept(&jp2(7, Some(at)), &options, Some(&mut kept));
             });
-            assert!(result.is_err(), "a change at {at} went unseen");
+            let payload = result.expect_err(&format!("a change at {at} went unseen"));
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or_default();
+            assert!(message.contains("must only grow"), "at {at}: {message}");
         }
     }
 
