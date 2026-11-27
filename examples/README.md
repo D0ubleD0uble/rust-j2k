@@ -38,7 +38,8 @@ cargo run --example stream -- tests/fixtures/layers/lrcp.j2k 100
 `untrusted` decodes a file from a source you don't trust. It uses the
 default limits, prints the details of a limit refusal, and retries past it
 only with `--allow-raise`, by a factor of at most 4. A cut-short file is
-decoded again with `strict` off, and the example prints what is missing:
+decoded again with `strict` off. The example then prints what is missing
+and exits with status 2:
 
 ```sh
 cargo run --example untrusted -- \
