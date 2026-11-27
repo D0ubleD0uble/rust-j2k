@@ -153,16 +153,24 @@ enum Completion {
     /// holds instead is the input with that box or tile-part dropped, then
     /// an `EOC` where it is a tile-part, then [`SHORT_COLR`]. The decode
     /// checks that box before the tile-parts, so an error read there too
-    /// comes from before the bytes dropped, and no suffix replaces it.
+    /// comes from before the bytes dropped, and no suffix replaces it. For
+    /// a box of length 0 after the codestream, the suffix is 2^32 bytes,
+    /// past which OpenJPEG skips the box unread, and this holds the input
+    /// up to that box ([`after_codestream`]).
     Far(Vec<u8>),
 }
 
 /// `prefix`, a JP2 file whose codestream ends at `at`, with the box after
 /// it that the input ends inside made whole, with zeros or, where its
 /// length is not in, the rest of [`SHORT_COLR`], then [`SHORT_COLR`]: a box
-/// that OpenJPEG's walk after the codestream reads, at fault. `None` where
-/// the walk reads no box past the input: it stopped at a `jp2c`, a box of
-/// length 0 or 1 (an `XLBox`), or a box shorter than its header.
+/// that OpenJPEG's walk after the codestream reads, at fault. A box of
+/// length 0 runs to the end of the input, and OpenJPEG skips it unread once
+/// 2^32 bytes or more follow its header, so its fault, whatever it is, is
+/// one more bytes take away: that suffix is not built
+/// ([`Completion::Far`]), and the input up to that box stands in for it.
+/// `None` where the walk reads no box past the input: it stopped at a
+/// `jp2c`, a box of length 1 (an `XLBox`), or a box shorter than its
+/// header.
 fn after_codestream(prefix: &[u8], mut at: usize) -> Option<Completion> {
     loop {
         let rest = prefix.get(at..)?;
@@ -172,7 +180,13 @@ fn after_codestream(prefix: &[u8], mut at: usize) -> Option<Completion> {
             ));
         }
         let length = u32_at(rest, 0)?;
-        if rest.get(4..8) == Some(&b"jp2c"[..]) || length < 8 {
+        if rest.get(4..8) == Some(&b"jp2c"[..]) {
+            return None;
+        }
+        if length == 0 && rest.len() >= 8 {
+            return Some(Completion::Far(prefix[..at].to_vec()));
+        }
+        if length < 8 {
             return None;
         }
         if rest.len() < length {
