@@ -31,9 +31,9 @@ use std::process::ExitCode;
 use rust_j2k::{DecodeOptions, Error, IncrementalDecoder};
 use rust_j2k::{Refined, Waiting, decode};
 
-#[macro_use]
 #[path = "common/say.rs"]
 mod say;
+use say::{say, say_err};
 
 /// Say why a refine gave no image.
 fn describe(why: &Waiting) -> String {
@@ -119,7 +119,7 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{e}");
+            say_err!("{e}");
             ExitCode::FAILURE
         }
     }

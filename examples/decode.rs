@@ -21,9 +21,9 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-#[macro_use]
 #[path = "common/say.rs"]
 mod say;
+use say::{say, say_err};
 
 #[path = "common/pnm.rs"]
 mod pnm;
@@ -55,7 +55,7 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{e}");
+            say_err!("{e}");
             ExitCode::FAILURE
         }
     }

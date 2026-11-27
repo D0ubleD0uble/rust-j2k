@@ -20,20 +20,15 @@ use std::process::ExitCode;
 
 use rust_j2k::{ColorSpace, Header, Jp2Metadata, Ratio, Res, read_header};
 
-#[macro_use]
 #[path = "common/say.rs"]
 mod say;
+use say::{say, say_err};
 
 fn print_header(header: &Header) {
     say!("size: {} x {}", header.width, header.height);
     let area = header.image_area;
-    say!(
-        "image area: x {}..{}, y {}..{}",
-        area.x0,
-        area.x1,
-        area.y0,
-        area.y1
-    );
+    let (x0, x1, y0, y1) = (area.x0, area.x1, area.y0, area.y1);
+    say!("image area: x {x0}..{x1}, y {y0}..{y1}");
     say!("components: {}", header.components.len());
     for (i, c) in header.components.iter().enumerate() {
         say!(
@@ -150,7 +145,7 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{e}");
+            say_err!("{e}");
             ExitCode::FAILURE
         }
     }

@@ -60,9 +60,9 @@ use std::process::ExitCode;
 use rust_j2k::decode_with;
 use rust_j2k::{DecodeOptions, DecodeReport, Error, LimitDetail, Raise};
 
-#[macro_use]
 #[path = "common/say.rs"]
 mod say;
+use say::{say, say_err};
 
 #[path = "common/capped.rs"]
 mod capped;
@@ -194,7 +194,7 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(PARTIAL),
         Err(e) => {
-            eprintln!("{e}");
+            say_err!("{e}");
             ExitCode::FAILURE
         }
     }

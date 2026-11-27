@@ -37,9 +37,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 
-#[macro_use]
 #[path = "common/say.rs"]
 mod say;
+use say::{say, say_err};
 
 /// How many values to print from the start of the grid.
 const FIRST: usize = 8;
@@ -75,7 +75,7 @@ fn run(args: &[OsString]) -> Result<(), String> {
         return Err("R: must be a finite 32-bit float".into());
     }
     if f64::from(reference as f32) != reference {
-        eprintln!("note: R is not a 32-bit float; pass all its digits");
+        say_err!("note: R is not a 32-bit float; pass all its digits");
     }
     let binary = factor(e, "E")?;
     let decimal = factor(d, "D")?;
@@ -126,7 +126,7 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{e}");
+            say_err!("{e}");
             ExitCode::FAILURE
         }
     }

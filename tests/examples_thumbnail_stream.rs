@@ -1,8 +1,8 @@
 //! The `thumbnail` and `stream` examples do what their headers say.
 //!
 //! Both run through `cargo run --example`, since Cargo has no path variable
-//! for examples (see `tests/examples_pnm.rs`). `thumbnail` is checked on the
-//! sizes the reduction and the window give, and on its bytes against
+//! for examples (see `tests/support/run_example.rs`). `thumbnail` is checked
+//! on the sizes the reduction and the window give, and on its bytes against
 //! `decode_with` and the shared PNM writer. `stream` is checked on its
 //! printed steps and on the final image it compares with `decode`.
 

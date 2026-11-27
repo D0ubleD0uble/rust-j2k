@@ -98,3 +98,17 @@ fn untrusted_still_fails_with_1_on_a_refusal() {
     assert!(message.contains("--allow-raise"), "{message}");
     assert!(!message.contains("panicked"), "{message}");
 }
+
+/// With stderr closed too, an error message must not panic either: the
+/// status stays 1, not 101.
+#[test]
+fn an_error_with_both_outputs_closed_still_exits_1() {
+    let missing = fixture("no_such_file.j2k");
+    let args = [missing.as_os_str()];
+    let run = run_example::run_example_closed_output("info", &args);
+    assert_eq!(run.status.code(), Some(1));
+    let bomb = fixture(BOMB);
+    let args = [bomb.as_os_str()];
+    let run = run_example::run_example_closed_output("untrusted", &args);
+    assert_eq!(run.status.code(), Some(1));
+}
