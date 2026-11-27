@@ -2362,7 +2362,8 @@ fn jp2c_box(bytes: &[u8]) -> Option<(usize, usize)> {
 
 /// Every JP2 and JPH file under `tests/fixtures`, with its `jp2c` box cut
 /// to end inside its main header at several points, then the rest of the
-/// file (which may read as more of the main header) or boxes of 8 bytes:
+/// file (which may read as more of the main header), alone or with an
+/// `xml ` box of length 0 after it, or boxes of 8 bytes:
 /// `header` after each feed, a byte at a time around the box's end, gives
 /// what a read from the start of the same bytes gives.
 #[test]
@@ -2424,7 +2425,14 @@ fn header_on_fixtures_whose_jp2c_box_ends_inside_the_main_header_is_a_read_from_
             } else {
                 header[..4].copy_from_slice(&u32::try_from(length).unwrap().to_be_bytes());
             }
-            for (what, rest) in [("the rest", &whole[box_end..]), ("boxes", &boxes[..])] {
+            // A box of length 0 the walk after the codestream does not
+            // check settles it, where that walk reaches the box (#725).
+            let open_xml = [&whole[box_end..], &[0, 0, 0, 0], b"xml ", b"<a/>"].concat();
+            for (what, rest) in [
+                ("the rest", &whole[box_end..]),
+                ("boxes", &boxes[..]),
+                ("the rest, then an xml of length 0", &open_xml[..]),
+            ] {
                 let bytes = [&whole[..box_at], &header, &whole[payload..box_end], rest].concat();
                 let bytes = &bytes[..bytes.len().min(1 << 16)];
                 let near = box_end.saturating_sub(16).max(1);
