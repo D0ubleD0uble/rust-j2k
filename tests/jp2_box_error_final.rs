@@ -406,6 +406,22 @@ fn a_whole_box_at_fault_is_final() {
             "a box after the signature whose XLBox is past 2^56 so far",
             [&synth::JP2_SIGNATURE[..], &[0, 0, 0, 1], b"xxxx", &[1]].concat(),
         ),
+        // A codestream box's `XLBox` is never at fault (#718).
+        (
+            "a jp2c after the signature whose XLBox is cut",
+            [&synth::JP2_SIGNATURE[..], &[0, 0, 0, 1], b"jp2c", &[0]].concat(),
+        ),
+        (
+            "a jp2c with no jp2h whose XLBox is cut",
+            [
+                &synth::JP2_SIGNATURE[..],
+                &synth::ftyp_jp2(),
+                &[0, 0, 0, 1],
+                b"jp2c",
+                &[0],
+            ]
+            .concat(),
+        ),
     ] {
         let lenient = DecodeOptions::default().with_strict(false);
         let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
@@ -1127,6 +1143,64 @@ fn the_header_split_inputs_are_final_once_the_fault_is_in() {
                 );
                 check_finish(&decoder, prefix, &options, &at);
             }
+        }
+    }
+}
+
+/// `incremental/header_split_jp2c_after_signature_cut_xlbox.seed`, the
+/// `header_split` input of #718: a `jp2c` box with `LBox` 1 where the
+/// `ftyp` belongs, cut inside its `XLBox`. Its 12 control bytes pick
+/// options that do not bear on the boxes, so the file after them is read
+/// under the defaults. A codestream box's `XLBox` is never at fault, so
+/// once its type is in, "the `ftyp` box must follow the signature" is
+/// final: before the fix `header` gave `None` on the prefixes whose `XLBox`
+/// was all 0 so far, where `read_header_with` refuses.
+///
+/// Each prefix is fed to a new decoder, and fed a byte at a time to one
+/// decoder: `header` gives what `read_header_with` gives on it, an
+/// incomplete read as `None`, and from the type on that error, the one the
+/// file gives with its `XLBox` whole or with more bytes after it.
+#[test]
+fn a_jp2c_after_the_signature_cut_in_its_xlbox_is_final() {
+    let seed = synth::read_file(synth::fixtures(
+        "incremental/header_split_jp2c_after_signature_cut_xlbox.seed",
+    ));
+    let bytes = &seed[12..];
+    assert_eq!(&bytes[..12], &synth::JP2_SIGNATURE[..]);
+    assert_eq!(&bytes[12..20], b"\0\0\0\x01jp2c");
+    let lenient = DecodeOptions::default().with_strict(false);
+    let read = |prefix: &[u8]| match read_header_with(prefix, &lenient) {
+        Ok(header) => format!("{:?}", Ok::<_, Error>(Some(header))),
+        Err(Error::Incomplete(_)) => "Ok(None)".to_string(),
+        Err(error) => format!("{:?}", Err::<Option<()>, _>(error)),
+    };
+    let whole = read(bytes);
+    assert!(
+        whole.contains("must follow the signature, not `jp2c`"),
+        "{whole}"
+    );
+    for longer in [
+        [bytes, &[0; 3]].concat(),
+        [bytes, &[0; 3], &gray()].concat(),
+        [&bytes[..20], &[0; 8]].concat(),
+    ] {
+        assert_eq!(read(&longer), whole, "{} bytes", longer.len());
+    }
+    for strict in [false, true] {
+        let options = DecodeOptions::default().with_strict(strict);
+        let mut fed = IncrementalDecoder::new(options.clone()).expect("valid options");
+        for len in 1..=bytes.len() {
+            let prefix = &bytes[..len];
+            let at = format!("strict {strict}, {len} bytes");
+            let mut decoder = IncrementalDecoder::new(options.clone()).expect("valid options");
+            decoder.feed(prefix);
+            let expected = read(prefix);
+            if len >= 20 {
+                assert_eq!(expected, whole, "{at}");
+            }
+            assert_eq!(format!("{:?}", decoder.header()), expected, "{at}");
+            fed.feed(&prefix[len - 1..]);
+            assert_eq!(format!("{:?}", fed.header()), expected, "{at}: fed");
         }
     }
 }
