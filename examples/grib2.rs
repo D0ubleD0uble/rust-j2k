@@ -67,8 +67,8 @@ fn run(args: &[OsString]) -> Result<(), String> {
         return Err(format!("{name}: a GRIB2 grid has one channel"));
     };
 
-    // The formula as WMO gives it. 2^E is exact, and so is 10^D for
-    // |D| <= 22.
+    // The formula as WMO gives it. 2^E is exact while it is a normal
+    // f64, and 10^D is exact for |D| <= 22.
     let two_e = 2f64.powi(i32::from(binary));
     let ten_d = 10f64.powi(i32::from(decimal.unsigned_abs()));
     let scale = |x: i32| {

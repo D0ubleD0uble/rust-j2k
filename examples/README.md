@@ -25,6 +25,9 @@ decoded again with `strict` off, and the example prints what is missing:
 ```sh
 cargo run --example untrusted -- \
     tests/fixtures/psot0/single_psot0_no_eoc_trunc100.j2k
+```
+
+```sh
 cargo run --example untrusted -- --allow-raise \
     tests/fixtures/tier1_work_bound/t1bomb_1024_64_88.j2k
 ```
