@@ -76,7 +76,7 @@ use crate::{LimitKind, Raise};
 /// its calls comes to about 140 bytes for each tile counted under its own
 /// header and a byte for each other tile, plus a key of the main header, its
 /// length and a hash, and while the main header is cut short, what its
-/// segments read so far set (up to about 12 MB, and 1.6 MB of `PPM` offsets).
+/// segments read so far set (about 13 MB at most).
 /// Each refine also holds what [`decode_with`] holds for the
 /// same bytes, so the decoder holds at most one decode's peak plus the walks
 /// kept (twice the image's samples plus twice the walk of the largest tile
@@ -390,18 +390,18 @@ impl IncrementalDecoder {
     /// the codestream reads the boxes from the start, as that box runs to the
     /// end of the bytes fed. And where the `jp2c` box ends inside its own main
     /// header and the bytes after the box do not parse as more of that header,
-    /// each call reads the boxes and the main header from the start. To
-    /// resume, the decoder keeps where the last call stopped, the first
-    /// `ihdr`, and what the main header's segments read so far set (its
-    /// `PPM` data as offsets into the bytes fed, not a copy), until a call
-    /// finds the main header whole, or an error. It is held while the main
-    /// header stays cut short, whether or not `header` is called again. It
-    /// takes up to about 20 bytes for each byte of `COC`, `QCC` and `RGN`
-    /// segments plus under 1 KB (the highest ratio is for a one-step `QCC`
-    /// on each of 129 components). It takes about 12 MB at most, with the
-    /// largest `COC`, `QCC` and `RGN` on each of 16384 components. Each
-    /// `PPM` segment adds 24 bytes, 1.6 MB at most under the 65536 segments
-    /// a main header may have.
+    /// each call reads the boxes and the main header from the start. That
+    /// starts once those bytes stop reading as the rest of a cut segment,
+    /// which takes up to one segment, about 64 KiB. To resume, the decoder
+    /// keeps where the last call stopped, the first `ihdr`, and what the
+    /// main header's segments read so far set (its `PPM` data as offsets
+    /// into the bytes fed, not a copy), until a call finds the main header
+    /// whole, or an error. It is held while the main header stays cut short,
+    /// whether or not `header` is called again. It takes up to about 20
+    /// bytes for each byte of `COC`, `QCC` and `RGN` segments, plus under
+    /// 1 KB and 4 bytes for each component, and 24 bytes for each `PPM`
+    /// segment: about 13 MB at most under the 65536 segments a main header
+    /// may have.
     ///
     /// Once the main header is whole, each call parses it again (its `PPM`
     /// data included), and in a JP2 file reads the boxes before the

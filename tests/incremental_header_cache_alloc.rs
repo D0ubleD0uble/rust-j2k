@@ -19,8 +19,11 @@
 //! whose indexes are one byte, keeps 19.6 bytes for each byte. The tables that
 //! hold the overrides grow by doubling: at 16384, a power of two, they have no
 //! spare room, and at 129 nearly half is spare. It is also measured on 65000
-//! `PPM` segments of one record each. Each header is cut inside a `COM` after
-//! its segments, so all of them are read.
+//! `PPM` segments of one record each, and on the most a main header can keep
+//! at once: the last shape on 16383 components, a `CRG`, a `POC` of 32
+//! volumes and `PPM` segments up to the 65536 segments a main header may have,
+//! 12.7 MB. Each header is cut inside a `COM` after its segments, so all of
+//! them are read.
 //!
 //! The bytes are counted with a counting global allocator, so this file
 //! holds a single test: a second one running in parallel would count into
@@ -173,6 +176,34 @@ fn cut_ppm_header() -> Vec<u8> {
     bytes
 }
 
+/// The most the cut main header can keep at once: 16383 components, each
+/// with a `COC` of precincts, a 97-step `QCC` and an `RGN`, then a `CRG`, a
+/// `POC` of 32 volumes, and `PPM` segments up to the 65536 segments a main
+/// header may have, cut inside a `COM`. 16383, as a `CRG` of 16384
+/// components does not fit in one segment.
+fn cut_joint_header() -> Vec<u8> {
+    let components = 16383u16;
+    let (_, overrides) = component_shapes().pop().expect("the last shape");
+    let (mut bytes, _) = cut_component_header(components, overrides);
+    // Drop the cut `COM`.
+    let com = bytes.len() - 6;
+    assert_eq!(bytes[com..com + 2], [0xFF, 0x64]);
+    bytes.truncate(com);
+    let crg: Vec<u8> = (0..components).flat_map(|_| [0, 0, 0, 0]).collect();
+    bytes.extend(synth::seg(0xFF63, &crg));
+    // `RSpoc`, `CSpoc`, `LYEpoc`, `REpoc`, `CEpoc` and `Ppoc`, 32 times.
+    let volume = [&[0, 0, 0, 0, 1, 1][..], &components.to_be_bytes(), &[0]].concat();
+    bytes.extend(synth::seg(0xFF5F, &volume.repeat(32)));
+    // SIZ, COD, QCD, three a component, CRG, POC and the COM.
+    let ppm = (1 << 16) - (3 + 3 * usize::from(components) + 3);
+    for index in 0..ppm {
+        bytes.extend(synth::seg(0xFF60, &[index as u8, 0, 0, 0, 0]));
+    }
+    bytes.extend(synth::seg(0xFF64, &[0, 1, b'x', b'x']));
+    bytes.truncate(bytes.len() - 2);
+    bytes
+}
+
 /// The heap `decoder` holds after a call of `header()` that finds the main
 /// header cut short, over what it held before.
 fn held_while_cut(decoder: &IncrementalDecoder) -> usize {
@@ -248,12 +279,14 @@ fn header_holds_what_the_files_tiles_need() {
     });
     let narrow = held_for(&bytes);
     let ppm = held_for(&cut_ppm_header());
+    let joint = held_for(&cut_joint_header());
 
     // Printed after the measures: the captured output is heap too.
     println!(
         "size {size}; held {none:?} (PPM file), {counts:?} (big tile), \
          (name, header bytes, segment bytes, held) {cut:?}, \
-         {narrow} for {narrow_segments} (129 one-step QCC), {ppm} (65000 PPM)"
+         {narrow} for {narrow_segments} (129 one-step QCC), {ppm} (65000 PPM), \
+         {joint} (the most at once)"
     );
     assert_eq!(none, [0; 3]);
     for held in counts {
@@ -281,5 +314,11 @@ fn header_holds_what_the_files_tiles_need() {
     assert!(
         (16 * 65_000..=32 * 65_000).contains(&ppm),
         "{ppm} bytes held"
+    );
+    // The most the cut main header can keep at once: about 13 MB (12.7 MB
+    // measured).
+    assert!(
+        (12_000_000..=12_800_000).contains(&joint),
+        "{joint} bytes held"
     );
 }

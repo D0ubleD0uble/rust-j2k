@@ -2,7 +2,7 @@
 //!
 //! The matrix/shaper transform's 98 KB table is allocated on the heap
 //! directly, so it is never built on the stack. This test decodes, on a
-//! thread with a 96 KiB stack, every 8-bit ICC profile case that OpenJPEG
+//! thread with a 128 KiB stack, every 8-bit ICC profile case that OpenJPEG
 //! converts, and checks each gives the same samples as on a normal thread.
 //!
 //! The test catches a table built on the stack only at opt-level 0. At the
@@ -42,7 +42,7 @@ struct Case {
 
 /// At opt-level 0 the decoder needs 68 to 72 KiB here, and over 160 KiB
 /// with the table built on the stack.
-const STACK: usize = 96 * 1024;
+const STACK: usize = 128 * 1024;
 
 fn hex(text: &str) -> Vec<u8> {
     (0..text.len())

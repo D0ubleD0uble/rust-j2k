@@ -675,26 +675,30 @@ bytes at a time: 506 times over before, once now). Two cases are read from
 the start on each call: a box of length 0 before the codestream, which runs
 to the end of the bytes fed, and a `jp2c` box that ends inside its own main
 header where the bytes after the box do not parse as more of that header.
-To go on from where it stopped, it keeps what the main header's segments
-read so far set, held while the main header stays cut short, whether or not
-`header` is called again. Each override of a component's coding keeps its
-parsed form: up to about 20 bytes for each byte of `COC`, `QCC` and `RGN`
-segments, plus under 1 KB. The highest ratio is for a one-step `QCC` on
-each of 129 components. Its component index is one byte, as in any file of
-at most 256 components, and the tables that hold the overrides grow by
-doubling, so 129 entries leave the most spare room: 903 bytes of segments
-keep 17.7 KB, 19.6 bytes for each byte. With two-byte indexes, the ratio is
-17.0 at 257 components and 16.8 at 4097. At 16384 components, a power of
-two, 128 KiB of one-step `QCC` segments keep 1.54 MB, about 12 bytes for
-each byte. A component holds at most one `COC`, one `QCC` and one `RGN`, so the
-total is about 12 MB at most: a `COC` of precincts, a 97-step `QCC` and an `RGN`
-for each of 16384 components, 4.2 MB of segments, keep 12.2 MB. `PPM` segments
-keep 24 bytes each, 1.6 MB at most under the 65536 segments a main header may
-have; the rest (`POC`, of 32 volumes at most, `CRG`, the `TLM` count) is small
+The second starts once those bytes stop reading as the rest of a cut segment,
+which takes up to one segment, about 64 KiB. To go on from where it stopped, it
+keeps what the main header's segments read so far set, held while the main
+header stays cut short, whether or not `header` is called again. Each override
+of a component's coding keeps its parsed form: up to about 20 bytes for each
+byte of `COC`, `QCC` and `RGN` segments, plus under 1 KB and 4 bytes for each
+component, held with no override at all (66 KB at 16384 components). A one-step
+`QCC` on each of 129 components keeps 19.6 bytes for each byte in all, and 18.5
+over that fixed part. Its component index is one byte, as in any file of at most
+256 components, and the tables that hold the overrides grow by doubling, so 129
+entries leave nearly half the room spare: 903 bytes of segments keep 17.7 KB.
+With two-byte indexes, the ratio is 17.0 at 257 components and 16.8 at 4097. At
+16384 components, a power of two, 128 KiB of one-step `QCC` segments keep
+1.54 MB, about 12 bytes for each byte. A component holds at most one `COC`, one
+`QCC` and one `RGN`: a `COC` of precincts, a 97-step `QCC` and an `RGN` for each
+of 16384 components, 4.2 MB of segments, keep 12.2 MB. `PPM` segments keep
+24 bytes each; the rest (`POC`, of 32 volumes at most, `CRG`, the `TLM` count)
+is small. The total is about 13 MB at most: those three segments on 16383
+components, a `CRG`, a `POC` of 32 volumes and `PPM` segments up to the 65536
+segments a main header may have keep 12.7 MB
 (`tests/incremental_header_cache_alloc.rs`). The header of a tile-part not yet
 fed in full, or of a last tile-part whose `Psot` is 0, is read again on each
-call. What it keeps, about 140 bytes for each tile counted under its
-own header and a byte for each other tile, is held until the options
+call. What it keeps, about 140 bytes for each tile counted under its own header
+and a byte for each other tile, is held until the options
 change. It keeps no copy of the main header, only a key of it (two
 integers). A file whose tiles' sizes show them within the caps keeps nothing
 (`tests/incremental_header_cache_alloc.rs`: 0 bytes held after a call on a
