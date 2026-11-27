@@ -639,11 +639,16 @@ impl Over {
 /// the selection reads, the precincts and code-blocks of each tile counted
 /// under the main header, and what the count read of each tile-part that
 /// is whole in the input ([`Own`]), and, apart, the walk for the decode's
-/// error for the tile-parts ([`Faults`]). The bytes fed only grow, so what a call
-/// found in them stays so, and a call gives what a read from the start
-/// gives. It is kept for one codestream, main header, selection and
-/// reduction; a call that reads another, as after a change of region,
-/// starts again.
+/// error for the tile-parts ([`Faults`]), and where a header cut short
+/// stopped ([`KeptCut`]). The bytes fed only grow, so what a call found in
+/// them stays so, and a call gives what a read from the start gives. That
+/// holds for every field here, and only while the bytes only grow: any
+/// future way to truncate, reset or rewrite the bytes fed must clear the
+/// whole cache. [`MainKey`] checks the main header against a hash, and
+/// [`KeptCut`] checks the prefix it was kept for in a debug build, but
+/// neither makes a cache safe to reuse over other bytes. It is kept for one
+/// codestream, main header, selection and reduction; a call that reads
+/// another, as after a change of region, starts again.
 #[derive(Default)]
 pub(crate) struct HeaderCache {
     /// Boxed, so a decoder with nothing kept holds a pointer.
@@ -685,20 +690,44 @@ pub(crate) struct KeptCut {
     /// read of more bytes gives: the boxes before the codestream, the box
     /// and its payload are all in and do not change.
     ended: Option<Error>,
+    /// A hash of the input when it was kept, to check in a debug build that
+    /// a longer input still starts with it.
+    #[cfg(debug_assertions)]
+    prefix: u64,
+}
+
+/// A hash of `bytes`, for the debug check of [`KeptCut`].
+#[cfg(debug_assertions)]
+fn prefix_hash(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl KeptCut {
     /// Key what is kept on `bytes`, the input it was kept for.
     fn key(&mut self, bytes: &[u8]) {
         self.len = bytes.len();
+        #[cfg(debug_assertions)]
+        {
+            self.prefix = prefix_hash(bytes);
+        }
     }
 
     /// Whether what is kept holds for `bytes`: they are no shorter than the
-    /// input it was kept for. That is enough, as the cache belongs to one
-    /// decoder, whose bytes only grow, through `feed`: a longer input
-    /// extends the one it was kept for.
+    /// input it was kept for. That is enough only because the bytes fed
+    /// only grow (see [`HeaderCache`]): a longer input extends the one it
+    /// was kept for. A debug build checks that it does, and panics
+    /// otherwise.
     fn holds_for(&self, bytes: &[u8]) -> bool {
-        bytes.len() >= self.len
+        let holds = bytes.len() >= self.len;
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            !holds || prefix_hash(&bytes[..self.len]) == self.prefix,
+            "the bytes fed changed under the kept cut: they must only grow"
+        );
+        holds
     }
 
     /// Whether there is anything to go on from.
@@ -779,10 +808,10 @@ struct KeptFault {
 /// What a main header is keyed on: its length and a hash of its bytes, so
 /// that the cache holds two integers for it, not a copy of the parsed header
 /// (whose `PPM` chunks run to several times the input). It is sound because
-/// the bytes fed only grow, so a main header read whole stays the same, and
-/// because a change of options drops the cache. The hash is a cheap defense
-/// against a read of another input on the same cache, and probabilistic. Any
-/// future way to truncate or reset the bytes fed must clear the cache.
+/// the bytes fed only grow (see [`HeaderCache`]), so a main header read
+/// whole stays the same, and because a change of options drops the cache.
+/// The hash is a cheap defense against a read of another input on the same
+/// cache, and probabilistic.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct MainKey {
     len: usize,
@@ -2677,6 +2706,30 @@ pub(crate) mod tests {
         }
         bytes.extend_from_slice(&[0xFF, 0xD9]);
         bytes
+    }
+
+    /// A cut kept for an input holds only for a longer input that starts
+    /// with it: a debug build panics on one that does not.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "must only grow")]
+    fn a_kept_cut_panics_on_other_bytes_of_the_same_length() {
+        use crate::synth;
+        let siz = synth::siz_body([64, 64, 0, 0, 64, 64, 0, 0], &[[7, 1, 1]]);
+        let com = |byte: u8| synth::seg(0xFF64, &[0, 1, byte, byte]);
+        let cut_short = |byte: u8| {
+            let mut bytes = [vec![0xFF, 0x4F], synth::seg(0xFF51, &siz), com(byte)].concat();
+            bytes.extend_from_slice(&[0xFF, 0x52, 0x00]);
+            bytes
+        };
+        let options = DecodeOptions::default().with_strict(false);
+        let (one, other) = (cut_short(b'a'), cut_short(b'b'));
+        assert_eq!(one.len(), other.len());
+        let mut kept = HeaderCache::default();
+        let first = read_header_kept(&one, &options, Some(&mut kept));
+        assert!(matches!(first, Err(Error::Incomplete(_))), "{first:?}");
+        assert!(kept.cut.is_some(), "the cut was not kept");
+        let _ = read_header_kept(&other, &options, Some(&mut kept));
     }
 
     /// What a header read keeps is for one area and reduction, and its walk
