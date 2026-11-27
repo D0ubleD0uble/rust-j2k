@@ -1180,8 +1180,8 @@ fn a_jp2c_after_the_signature_cut_in_its_xlbox_is_final() {
         "{whole}"
     );
     for longer in [
-        [&bytes[..], &[0; 3]].concat(),
-        [&bytes[..], &[0; 3], &gray()].concat(),
+        [bytes, &[0; 3]].concat(),
+        [bytes, &[0; 3], &gray()].concat(),
         [&bytes[..20], &[0; 8]].concat(),
     ] {
         assert_eq!(read(&longer), whole, "{} bytes", longer.len());
