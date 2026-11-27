@@ -75,6 +75,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Two examples: `cargo run --example decode` writes a decoded file as a PGM
   or PPM, and `cargo run --example info` prints what `read_header` returns.
   `examples/README.md` lists them.
+- Two more examples: `cargo run --example thumbnail` decodes at a reduced
+  resolution or a window, and `cargo run --example stream` feeds a file to
+  `IncrementalDecoder` in chunks and prints each refine.
 - `docs/stability.md` says what the API covers within a minor version and
   what can change: message and `Display` text, which fault is reported
   first, and the default limit values (raised in any release, lowered only
