@@ -6,13 +6,11 @@
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 
-use super::decode::{
-    check_format_known, check_options, check_raw_color, check_reduction, pick, read_jp2_prefix,
-};
+use super::decode::{check_format_known, check_options, check_raw_color, check_reduction, pick};
 use super::meter;
 use crate::{
-    ComponentInfo, DecodeOptions, Error, Header, Result, TileGrid, codestream, header, jp2,
-    samples, tier2, window,
+    ColorOutput, ComponentInfo, DecodeOptions, Error, Header, Jp2Metadata, Result, TileGrid,
+    codestream, header, jp2, samples, tier2, window,
 };
 
 /// The [`Header`] that [`read_header_with`](crate::read_header_with) returns
@@ -665,16 +663,16 @@ pub(crate) struct KeptCut {
     boxes: Option<jp2::BoxesCut>,
     /// In a JP2 file, where the codestream starts, once a read has read the
     /// boxes before it and they pass. More bytes change neither.
-    pub(super) jp2c: Option<usize>,
+    jp2c: Option<usize>,
     /// Where the parse of the main header stopped, for the codestream that
     /// starts at `.0` in the input.
-    pub(super) main: Option<(usize, Box<codestream::MainCut>)>,
+    main: Option<(usize, Box<codestream::MainCut>)>,
     /// In a JP2 file whose codestream no appended byte changes
     /// ([`jp2::Jp2File::after_settled`]), and whose main header that
     /// codestream, the `jp2c` box's payload, cuts short, the error every
     /// read of more bytes gives: the boxes before the codestream, the box
     /// and its payload are all in and do not change.
-    pub(super) ended: Option<Error>,
+    ended: Option<Error>,
     /// A hash of a sample of the input when it was kept ([`sample_hash`]),
     /// to check in a debug build that a no shorter input still starts with
     /// it.
@@ -792,11 +790,7 @@ impl KeptCut {
     /// input, going on from where an earlier parse of the same codestream
     /// stopped, and keep where this one stops, if the input ends inside the
     /// header.
-    pub(super) fn parse_main(
-        &mut self,
-        codestream: &[u8],
-        start: usize,
-    ) -> Result<codestream::ParsedHeader> {
+    fn parse_main(&mut self, codestream: &[u8], start: usize) -> Result<codestream::ParsedHeader> {
         let from = self
             .main
             .take()
@@ -1248,6 +1242,211 @@ fn max_reduction(header: &codestream::MainHeader) -> u8 {
         .map(|params| params.coding.decomposition_levels)
         .min()
         .unwrap_or(0)
+}
+
+/// A JP2 file read up to its tile data: the boxes, the codestream's main
+/// header, the channel plans and the metadata. Everything here is checked
+/// before any tile is read, so [`read_header`](crate::read_header) and
+/// [`decode`](crate::decode) share it and report a header fault the same way.
+pub(super) struct Jp2Prefix<'a> {
+    pub(super) codestream: &'a [u8],
+    pub(super) parsed: codestream::ParsedHeader,
+    pub(super) plans: jp2::ChannelPlans,
+    pub(super) metadata: Jp2Metadata,
+    /// The sRGB step, when the caller asked for it.
+    pub(super) srgb: Option<jp2::SrgbPlan>,
+    /// The area and components the decode returns.
+    pub(super) selection: window::Selection,
+    /// For a stream that may still grow, the first error of the read that a
+    /// later box can replace ([`read_jp2_prefix`]), held back. It is `None`
+    /// for a read of the whole input, which returns that error instead.
+    pub(super) held: Option<Error>,
+    /// Whether no box after the codestream can still be read, whatever
+    /// bytes follow ([`jp2::Jp2File::after_settled`]).
+    pub(super) settled: bool,
+    /// Whether the codestream the decode reads is the same whatever bytes
+    /// follow, with no box after it read ([`jp2::Jp2File::codestream_fixed`]),
+    /// so that the tile-parts' errors are final though they have not closed.
+    pub(super) fixed: bool,
+}
+
+/// Read a JP2 file up to its tile data, in OpenJPEG's order, all of it
+/// before any tile is read:
+/// 1. the box walk, then the layout of the palette and channel definition
+///    boxes, which OpenJPEG checks as it reads `jp2h`;
+/// 2. the codestream's main header, then the sample limit, which OpenJPEG
+///    does not have, on the area the selection reads;
+/// 3. `ihdr` against SIZ, then the reduction, which OpenJPEG refuses as it
+///    reads SIZ and then `COD` or `COC`;
+/// 4. the selection, which OpenJPEG refuses when the decoded area is set;
+/// 5. the channel plans against the components, then the header boxes after
+///    the codestream, which OpenJPEG checks once it has decoded, then the
+///    metadata;
+/// 6. the sRGB step, which OpenJPEG does not refuse.
+///
+/// Steps 2 to 4 are in the codestream path's order. The one difference is
+/// sRGB output: a codestream declares no color space, so the codestream path
+/// refuses sRGB output of three or more components before the reduction and
+/// the selection, while here the sRGB step is planned last, from the color
+/// space and the channels the plans give.
+///
+/// With `streamed`, `bytes` are a stream that may still grow, and an error
+/// that more bytes can replace is held:
+///
+/// - A fault in a box the input ends inside, before the codestream or after
+///   it ([`jp2::BoxFault::open`]), as more bytes can complete the box or
+///   change what it holds. Before the codestream there is no prefix to give,
+///   so the fault comes back open; after it, it is held in
+///   [`Jp2Prefix::held`].
+/// - A refusal of the sRGB step. It comes after the header boxes after the
+///   codestream, and a box yet to come there can be at fault, which comes
+///   first. It is final where OpenJPEG reads no box there whatever follows
+///   ([`jp2::Jp2File::after_settled`]): a last tile-part with `Psot = 0`,
+///   or a walk after the codestream stopped by a `jp2c` or an `XLBox` of
+///   2^32 or more.
+///
+/// The faults before these, and those of whole boxes, are final, as more
+/// bytes change neither the boxes they are in nor the ones before them.
+/// The metadata fails only on an internal inconsistency, so it is not held.
+///
+/// `cut` is what a header read keeps while the main header is cut short
+/// ([`KeptCut`]): the main header's parse goes on from there.
+pub(super) fn read_jp2_prefix<'a>(
+    bytes: &'a [u8],
+    options: &DecodeOptions,
+    streamed: bool,
+    cut: Option<&mut KeptCut>,
+) -> std::result::Result<Jp2Prefix<'a>, jp2::BoxFault> {
+    let file =
+        jp2::parse_boxes(bytes, &options.packet_work_limit).map_err(|fault| jp2::BoxFault {
+            open: streamed && fault.open,
+            ..fault
+        })?;
+    jp2::check_box_layout(&file)?;
+    let parsed = match cut {
+        Some(cut) => {
+            // The boxes before the codestream are read and pass, and more
+            // bytes do not change them.
+            let start = file
+                .codestream
+                .as_ptr()
+                .addr()
+                .wrapping_sub(bytes.as_ptr().addr());
+            cut.jp2c = Some(start);
+            let parsed = cut.parse_main(file.codestream, start);
+            // The main header is cut short and no byte appended changes the
+            // codestream, so every read of more bytes gives this error:
+            // the boxes before it are whole and pass, and nothing it parses
+            // changes. Where the walk after the codestream is settled
+            // (`after_settled`), a cut main header means the codestream is
+            // a whole `jp2c` box's payload, by the arms of
+            // `locate_codestream`:
+            // - an end found at `EOC`, a tile-part of `Psot = 0` run to the
+            //   end of the input, or one cut two bytes past the box: the
+            //   walk stepped through the main header to an `SOT` in the
+            //   codestream, so the header is whole, not cut;
+            // - a payload that ends in `FF D9` before a tile-part of
+            //   `Psot = 0`, or a broken walk: the codestream is the payload.
+            //   Where the box is whole, it is fixed. Where the input cuts the
+            //   box, the payload is the rest of the input, the walk's own
+            //   bytes, which reach an `SOT` or a fault, so the parse does not
+            //   stop cut short.
+            if let Err(error @ Error::Incomplete(_)) = &parsed {
+                if file.after_settled {
+                    cut.main = None;
+                    cut.ended = Some(error.clone());
+                }
+            }
+            parsed?
+        }
+        None => codestream::parse_header(file.codestream)?,
+    };
+    let siz = &parsed.header.siz;
+    let cap = samples::cap(&options.sample_limit, bytes.len());
+    let selection = window::select(siz, options);
+    if let Ok(selection) = &selection {
+        samples::check_read(siz, selection, options.resolution_reduction, cap)?;
+    }
+    jp2::check_against_siz(&file.header, siz)?;
+    check_reduction(&parsed.header, options.resolution_reduction, None)?;
+    let selection = selection?;
+    // A component subset names codestream components, which come out as
+    // coded: OpenJPEG bypasses the JP2 channel transforms under `-c`.
+    let raw_channels = options.raw_channels || options.components.is_some();
+    // A palette expands the area the decode returns.
+    let plans = jp2::ChannelPlans::plan(
+        &file.header,
+        &selection.area,
+        options.resolution_reduction,
+        cap,
+        raw_channels,
+        jp2::is_jph(&file.file_type),
+    )?;
+    let mut held = match jp2::check_after_codestream(&file, raw_channels) {
+        Err(fault) if streamed && fault.open => Some(fault.error),
+        checked => {
+            checked.map_err(|fault| fault.error)?;
+            None
+        }
+    };
+    let mut metadata = jp2::metadata(&file, &plans, siz)?;
+    if selection.subset {
+        metadata.channels = pick(metadata.channels, &selection.order);
+    }
+    let srgb = match options.color {
+        ColorOutput::AsCoded => None,
+        ColorOutput::Srgb => {
+            let planned = jp2::plan_srgb(
+                &metadata,
+                &plans,
+                &selection.area,
+                options.resolution_reduction,
+                cap,
+            )
+            .and_then(|plan| {
+                // Chroma replication keys on the parity of the area's origin
+                // on the reference grid (the full-resolution one, whatever
+                // the reduction), so on part of the image it would not give
+                // the crop of the whole image's conversion. An area equal to
+                // the image (a window clipped to it, or the only tile) is the
+                // whole image.
+                if plan.replicates_chroma() && selection.area.image_rect() != siz.image_rect() {
+                    return Err(Error::unsupported(
+                        "sRGB output from sub-sampled sYCC chroma on an area smaller than the \
+                         image, under `DecodeOptions::region`",
+                    ));
+                }
+                Ok(plan)
+            });
+            match planned {
+                Ok(plan) => {
+                    // A converted image is sRGB (or gray) and carries no
+                    // profile, as OpenJPEG reports it.
+                    plan.describe(&mut metadata);
+                    Some(plan)
+                }
+                // Only the first error is held: it is the one the decode
+                // gives. With no box after the codestream left to read,
+                // none can come first.
+                Err(error) if streamed && (held.is_some() || !file.after_settled) => {
+                    held.get_or_insert(error);
+                    None
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    };
+    Ok(Jp2Prefix {
+        codestream: file.codestream,
+        parsed,
+        plans,
+        metadata,
+        srgb,
+        selection,
+        held,
+        settled: file.after_settled,
+        fixed: file.codestream_fixed,
+    })
 }
 
 #[cfg(test)]

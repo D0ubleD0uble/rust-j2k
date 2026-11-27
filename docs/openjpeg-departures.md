@@ -1767,7 +1767,7 @@ follows OpenJPEG on:
 ### The order of the header checks
 
 The header is checked before any tile data is read, in this order
-(`read_jp2_prefix` in `src/pipeline/decode.rs`):
+(`read_jp2_prefix` in `src/pipeline/header.rs`):
 
 1. The box walk, then the layout of the `pclr`, `cmap` and `cdef` boxes: how
    many there are, their order and their payloads. OpenJPEG refuses these as
