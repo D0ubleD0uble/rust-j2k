@@ -862,15 +862,41 @@ fn the_inputs_at_each_work_cap_fit_it_and_one_more_row_does_not() {
 /// early, so they add no decode to that count.
 const INCREMENTAL_HASH: u64 = 10652251858896192665;
 
-#[test]
-fn incremental_checked_tries_stay_within_the_work_weight() {
-    let target = include_str!("../fuzz/fuzz_targets/incremental_decode.rs").replace('\r', "");
-    let body: String = target[target.find("fuzz_target!(").expect("the target")..]
+/// `target`'s body from its `fuzz_target!` on, trimmed, without blank lines
+/// or comments.
+fn target_body(target: &str) -> String {
+    let target = target.replace('\r', "");
+    target[target.find("fuzz_target!(").expect("the target")..]
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with("//"))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+}
+
+/// Hash of `fuzz/fuzz_targets/decode.rs` from its `fuzz_target!` to the end,
+/// comments left out: its decodes, their work limits and the packet ledger
+/// that holds them to 5 packet bounds (the size of the ledger, a charge for
+/// each decode that may be refused at the packet bound, and the plain
+/// decode's refusal standing in for the strict decode). If it changed,
+/// check that each decode is still charged its factor and that no decode
+/// past the ledger runs, then update this hash.
+const DECODE_HASH: u64 = 7957681324797408435;
+
+#[test]
+fn the_decode_targets_packet_ledger_is_as_reviewed() {
+    let body = target_body(include_str!("../fuzz/fuzz_targets/decode.rs"));
+    assert_eq!(
+        fnv(&body),
+        DECODE_HASH,
+        "decode's decodes or packet ledger changed: check the charges, then update DECODE_HASH"
+    );
+}
+
+#[test]
+fn incremental_checked_tries_stay_within_the_work_weight() {
+    let target = include_str!("../fuzz/fuzz_targets/incremental_decode.rs").replace('\r', "");
+    let body = target_body(&target);
     assert_eq!(
         fnv(&body),
         INCREMENTAL_HASH,
@@ -945,7 +971,10 @@ fn the_packet_bound_seed_is_refused_by_the_decodes_the_ledger_charges() {
         .with_strict(false);
     assert!(packet_refused(&decode_with(&data, &one_shot)));
     // `decode`'s plain decode, and the strict one under a layer cap whose
-    // place the plain decode's refusal takes: both walk the same packets.
+    // place the plain decode's refusal takes: both walk the same packets, so
+    // for this seed both are the same refusal. On an input of many tiles the
+    // capped decode can be refused earlier, at the code-block bound, which
+    // fails the strict decode all the same.
     let base = budget::options(work_weight("decode"));
     let plain = decode_with(
         &data,
@@ -959,7 +988,7 @@ fn the_packet_bound_seed_is_refused_by_the_decodes_the_ledger_charges() {
     assert_eq!(
         format!("{:?}", plain.err()),
         format!("{:?}", capped.err()),
-        "the same refusal"
+        "the same refusal for this seed"
     );
 }
 

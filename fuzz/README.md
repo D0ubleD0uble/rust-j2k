@@ -58,7 +58,8 @@ workspace turns on) to drive the EBCOT block decoder and MQ coder directly.
 Besides the plain decode, `decode` draws its options from a hash of the input
 (`fuzz_targets/decode.rs`): a layer cap of 1 to 3, with `strict` off too, and
 for one such input in four a packet work limit of `Raised(2)` or `Raised(4)` on
-the decode with `strict` off only; a window, a tile or a component subset, at reduction 0 or 1; and,
+the decode with `strict` off only; a window, a tile or a component subset, at
+reduction 0 or 1; and,
 for a JP2 file, `ColorOutput::Srgb` on one window or tile draw in four, which a
 sub-sampled sYCC image refuses on part of the image. Seed the last with the
 `jp2_sycc_*.jp2` files (below). The hash changes with any byte, so a seed
@@ -72,14 +73,19 @@ reaches that bound in a few hundred bytes
 `incremental_decode` keep a packet ledger (`budget::PacketBounds` in
 `common/budget.rs`): once a decode of the input is refused at the packet
 bound, it is charged the factor it ran at, and a later decode runs only if
-its factor fits in what is left. `decode` allows 5 bounds: the plain
-decode, then the decode with `strict` off at up to `Raised(4)`; the strict
-decode, which walks the same packets, is not run, and its place in the
-check goes to the plain decode's refusal. `incremental_decode` allows 2: the
-first due refine and one-shot decode refused there, whose wait is checked,
-and the execution ends at the next decode. A decode that passes the bound
-says nothing of what it spent, so it is not charged: an input whose every
-decode walks just under the bound still runs each one.
+its factor fits in what is left. `decode` allows 5 bounds: the first decode
+refused there, then the decode with `strict` off at up to `Raised(4)`. When
+the plain decode is the one refused, the strict decode is not run, as it
+walks the same packets, and the plain decode's refusal takes its place in
+the check. `incremental_decode` allows 2: the first due refine and one-shot
+decode refused there, whose wait is checked, and the execution ends at the
+next decode. So on such an input the target no longer runs the decoder with
+nothing spent (`zero`), the due refine's `cut.check`, the probe, the decode
+of the whole input that checks an error is final, or `finish`. Unit tests in
+`src/fuzz.rs` and `src/incremental/tests.rs` cover the probe's path. A
+decode that passes the bound says nothing of what it spent, so it is not
+charged: an input whose every decode walks just under the bound still runs
+each one.
 
 `tile_body`'s second input byte steers a region of interest: with bit 7 set
 it writes an `RGN` marker (a maxshift of 0 to 19 from the low 5 bits, on

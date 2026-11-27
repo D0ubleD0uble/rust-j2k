@@ -21,10 +21,7 @@ pub fn check(bytes: &[u8], options: &DecodeOptions, strict: &Result<Image>) -> b
         bytes,
         &options.clone().with_strict(false),
     ));
-    let refused = matches!(
-        &lenient,
-        Err(rust_j2k::Error::Limit(m)) if m.kind() == rust_j2k::LimitKind::PacketWork
-    );
+    let refused = lenient.as_ref().is_err_and(super::budget::packet_refusal);
     if let Ok(image) = strict {
         assert_eq!(image.report, rust_j2k::DecodeReport::default());
         let partial = lenient.as_ref().expect("strict decodes, so partial does");

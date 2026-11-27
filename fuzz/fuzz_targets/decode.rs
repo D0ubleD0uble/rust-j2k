@@ -19,10 +19,11 @@
 //! window or tile decode for sRGB, which a sub-sampled sYCC image refuses
 //! there. The hash changes with any byte, so `tmin` of a crash can flip these.
 //!
-//! An input whose plain decode is refused at the packet work bound is held
-//! to 5 packet bounds (`budget::PacketBounds`): the plain decode, and the
-//! one with `strict` off at its factor. The strict decode is not run for
-//! it, and the part only where a bound is left.
+//! An input whose decodes are refused at the packet work bound is held to 5
+//! packet bounds (`budget::PacketBounds`): the first decode refused there,
+//! and the one with `strict` off at its factor. Where the plain decode is
+//! the one refused, the strict decode is not run, and the part runs only
+//! where a bound is left.
 
 use libfuzzer_sys::fuzz_target;
 
@@ -45,8 +46,9 @@ fuzz_target!(|data: &[u8]| {
     // In code-block bounds: the plain decode at 2, so that mid-size images
     // reach pixels, and the other three at 1 each.
     let base = budget::options(5);
-    // In packet bounds, once the plain decode is refused at the packet
-    // bound: that decode and the one with `strict` off at up to 4.
+    // In packet bounds, once a decode is refused at the packet bound: that
+    // decode (the plain or the strict one) and the one with `strict` off at
+    // up to 4.
     let mut packets = budget::PacketBounds::new(5);
     let plain = base
         .clone()
@@ -63,13 +65,20 @@ fuzz_target!(|data: &[u8]| {
         let layers = 1 + ((hash >> 1) % 3) as u16;
         let options = base.clone().with_max_quality_layers(Some(layers));
         // The strict decode under a layer cap walks the packets the plain
-        // decode walks (a layer cap cuts no packet work), so where the plain
-        // decode was refused at the packet bound it fails too. That refusal
-        // then stands in for it, and the bound goes to the decode with
-        // `strict` off.
+        // decode walks: a layer cap cuts code-block work and not packet work
+        // (`a_layer_cap_cuts_block_work_and_not_packet_work` in
+        // `src/pipeline/decode.rs` holds that). So where the plain decode was
+        // refused at the packet bound, the strict one fails too, at that
+        // bound or earlier at the code-block bound. The plain refusal then
+        // stands in for it, and the bound goes to the decode with `strict`
+        // off. Otherwise it runs, and is charged.
         let strict = match &plain_refusal {
             Some(error) => Err(error.clone()),
-            None => checked(rust_j2k::decode_with(data, &options)),
+            None => {
+                let strict = checked(rust_j2k::decode_with(data, &options));
+                packets.charge(1, strict.as_ref().is_err_and(budget::packet_refusal));
+                strict
+            }
         };
         // One input in four raises the packet work bound (2 or 4 times the
         // default) for the decode with `strict` off only, so the walks the
