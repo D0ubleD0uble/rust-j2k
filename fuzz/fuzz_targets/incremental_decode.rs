@@ -45,9 +45,12 @@
 //! error, even a change back to the options that gave it, and the refines
 //! after it wait until the next one due decodes again.
 //!
-//! A hash of the file also draws the output: sRGB for one input in four,
-//! `raw_channels` for one in three of the rest. They stay as drawn through
-//! the refines, as the decoder has no setter for either.
+//! For a JP2 file only, a hash of the file also draws the output: sRGB for
+//! one file in four (never with a component subset), `raw_channels` for one
+//! in three of the rest. A codestream keeps the options the control bytes
+//! give. The hash changes with any byte, so `tmin` of a crash can flip the
+//! draw. They stay as drawn through the refines, as the decoder has no
+//! setter for either.
 //!
 //! The first six input bytes steer the options, as `tile_body`'s first bytes
 //! steer its shape, so a small mutation of the file keeps them; the rest is
