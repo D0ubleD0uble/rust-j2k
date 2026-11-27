@@ -307,7 +307,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   short, the decoder holds what its segments read so far set: up to about
   20 bytes for each byte of `COC`, `QCC` and `RGN` segments, plus under
   1 KB and 4 bytes for each component, and 24 to 48 bytes for each `PPM`
-  segment, because its table grows by doubling: about 13 MB at most
+  segment, as their table grows by doubling. That is about 13 MB at most
   (#682).
 - A JP2 file padded with boxes holds less memory while its boxes are read.
   The boxes after the codestream are held once instead of twice, and a box

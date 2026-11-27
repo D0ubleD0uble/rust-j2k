@@ -178,10 +178,10 @@ fn cut_ppm_header() -> Vec<u8> {
 /// The most the cut main header can keep at once: 16381 components, each
 /// with a `COC` of precincts, a 97-step `QCC` and an `RGN`, then a `CRG`, a
 /// `POC` of 32 volumes, and 16385 `PPM` segments, cut inside a `COM`. The
-/// tables grow by doubling, so one `PPM` segment past 16384 doubles theirs
-/// (393 KB more), at the cost of 3 components (2 KB). That leaves 65534 of
-/// the 65536 segments a main header may have; the 2 left over add nothing.
-/// A `CRG` of 16384 components does not fit in one segment.
+/// tables grow by doubling, so one `PPM` segment past 16384 doubles the
+/// `PPM` table (393 KB more), at the cost of 3 components (2 KB). That
+/// leaves 65534 of the 65536 segments a main header may have; the 2 left
+/// over add nothing.
 fn cut_joint_header() -> Vec<u8> {
     let components = 16381u16;
     let (_, overrides) = component_shapes().pop().expect("the last shape");
