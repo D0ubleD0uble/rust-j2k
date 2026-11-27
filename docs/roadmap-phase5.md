@@ -400,23 +400,22 @@ what it does not.
 
 ## Decisions
 
-Settled on 2026-11-17.
+Settled on 2026-11-17, except where marked proposed.
 
 1. **The API is `encode` and `encode_with`.** `encode(&Image)` and
    `encode_with(&Image, &EncodeOptions)` mirror `decode` and `decode_with`.
    `EncodeOptions` is a `#[non_exhaustive]` struct with `with_*` setters, like
    `DecodeOptions`. The output is `Result<Vec<u8>>`: a raw codestream, or a
-   JP2 file under `with_format(Format::Jp2)`. Input the encoder cannot
-   encode is a new `Error::InvalidImage`, such as a sample outside its
-   declared depth, and bad options are `Error::InvalidOptions`. There is no
-   `Encoder` builder until threads (#301) give it state, and no `io::Write`
-   output, since rate control, TLM and `Psot` need lengths first. The
-   `encode` rustdoc must say it ignores `Image::jp2` and `Image::report`.
+   JP2 file under `with_format(Format::Jp2)`. Input the encoder cannot encode
+   is a new `Error::InvalidImage`, such as a sample outside its declared
+   depth, and bad options are `Error::InvalidOptions`. There is no `Encoder`
+   builder until threads (#301) give it state, and no `io::Write` output,
+   since rate control, TLM and `Psot` need lengths first.
    `Error::InvalidOptions` is documented as decode-only (`src/error.rs`, the
    variant and the error table), so that rustdoc is widened when
-   `EncodeOptions` reuses it. A borrowed
-   input view comes with #303. `Image::jp2` and `Image::report` are ignored:
-   the boxes come from the options, and a report describes a decode. The
+   `EncodeOptions` reuses it. A borrowed input view comes with #303.
+   `Image::jp2` and `Image::report` are ignored: the boxes come from the
+   options, and a report describes a decode. The `encode` rustdoc says so. The
    origin comes from #254, on the grid of `width` and `height`, so component
    sizes and DWT parity come out right. A palette-expanded image can hold
    samples outside its declared depth (`src/image.rs`), so it is
@@ -444,15 +443,15 @@ Settled on 2026-11-17.
    limits](#oracle-limits) says what a cross-decode can and cannot prove.
 5. **The encoder sits behind an `encode` cargo feature, on by default
    (proposed, to be confirmed in 0.7).** The #515 answer of 2026-11-26 leaves
-   the encoder default open until then. A
-   decode-only user (fieldglass, or wasm) sets `default-features = false`
-   and compiles none of it. The feature (`encode = []`, in `default`) is
-   declared before P5.0. Every encode test, bench and `src/fuzz.rs` entry is
-   gated on it; `Error::InvalidImage` is not, so the error enum is the same
-   in both builds. CI gains `cargo test` and `cargo clippy --all-targets`
-   with `--no-default-features`. Code only the encoder calls lives in
-   `src/encode/` or behind the feature, so a decode-only build has no dead
-   code. The `Cargo.toml` and CI edits are the maintainer's.
+   the encoder default open until then. A decode-only user (fieldglass, or
+   wasm) sets `default-features = false` and compiles none of it. The feature
+   (`encode = []`, in `default`) is declared before P5.0. Every encode test,
+   bench and `src/fuzz.rs` entry is gated on it; `Error::InvalidImage` is not,
+   so the error enum is the same in both builds. CI gains `cargo test` and
+   `cargo clippy --all-targets` with `--no-default-features`. Code only the
+   encoder calls lives in `src/encode/` or behind the feature, so a
+   decode-only build has no dead code. The `Cargo.toml` and CI edits are the
+   maintainer's.
 6. **The reference tools are OpenJPEG, Grok and jpylyzer.** OpenJPEG 2.5.0 is
    the gate. Grok (20.4.25, built for performance.md) is a second decoder in a
    release round. `grk_compress -U` is the field-level oracle for the
