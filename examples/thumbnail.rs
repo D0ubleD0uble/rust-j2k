@@ -3,7 +3,9 @@
 //!
 //! It shows two options of `DecodeOptions`. `with_resolution_reduction(n)`
 //! drops the `n` highest resolution levels, so each side is divided by 2^n
-//! (rounded up) and the decoder skips the data for those levels.
+//! (rounded up; in general a span `x0..x1` becomes
+//! `ceil(x1 / 2^n) - ceil(x0 / 2^n)`) and the decoder skips the data for
+//! those levels.
 //! `with_region(Region::Window(..))` decodes only a rectangle of the
 //! reference grid. Both can be used together, and then the rectangle is
 //! reduced as well.
@@ -38,17 +40,17 @@ mod pnm;
 const USAGE: &str = "usage: thumbnail <in.jp2|in.j2k> <levels> \
                      [x0 y0 x1 y1] <out.pgm|out.ppm>";
 
-/// Read one number argument, naming it in the error.
-fn number<T: FromStr>(arg: &OsString, what: &str) -> Result<T, String> {
+/// Read one number argument. `want` finishes "<name> must be ".
+fn number<T: FromStr>(arg: &OsString, name: &str, want: &str) -> Result<T, String> {
     let parsed = arg.to_str().and_then(|s| s.parse().ok());
-    parsed.ok_or_else(|| format!("{what} must be a whole number\n{USAGE}"))
+    parsed.ok_or_else(|| format!("{name} must be {want}\n{USAGE}"))
 }
 
 fn run(args: &[OsString]) -> Result<(), String> {
     let (input, levels, window, output) = match args {
         [input, levels, output] => (input, levels, None, output),
         [input, levels, x0, y0, x1, y1, output] => {
-            let edge = |arg, what| number::<u32>(arg, what);
+            let edge = |arg, name| number::<u32>(arg, name, "a whole number, 0 or more");
             let window = Window::new(
                 edge(x0, "x0")?,
                 edge(y0, "y0")?,
@@ -59,7 +61,7 @@ fn run(args: &[OsString]) -> Result<(), String> {
         }
         _ => return Err(USAGE.into()),
     };
-    let levels: u8 = number(levels, "levels")?;
+    let levels: u8 = number(levels, "levels", "a whole number from 0 to 255")?;
     let (input, output) = (PathBuf::from(input), PathBuf::from(output));
     let name = input.display();
     let mut options = DecodeOptions::default();
@@ -74,10 +76,11 @@ fn run(args: &[OsString]) -> Result<(), String> {
     let out_name = output.display();
     std::fs::write(&output, pnm).map_err(|e| format!("{out_name}: {e}"))?;
     println!(
-        "wrote {}: {}x{} after dropping {levels} resolution levels",
+        "wrote {}: {}x{} after dropping {levels} resolution {}",
         output.display(),
         image.width,
-        image.height
+        image.height,
+        if levels == 1 { "level" } else { "levels" }
     );
     Ok(())
 }

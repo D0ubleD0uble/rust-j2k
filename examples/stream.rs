@@ -12,7 +12,9 @@
 //!    is still missing), or `Refined::Waiting`, with the reason there is no
 //!    new image. A refine decodes again only when the bytes fed have doubled
 //!    since the last try, so most chunks wait.
-//! 4. `finish` decodes all of the input, as `decode` does.
+//! 4. `finish` decodes all of the input, as `decode` does. On a truncated
+//!    download it refuses by default, and `with_strict(false)` keeps the
+//!    partial image.
 //!
 //! ```text
 //! cargo run --example stream -- tests/fixtures/layers/lrcp.j2k 100
@@ -36,8 +38,13 @@ fn describe(why: &Waiting) -> String {
             format!("waiting, the next try is at {until} bytes")
         }
         Waiting::HeaderIncomplete { .. } => "waiting, header not whole".into(),
-        Waiting::WorkLimit { limit, .. } => format!("work limit: {limit}"),
-        other => format!("waiting: {other:?}"),
+        Waiting::SampleLimit { limit, .. } => format!("waiting, {limit}"),
+        Waiting::WorkLimit { limit, .. } => format!("waiting, {limit}"),
+        Waiting::BoundSpent { limit, .. } => format!("waiting, {limit}"),
+        Waiting::MissingTiles { limit, .. } => format!("waiting, {limit}"),
+        Waiting::RepeatLimit { .. } => "waiting, a repeat bound refused".into(),
+        Waiting::Held { error, .. } => format!("waiting, held: {error}"),
+        _ => "waiting, for a reason this example does not show".into(),
     }
 }
 

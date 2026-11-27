@@ -168,7 +168,7 @@ fn stream_reports_no_header_until_it_has_one() {
     assert!(run.status.success(), "{run:?}");
     let said = String::from_utf8_lossy(&run.stdout);
     assert!(said.contains("10 bytes: no header yet"), "{said}");
-    assert!(said.contains("header is in"), "{said}");
+    assert_eq!(said.matches("header is in").count(), 1, "{said}");
     assert!(said.contains("as decode on the whole file: true"), "{said}");
 }
 
