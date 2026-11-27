@@ -754,11 +754,28 @@ open while the last has length 0, the target fails on it only through its
 check of the whole input under the options it starts with. It is
 synthetic, so it has no license restriction.
 
+`incremental/header_split_ftyp_cut_after_refused_reduction.seed` (322
+bytes, SHA-256
+`ddc3b465df87174c092f2099c84eb1dd771e7c10dc57cd90a8b1413372d71c9c`) is the
+same gray file with a whole `ftyp` after the codestream, then a whole `xml `
+of 135 bytes in place of the one of length 0, behind control bytes
+`00 00 00 00 00 00 36 00 00 00 00 00` (#726). A one-off script built it and
+searched the piece streams for this one: it changes the reduction to 2 at
+97 bytes, which the file's one resolution refuses, changes nothing after,
+and ends a feed at 181, inside the `ftyp`. With the fault of a box after
+the codestream that the input ends inside taken as final
+(`after::check`), `header` gives there an error the whole file does not
+give. The decoder's checks meet the refused reduction, and the whole file
+does not hold the cut box, so only the target's shadow decoder under the
+starting options fails on it. It is synthetic, so it has no license
+restriction.
+
 `tests/jp2_box_error_final.rs` also checks the target's `replaceable`
-(`tests/support/replaceable.rs`) on the #722 seed and the two seeds of
+(`tests/support/replaceable.rs`) on the #722 seed and the four seeds of
 final faults: it finds a suffix that changes the error of the first, and
-none for the other two. It finds one for each file of `held_after_shapes`
-too.
+none for the other four. It finds one for each file of `held_after_shapes`
+too. `the_header_split_seeds_of_726_keep_their_piece_streams` checks that
+the two #726 seeds still change the reduction where they were made to.
 
 ### Retry ladder fixtures
 
