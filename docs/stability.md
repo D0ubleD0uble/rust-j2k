@@ -52,6 +52,13 @@ A change to any of these that breaks a caller needs a new minor version.
 A type, variant or field marked `#[non_exhaustive]` can gain variants or
 fields without a breaking change, so match on it with a `_` arm or `..`.
 
+### Cargo features
+
+The decoder needs no Cargo feature. It is in every build, including one
+with `default-features = false`. A feature added later only adds API:
+turning a feature on never removes or changes the decoder's API. The
+hidden `__fuzz` feature is not part of this (see "What is not covered").
+
 ### What the types mean
 
 - **Which variant a fault gives.** Each kind of fault maps to one variant,
