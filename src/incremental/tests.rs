@@ -2096,3 +2096,67 @@ fn header_on_a_jp2c_box_ending_inside_its_main_header_is_a_read_from_the_start()
         }
     }
 }
+
+/// A `jp2c` box with no `jp2h` before it, cut inside its 8-byte extended
+/// length: once its type is in, each call gives the "no `jp2h`" error a
+/// read from the start gives, not a wait for more bytes.
+#[test]
+fn header_on_a_jp2c_with_no_jp2h_cut_in_its_extended_length_is_an_error() {
+    use crate::synth;
+    let mut bytes = synth::JP2_SIGNATURE.to_vec();
+    bytes.extend(synth::ftyp_jp2());
+    // `LBox` 1: the length is in the 8-byte `XLBox` after the type.
+    bytes.extend([0, 0, 0, 1]);
+    bytes.extend(b"jp2c");
+    bytes.extend([0, 0, 0, 0, 0, 0]);
+    let fresh = fresh_header(&bytes, &DecodeOptions::default());
+    assert!(fresh.starts_with("Err(FileFormat("), "{fresh}");
+    for piece in [1, 4] {
+        header_matches_after_each_feed("a cut XLBox", &bytes, piece);
+    }
+}
+
+/// A `jp2c` box that ends inside its own main header, between two marker
+/// segments, then 200 boxes of 8 bytes, fed a box at a time. The bytes after
+/// the box do not go on with a marker segment, so the kept parse of the
+/// main header is dropped, and each call reads the boxes and the main
+/// header from the start. This pins the cost as it is; #707 tracks
+/// going on from the kept parse here too.
+#[test]
+fn header_calls_after_a_jp2c_box_ending_inside_its_main_header_read_it_each_time() {
+    use crate::synth;
+    let whole = ppm_codestream(16);
+    // Before the 9th `PPM` segment.
+    let cut = whole
+        .windows(2)
+        .position(|code| code == [0xFF, 0x60])
+        .unwrap()
+        + 8 * (4 + 4097);
+    assert_eq!(whole[cut..cut + 2], [0xFF, 0x60]);
+    let codestream = &whole[..cut];
+    let after: Vec<Vec<u8>> = (0..200).map(|_| synth::bx(b"free", &[])).collect();
+    let bytes = synth::jp2_file(
+        &[
+            synth::ihdr_for(&whole),
+            synth::bx(b"colr", &synth::colr_enum(17)),
+        ],
+        &[],
+        codestream,
+        &after,
+    );
+    let options = DecodeOptions::default();
+    let box_end = bytes.len() - 8 * after.len();
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&bytes[..box_end]);
+    assert_eq!(format!("{:?}", decoder.header()), "Ok(None)");
+    walked();
+    for chunk in bytes[box_end..].chunks(8) {
+        decoder.feed(chunk);
+        let got = format!("{:?}", decoder.header());
+        let spent = walked();
+        assert_eq!(got, fresh_header(decoder.bytes(), &options));
+        walked();
+        let len = codestream.len() as u64;
+        assert!(spent >= len, "{spent} bytes walked for a {len}-byte jp2c");
+    }
+}
