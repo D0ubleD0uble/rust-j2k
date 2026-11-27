@@ -33,7 +33,9 @@
 //! Every other error is printed and ends the run. The exit status is 0 for
 //! a complete image, 2 for an image with data missing, and 1 for an error.
 //! An image with data missing is not the file's image: check
-//! `DecodeReport::is_complete` before you trust it.
+//! `DecodeReport::is_complete` before you trust it. A copy that adds an
+//! argument parser that exits with 2 on a usage error, as clap does, should
+//! give a partial image another code.
 //!
 //! The raise is capped at 4 because each factor multiplies what the decode
 //! may take. At 4, a small file may take 8 GiB of output, up to about 26

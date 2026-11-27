@@ -77,7 +77,8 @@ fn run(args: &[OsString]) -> Result<(), String> {
     let decimal = factor(d, "D")?;
 
     let input = PathBuf::from(input);
-    let name = input.display();
+    // `{:?}` quotes the name and escapes control characters.
+    let name = format!("{input:?}");
     let bytes = std::fs::read(&input).map_err(|e| format!("{name}: {e}"))?;
     let image = rust_j2k::decode(&bytes).map_err(|e| format!("{name}: {e}"))?;
     let [grid] = image.components.as_slice() else {
@@ -96,7 +97,9 @@ fn run(args: &[OsString]) -> Result<(), String> {
     if values.is_empty() {
         return Err(format!("{name}: the grid holds no values"));
     }
-    // A large E or a negative D past about -300 overflows an f64.
+    // A large E or a negative D past about -300 overflows an f64. A large
+    // positive D instead takes every value to 0, which is what the formula
+    // gives, so it passes.
     if let Some(i) = values.iter().position(|v| !v.is_finite()) {
         return Err(format!(
             "{name}: value {i} is not finite with this R, E and D"

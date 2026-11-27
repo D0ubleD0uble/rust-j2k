@@ -177,7 +177,7 @@ fn the_grib2_example_refuses_bad_arguments() {
         ),
         (
             vec![rgb.as_os_str(), os("1"), os("0"), os("0")],
-            "multicomponent_lossless.j2k: a GRIB2 grid has one channel",
+            "multicomponent_lossless.j2k\": a GRIB2 grid has one channel",
         ),
     ];
     for (args, message) in cases {
