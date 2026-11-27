@@ -1,9 +1,11 @@
 //! Keeps a fuzz run under libFuzzer's RSS limit and its timeout.
 //!
-//! Two budgets: [`over`] skips an input that declares too many samples,
-//! which bounds memory, and [`options`] caps the work its decodes may do,
-//! which bounds time. Each target divides each budget by a weight of its
-//! own, pinned by `tests/fuzz_seed_outcomes.rs`.
+//! Three budgets: [`over`] skips an input that declares too many samples,
+//! which bounds memory; [`options`] caps the code-block work its decodes may
+//! do, and [`PacketBounds`] the packet work of an input whose decodes reach
+//! the packet bound, which bound time. Each target divides the first two by
+//! a weight of its own, pinned by `tests/fuzz_seed_outcomes.rs`, and sizes
+//! its own packet ledger.
 
 use rust_j2k::{DecodeOptions, SampleLimit};
 
@@ -28,6 +30,66 @@ pub const MAX_FUZZ_SAMPLES: u64 = 1 << 28;
 /// 27 ns, so this is about 7 s, under the 30 s `-timeout` the fuzz job
 /// passes with room for a loaded machine.
 pub const MAX_FUZZ_WORK: u64 = 1 << 28;
+
+/// The packet work of one execution, in packet bounds, once one of its
+/// decodes is refused at the packet work bound.
+///
+/// The work cap ([`options`]) prices code-block work only. Every decode may
+/// also walk packets up to the packet work bound, 2^24 visits at the
+/// default for an input under 2^19 bytes. A geometry of many code-blocks
+/// with empty packets reaches that bound in a few hundred bytes, and under
+/// the fuzz build (ASan) one such decode takes about 1 to 3 s, so a target
+/// that decodes such an input a dozen times passes the 30 s `-timeout`.
+///
+/// A decode refused at the packet bound has spent it, so the ledger charges
+/// that decode the factor it ran at and marks the input as one that reaches
+/// the bound. From then on a decode runs only if its factor fits in what is
+/// left, and a target ends the execution, or leaves out a check, where it
+/// does not. Before any refusal every decode runs, as a decode that passes
+/// the bound says nothing of what it spent.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct PacketBounds {
+    left: u64,
+    refused: bool,
+}
+
+#[allow(dead_code)]
+impl PacketBounds {
+    /// A ledger of `bounds` packet bounds.
+    pub fn new(bounds: u64) -> Self {
+        Self {
+            left: bounds,
+            refused: false,
+        }
+    }
+
+    /// Whether a decode at `factor` packet bounds may run: any decode until
+    /// one is refused at the packet bound, then one that fits in what is left.
+    pub fn allows(&self, factor: u64) -> bool {
+        !self.refused || factor <= self.left
+    }
+
+    /// Whether a decode of this execution was refused at the packet bound.
+    pub fn refused(&self) -> bool {
+        self.refused
+    }
+
+    /// Charge a decode at `factor` packet bounds, if `refused` says the
+    /// packet bound refused it.
+    pub fn charge(&mut self, factor: u64, refused: bool) {
+        if refused {
+            self.refused = true;
+            self.left = self.left.saturating_sub(factor);
+        }
+    }
+}
+
+/// Whether `error` is a refusal by the packet work bound.
+#[allow(dead_code)]
+pub fn packet_refusal(error: &rust_j2k::Error) -> bool {
+    matches!(error, rust_j2k::Error::Limit(m) if m.kind() == rust_j2k::LimitKind::PacketWork)
+}
 
 /// The default options with the code-block work bound set to [`MAX_FUZZ_WORK`]
 /// divided by `weight`: the most code-block bounds' worth of work one
