@@ -20,8 +20,7 @@ cargo run --example info -- tests/fixtures/jp2_metadata_boxes.jp2
 `untrusted` decodes a file from a source you don't trust. It uses the
 default limits, prints the details of a limit refusal, and retries past it
 only with `--allow-raise`, by a factor of at most 4. A cut-short file is
-decoded again with `strict`
-off, and the example prints what is missing:
+decoded again with `strict` off, and the example prints what is missing:
 
 ```sh
 cargo run --example untrusted -- \
