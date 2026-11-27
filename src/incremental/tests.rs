@@ -1721,12 +1721,14 @@ fn fresh_header(prefix: &[u8], options: &DecodeOptions) -> String {
     format!("{read:?}")
 }
 
-/// The main-header bytes and the top-level box bytes the reads on this
-/// thread have walked since the last call.
+/// The main-header bytes, the top-level box bytes and the bytes stepped
+/// over finding where a JP2 file's codestream ends and walking the boxes
+/// after it, that the reads on this thread have walked since the last call.
 fn walked() -> u64 {
     let main = codestream::tests::MAIN_HEADER_BYTES.with(|walked| walked.replace(0));
     let boxes = crate::jp2::tests::BOX_BYTES.with(|walked| walked.replace(0));
-    main + boxes
+    let after = crate::jp2::tests::AFTER_BYTES.with(|walked| walked.replace(0));
+    main + boxes + after
 }
 
 /// A codestream of one 64 x 64 tile whose main header holds `segments`
@@ -2182,15 +2184,74 @@ fn header_calls_after_a_jp2c_box_ending_inside_its_main_header_read_it_about_onc
             );
             walked();
         }
-        // A read from the start walks the `jp2c` box as a box and its main
-        // header as a codestream, about twice its length.
+        // A read from the start walks the `jp2c` box three times: as a box,
+        // as the main header, and finding where the codestream ends.
         let len = box_end as u64;
         println!(
             "{what}: {calls} calls after the box, {spent} bytes walked, {} a call",
             spent / calls
         );
-        assert!(spent <= 3 * len, "{what}: {spent} bytes walked for {len}");
+        assert!(spent <= 4 * len, "{what}: {spent} bytes walked for {len}");
     }
+}
+
+/// A `jp2c` box whose payload ends inside a `COM` segment just after the
+/// bytes `FF D9`, with the `COM` going on past the box, then a tile-part of
+/// `Psot = 0` and 64 KiB of its data, fed 256 bytes at a time after the
+/// box. Once the `SOT` is in, the codestream is the box's payload whatever
+/// follows (it ends in `FF D9` before a tile-part of `Psot = 0`), so the
+/// calls read the boxes and the main header about once in all, and each
+/// gives what a read from the start gives.
+#[test]
+fn header_calls_on_a_jp2c_box_ending_in_ff_d9_inside_its_main_header_read_it_about_once() {
+    use crate::synth;
+    let whole = ppm_codestream(8);
+    let main = first_sot(&whole).unwrap();
+    let mut com = vec![0, 1];
+    com.extend([b'x'; 100]);
+    com.extend([0xFF, 0xD9]);
+    let in_box = 4 + com.len();
+    com.extend([b'y'; 2000]);
+    let mut codestream = whole[..main].to_vec();
+    codestream.extend(synth::seg(0xFF64, &com));
+    let cut = main + in_box;
+    assert_eq!(codestream[cut - 2..cut], [0xFF, 0xD9]);
+    let bytes = synth::jp2_file(
+        &[
+            synth::ihdr_for(&whole),
+            synth::bx(b"colr", &synth::colr_enum(17)),
+        ],
+        &[],
+        &codestream[..cut],
+        &[],
+    );
+    let box_end = bytes.len();
+    let mut bytes = [&bytes[..], &codestream[cut..]].concat();
+    bytes.extend(synth::sot(0, 0, 0, 1));
+    bytes.extend([0xFF, 0x93]);
+    bytes.resize(bytes.len() + (64 << 10), 0);
+    let options = DecodeOptions::default();
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&bytes[..box_end]);
+    assert_eq!(format!("{:?}", decoder.header()), "Ok(None)");
+    walked();
+    let mut spent = 0;
+    for chunk in bytes[box_end..].chunks(256) {
+        decoder.feed(chunk);
+        let got = format!("{:?}", decoder.header());
+        spent += walked();
+        assert_eq!(
+            got,
+            fresh_header(decoder.bytes(), &options),
+            "at {} bytes",
+            decoder.bytes_fed()
+        );
+        walked();
+    }
+    // A read from the start walks the box three times (see above).
+    let len = box_end as u64;
+    println!("{len}-byte box end, {spent} bytes walked");
+    assert!(spent <= 4 * len, "{spent} bytes walked for {len}");
 }
 
 /// The same files fed a byte at a time from the start, with a `header` call
@@ -2225,7 +2286,7 @@ fn header_calls_on_a_jp2c_box_ending_inside_its_main_header_fed_a_byte_at_a_time
         }
         let len = bytes.len() as u64;
         println!("{what}: {len} bytes, {spent} walked");
-        assert!(spent <= 3 * len, "{what}: {spent} bytes walked for {len}");
+        assert!(spent <= 5 * len, "{what}: {spent} bytes walked for {len}");
     }
 }
 
@@ -2277,7 +2338,14 @@ fn header_on_fixtures_whose_jp2c_box_ends_inside_the_main_header_is_a_read_from_
         }
     }
     files.sort();
-    assert!(files.len() > 50, "{} files", files.len());
+    // The published package leaves out the excluded directories, so it has
+    // fewer files; each is reported once.
+    for dir in crate::skip::EXCLUDED_DIRS {
+        crate::skip::excluded_path(dir);
+    }
+    let packaged = crate::skip::is_excluded_path("conformance/");
+    let (least_files, least_cases) = if packaged { (40, 100) } else { (50, 400) };
+    assert!(files.len() > least_files, "{} files", files.len());
     let options = DecodeOptions::default();
     let boxes: Vec<u8> = (0..40).flat_map(|_| synth::bx(b"free", &[])).collect();
     let mut cases = 0;
@@ -2336,6 +2404,6 @@ fn header_on_fixtures_whose_jp2c_box_ends_inside_the_main_header_is_a_read_from_
             }
         }
     }
-    println!("{cases} cases");
-    assert!(cases > 400, "{cases} cases");
+    println!("{} files, {cases} cases", files.len());
+    assert!(cases > least_cases, "{cases} cases");
 }

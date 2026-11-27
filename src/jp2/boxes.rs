@@ -396,6 +396,8 @@ pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
             break None;
         };
         boxes.push(Jp2Box { kind, payload });
+        #[cfg(test)]
+        super::tests::AFTER_BYTES.with(|read| read.set(read.get() + u64::from(length)));
         // A box of length 0 takes the rest of the input, so it is the last.
         open = lbox == 0;
         // `length >= header >= 8`, so every step moves at least 8 bytes and

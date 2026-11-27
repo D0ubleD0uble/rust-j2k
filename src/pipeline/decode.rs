@@ -679,11 +679,11 @@ pub(crate) struct KeptCut {
     /// Where the parse of the main header stopped, for the codestream that
     /// starts at `.0` in the input.
     main: Option<(usize, Box<codestream::MainCut>)>,
-    /// In a JP2 file whose codestream is the `jp2c` box's payload whatever
-    /// bytes follow ([`jp2::Jp2File::codestream_fixed`]), and whose main
-    /// header that payload cuts short, the error every read of more bytes
-    /// gives: the boxes before the codestream, the box and its payload are
-    /// all in and do not change.
+    /// In a JP2 file whose codestream no appended byte changes
+    /// ([`jp2::Jp2File::after_settled`]), and whose main header that
+    /// codestream, the `jp2c` box's payload, cuts short, the error every
+    /// read of more bytes gives: the boxes before the codestream, the box
+    /// and its payload are all in and do not change.
     ended: Option<Error>,
 }
 
@@ -1471,11 +1471,25 @@ fn read_jp2_prefix<'a>(
                 .wrapping_sub(bytes.as_ptr().addr());
             cut.jp2c = Some(start);
             let parsed = cut.parse_main(file.codestream, start);
-            // The `jp2c` box ends inside its main header, and the codestream
-            // is its payload whatever follows, so every read of more bytes
-            // gives this error: nothing it parses changes.
+            // The main header is cut short and no byte appended changes the
+            // codestream, so every read of more bytes gives this error:
+            // the boxes before it are whole and pass, and nothing it parses
+            // changes. Where the walk after the codestream is settled
+            // (`after_settled`), a cut main header means the codestream is
+            // a whole `jp2c` box's payload, by the arms of
+            // `locate_codestream`:
+            // - an end found at `EOC`, a tile-part of `Psot = 0` run to the
+            //   end of the input, or one cut two bytes past the box: the
+            //   walk stepped through the main header to an `SOT` in the
+            //   codestream, so the header is whole, not cut;
+            // - a payload that ends in `FF D9` before a tile-part of
+            //   `Psot = 0`, or a broken walk: the codestream is the payload.
+            //   Where the box is whole, it is fixed. Where the input cuts the
+            //   box, the payload is the rest of the input, the walk's own
+            //   bytes, which reach an `SOT` or a fault, so the parse does not
+            //   stop cut short.
             if let Err(error @ Error::Incomplete(_)) = &parsed {
-                if file.codestream_fixed {
+                if file.after_settled {
                     cut.main = None;
                     cut.ended = Some(error.clone());
                 }

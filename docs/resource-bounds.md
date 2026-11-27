@@ -674,11 +674,12 @@ calls read them about once in all (a 256 KiB `PPM` main header fed 256
 bytes at a time: 506 times over before, once now). Two cases are read from
 the start on each call: a box of length 0 before the codestream, which runs
 to the end of the bytes fed, and a `jp2c` box that ends inside its own main
-header where the bytes after the box read as more marker segments, which are
-refused or end the main header, until the bytes fed settle whether the
-codestream runs on past the box. Where the bytes after the box are not marker
-segments, the codestream is the box's payload whatever follows, and the calls
-give the error kept from the first read that finds that. To go on from
+header where the bytes after the box read as marker segments that the header's
+parse refuses, or that end the header, until the bytes fed let the walk of
+their segment and tile-part lengths reach an end or a fault, which a large
+`Psot` can put gigabytes away. Where the bytes after the box are not marker segments,
+the codestream is the box's payload whatever follows, and the calls give the
+error kept from the first read that finds that, holding under 4 KB. To go on from
 where it stopped, the decoder keeps what the main header's segments read so far
 set, held while the main header stays cut short, whether or not `header` is
 called again. Each override of a component's coding keeps its parsed form: up to

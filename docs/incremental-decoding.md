@@ -333,11 +333,14 @@ the segments before it set (`PPM` data as offsets, not a copy). The calls
 then read those boxes and segments about once in all. Two cases are read from
 the start on each call: a box of length 0 before the codestream, which runs to
 the end of the bytes fed, and a `jp2c` box that ends inside its own main header
-where the bytes after the box read as more marker segments, which are refused or
-end the main header (`KeptCut::main_still_cut` then drops its parse), until the
-bytes fed settle whether the codestream runs on past the box. Where they settle
-it as the box's payload, the error of that read is kept (`KeptCut::ended`) and
-given by every later call. The header of a tile-part not yet fed in full is read
+where the bytes after the box read as marker segments that the header's parse
+refuses, or that end the header (`KeptCut::main_still_cut` then drops its
+parse), until the bytes fed let the walk of their segment and tile-part lengths
+reach an end or a fault, which a large `Psot` can put gigabytes away. Where the
+codestream is then the box's payload whatever follows
+(`jp2::Jp2File::after_settled`), the error of that read is kept
+(`KeptCut::ended`) and given by every later call, and the parse is let go. The
+header of a tile-part not yet fed in full is read
 again on each call, as is that of a last tile-part whose `Psot` is 0, which is
 never whole. The tiles it learned of are charged the
 read's budget again, as a read from the start charges them, so each call gives
