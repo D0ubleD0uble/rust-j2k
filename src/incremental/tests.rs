@@ -1706,3 +1706,199 @@ fn options_changed_back_and_forth_stay_within_the_bound_on_walks_read_again() {
         decode_with(&bytes, &options).unwrap()
     );
 }
+
+/// What `header` must give on `prefix`: a header read from the start of
+/// those bytes, with nothing kept, and a main header cut short as `None`.
+fn fresh_header(prefix: &[u8], options: &DecodeOptions) -> String {
+    let lenient = options.clone().with_strict(false);
+    let read = match crate::pipeline::decode::read_header_streamed(prefix, &lenient, None) {
+        Ok(header) => Ok(Some(header)),
+        Err(Error::Incomplete(_)) => Ok(None),
+        Err(error) => Err(error),
+    };
+    format!("{read:?}")
+}
+
+/// The main-header bytes and the top-level box bytes the reads on this
+/// thread have walked since the last call.
+fn walked() -> u64 {
+    let main = codestream::tests::MAIN_HEADER_BYTES.with(|walked| walked.replace(0));
+    let boxes = crate::jp2::tests::BOX_BYTES.with(|walked| walked.replace(0));
+    main + boxes
+}
+
+/// A codestream of one 64 x 64 tile whose main header holds `segments`
+/// `PPM` markers of about 4 KiB each, then a tile-part with no data.
+fn ppm_codestream(segments: u8) -> Vec<u8> {
+    use crate::synth;
+    let siz = synth::siz_body([64, 64, 0, 0, 64, 64, 0, 0], &[[7, 1, 1]]);
+    let mut bytes = [
+        vec![0xFF, 0x4F],
+        synth::seg(0xFF51, &siz),
+        synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0)),
+        synth::seg(0xFF5C, &synth::qcd_none_body(0, &[8])),
+    ]
+    .concat();
+    for index in 0..segments {
+        // `Zppm`, then whole records of an `Nppm` of 0.
+        let mut body = vec![index];
+        body.resize(1 + 4 * 1024, 0);
+        bytes.extend(synth::seg(0xFF60, &body));
+    }
+    bytes.extend(synth::tile_part(0, 0, 1, &[], &[]));
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    bytes
+}
+
+/// A JP2 file of `codestream` with `padding` boxes of 8 bytes, and an
+/// `xml ` box after each 1000 of them, between its `jp2h` and its `jp2c`.
+fn padded_jp2(codestream: &[u8], padding: usize) -> Vec<u8> {
+    use crate::synth;
+    let between: Vec<Vec<u8>> = (0..padding)
+        .map(|index| {
+            if index % 1000 == 999 {
+                synth::bx(b"xml ", b"<a/>")
+            } else {
+                synth::bx(b"free", &[])
+            }
+        })
+        .collect();
+    synth::jp2_file(
+        &[
+            synth::ihdr_for(codestream),
+            synth::bx(b"colr", &synth::colr_enum(17)),
+        ],
+        &between,
+        codestream,
+        &[],
+    )
+}
+
+/// Feed `bytes` in pieces of `piece` bytes, calling `header` after each,
+/// with each call checked against a read from the start of the same bytes.
+/// Returns the bytes the calls walked in all.
+fn header_walk_after_each_feed(bytes: &[u8], piece: usize) -> u64 {
+    let options = DecodeOptions::default();
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    walked();
+    let mut spent = 0;
+    for chunk in bytes.chunks(piece) {
+        decoder.feed(chunk);
+        let got = format!("{:?}", decoder.header());
+        spent += walked();
+        let fed = decoder.bytes_fed();
+        assert_eq!(got, fresh_header(decoder.bytes(), &options), "at {fed} bytes");
+        walked();
+    }
+    assert!(matches!(decoder.header(), Ok(Some(_))));
+    spent
+}
+
+/// A main header of 256 KiB of `PPM` data, fed 256 bytes at a time with a
+/// `header` call after each: each call goes on from where the last one
+/// stopped, so the calls walk the header about once in all.
+#[test]
+fn header_calls_on_a_growing_ppm_main_header_walk_it_about_once() {
+    let bytes = ppm_codestream(64);
+    let spent = header_walk_after_each_feed(&bytes, 256);
+    let len = bytes.len() as u64;
+    println!("{len} bytes, {spent} walked");
+    assert!(spent <= 3 * len, "{spent} bytes walked for {len}");
+}
+
+/// The same with a main header of 64 KiB in a JP2 file, after 8000 boxes
+/// of 8 bytes before its `jp2c`, fed 64 bytes at a time: the calls walk the
+/// boxes before the codestream and its main header about once each in all.
+#[test]
+fn header_calls_on_growing_boxes_and_main_header_walk_them_about_once() {
+    let bytes = padded_jp2(&ppm_codestream(16), 8000);
+    let spent = header_walk_after_each_feed(&bytes, 64);
+    let len = bytes.len() as u64;
+    println!("{len} bytes, {spent} walked");
+    assert!(spent <= 4 * len, "{spent} bytes walked for {len}");
+}
+
+/// Where the first `SOT` marker after the first `SOC` is in `bytes`: about
+/// the end of the main header.
+fn first_sot(bytes: &[u8]) -> Option<usize> {
+    let soc = bytes.windows(2).position(|code| code == [0xFF, 0x4F])?;
+    bytes[soc..]
+        .windows(2)
+        .position(|code| code == [0xFF, 0x90])
+        .map(|at| soc + at)
+}
+
+/// Every codestream, JP2 and JPH file under `tests/fixtures`: `header`
+/// after each feed that doubles the bytes fed, and after each byte fed
+/// around the end of the main header and the start of the `jp2c` box, gives
+/// what a read from the start of the same bytes gives, with a reduction set
+/// and cleared between the calls.
+#[test]
+fn header_after_doubling_and_byte_feeds_is_a_read_from_the_start() {
+    let root = format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"));
+    let mut dirs = vec![std::path::PathBuf::from(root)];
+    let mut files = Vec::new();
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e, "j2k" | "j2c" | "jp2" | "jph"))
+            {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    assert!(files.len() > 100, "{} files", files.len());
+    let reduced = DecodeOptions::default().with_resolution_reduction(1);
+    let whole_options = DecodeOptions::default();
+    for path in &files {
+        let name = path.display().to_string();
+        let whole = std::fs::read(path).unwrap();
+        // Each read from the start costs its prefix, so a large file is fed
+        // only its first 2 MiB.
+        let bytes = &whole[..whole.len().min(2 << 20)];
+        let mut points = vec![];
+        let mut at = 1;
+        while at < bytes.len() {
+            points.push(at);
+            at *= 2;
+        }
+        points.push(bytes.len());
+        for near in [
+            first_sot(bytes),
+            bytes.windows(4).position(|kind| kind == b"jp2c"),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            points.extend(near.saturating_sub(40).max(1)..(near + 40).min(bytes.len()));
+        }
+        points.sort_unstable();
+        points.dedup();
+        let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+        let mut fed = 0;
+        for (index, &point) in points.iter().enumerate() {
+            decoder.feed(&bytes[fed..point]);
+            fed = point;
+            // The reduction is set for 16 calls, then cleared for 16.
+            let options = if index % 32 >= 16 {
+                &reduced
+            } else {
+                &whole_options
+            };
+            decoder
+                .set_resolution_reduction(options.resolution_reduction)
+                .unwrap();
+            assert_eq!(
+                format!("{:?}", decoder.header()),
+                fresh_header(&bytes[..point], options),
+                "{name} at {point} bytes"
+            );
+        }
+    }
+}

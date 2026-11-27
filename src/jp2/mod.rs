@@ -74,7 +74,7 @@ mod math_tests;
 #[cfg(test)]
 mod srgb_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) use after::check as check_after_codestream;
 pub use metadata::{

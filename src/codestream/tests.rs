@@ -6064,3 +6064,16 @@ fn hidden_cod(code: u16) -> (bool, bool) {
     let part = first_part_at(&bytes, &parsed, offset).expect("a first tile-part");
     (part.may_set_coding(), part.header().is_err())
 }
+
+/// The walk of the whole main header, from `SOC`, as `parse_main_header`
+/// starts it: the segments located and where the walk ended.
+fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
+    if bytes.len() < 2 && marker::SOC.to_be_bytes().starts_with(bytes) {
+        return Err(Error::incomplete("cut before `SOC`"));
+    }
+    if Cursor::at(bytes, 0).u16().ok() != Some(marker::SOC) {
+        return Err(Error::codestream("does not start with the `SOC` marker"));
+    }
+    let walk = super::walk_main_header(bytes, 2, 0);
+    Ok((walk.segments, walk.end))
+}
