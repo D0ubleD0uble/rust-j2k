@@ -671,16 +671,24 @@ megabytes of `PPM` data is parsed on every call from then on. Before that,
 while the bytes fed end inside the main header or before a JP2 file's
 `jp2c`, each call goes on from the last whole marker segment or box, so the
 calls read them about once in all (a 256 KiB `PPM` main header fed 256
-bytes at a time: 506 times over before, once now). For this it keeps
+bytes at a time: 506 times over before, once now). Two cases are read from
+the start on each call: a box of length 0 before the codestream, which runs
+to the end of the bytes fed, and a `jp2c` box that ends inside its own main
+header where the bytes after the box do not parse as more of that header.
+For this it keeps
 what the main header's segments read so far set, held while the main
 header stays cut short, whether or not `header` is called again. Each
-override of a component's coding keeps its parsed form: up to about 14
-bytes for each byte of `COC`, `QCC` and `RGN` segments. The highest ratio
-is for a one-step `QCC` in a file of at most 256 components, whose
-component index is one byte. With 16384 components the index is two
-bytes, and 128 KiB of one-step `QCC` segments keep 1.54 MB, about 12
-bytes for each byte. A component holds at most one `COC`, one `QCC` and
-one `RGN`, so the total is about 12 MB at most: a `COC` of precincts, a
+override of a component's coding keeps its parsed form: up to about 20
+bytes for each byte of `COC`, `QCC` and `RGN` segments, plus under 1 KB.
+The highest ratio is for a one-step `QCC` on each of 129 components. Its
+component index is one byte, as in any file of at most 256 components, and
+the tables that hold the overrides grow by doubling, so 129 entries leave
+the most room spare: 903 bytes of segments keep 17.7 KB, 19.6 bytes for
+each byte. With two-byte indexes, the ratio is 17.0 at 257 components and
+16.8 at 4097. At 16384 components, a power of two, 128 KiB of one-step
+`QCC` segments keep 1.54 MB, about 12 bytes for each byte. A component
+holds at most one `COC`, one `QCC` and one `RGN`, so the total is about
+12 MB at most: a `COC` of precincts, a
 97-step `QCC` and an `RGN` for each of 16384 components, 4.2 MB of
 segments, keep 12.2 MB. `PPM` segments keep 24 bytes each, 1.6 MB at most
 under the 65536 segments a main header may have; the rest (`POC`, of 32

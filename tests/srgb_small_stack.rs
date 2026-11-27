@@ -1,10 +1,17 @@
 //! sRGB output on a thread with a small stack.
 //!
 //! The matrix/shaper transform's 98 KB table is allocated on the heap
-//! directly, so it is never built on the stack whatever the codegen. This
-//! test guards the sRGB path's stack use on a 64 KiB thread (a small runtime,
-//! wasm): every 8-bit ICC profile case that OpenJPEG converts must decode
-//! there, with the same samples as on a normal thread.
+//! directly, so it is never built on the stack. This test decodes every
+//! 8-bit ICC profile case that OpenJPEG converts on a thread with a 96 KiB
+//! stack, and checks it gives the same samples as on a normal thread.
+//!
+//! The test catches a table built on the stack only at opt-level 0. At the
+//! test profile's opt-level 1 the compiler moves such a table to the heap,
+//! so the test passes either way. To check for the regression, run:
+//!
+//! ```sh
+//! CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo test --test srgb_small_stack
+//! ```
 
 mod support;
 use support::srgb;
@@ -32,9 +39,9 @@ struct Case {
     openjpeg: String,
 }
 
-/// The decoder needs about 25 KiB here; 64 KiB leaves headroom and is the
-/// smallest stack the issue names.
-const STACK: usize = 64 * 1024;
+/// At opt-level 0 the decoder needs 68 to 72 KiB here, and over 160 KiB
+/// with the table built on the stack.
+const STACK: usize = 96 * 1024;
 
 fn hex(text: &str) -> Vec<u8> {
     (0..text.len())

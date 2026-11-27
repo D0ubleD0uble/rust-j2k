@@ -15,9 +15,13 @@
 //! override its coding: a `QCC` of one, two or 97 steps, a `COC`, an `RGN`,
 //! or a `COC` of precincts, a 97-step `QCC` and an `RGN`. A one-step `QCC`
 //! keeps the most for each of its bytes, about 12; the last shape keeps the
-//! most a component can, 12.2 MB in all. It is also measured on 65000 `PPM`
-//! segments of one record each. Each header is cut inside a `COM` after its
-//! segments, so all of them are read.
+//! most a component can, 12.2 MB in all. A one-step `QCC` on each of 129
+//! components, whose indexes are one byte, keeps 19.6 bytes for each byte.
+//! The tables that hold the overrides grow by doubling: at 16384, a power of
+//! two, they have no room spare, and at 129 they have nearly half. It is
+//! also measured on 65000 `PPM` segments of one record
+//! each. Each header is cut inside a `COM` after its segments, so all of
+//! them are read.
 //!
 //! The bytes are counted with a counting global allocator, so this file
 //! holds a single test: a second one running in parallel would count into
@@ -72,11 +76,13 @@ fn big_tile_file() -> Vec<u8> {
     bytes
 }
 
-/// A main header of 16384 components, each with the segments `overrides`
-/// gives for it, then a `COM` the input ends inside. With the bytes of the
-/// segments `overrides` gave.
-fn cut_component_header(overrides: impl Fn(u16) -> Vec<Vec<u8>>) -> (Vec<u8>, usize) {
-    let components = 16384u16;
+/// A main header of `components` components, each with the segments
+/// `overrides` gives for it, then a `COM` the input ends inside. With the
+/// bytes of the segments `overrides` gave.
+fn cut_component_header(
+    components: u16,
+    overrides: impl Fn(u16) -> Vec<Vec<u8>>,
+) -> (Vec<u8>, usize) {
     let siz = synth::siz_body(
         [64, 64, 0, 0, 64, 64, 0, 0],
         &vec![[7, 1, 1]; usize::from(components)],
@@ -234,15 +240,21 @@ fn header_holds_what_the_files_tiles_need() {
     };
     let mut cut = Vec::new();
     for (name, overrides) in component_shapes() {
-        let (bytes, segments) = cut_component_header(overrides);
+        let (bytes, segments) = cut_component_header(16384, overrides);
         cut.push((name, bytes.len(), segments, held_for(&bytes)));
     }
+    // A one-step `QCC` on each of 129 components, with a one-byte index.
+    let (bytes, narrow_segments) = cut_component_header(129, |c| {
+        vec![synth::seg(0xFF5D, &[c as u8, 1 << 5, 8 << 3])]
+    });
+    let narrow = held_for(&bytes);
     let ppm = held_for(&cut_ppm_header());
 
     // Printed after the measures: the captured output is heap too.
     println!(
         "size {size}; held {none:?} (PPM file), {counts:?} (big tile), \
-         (name, header bytes, segment bytes, held) {cut:?}, {ppm} (65000 PPM)"
+         (name, header bytes, segment bytes, held) {cut:?}, \
+         {narrow} for {narrow_segments} (129 one-step QCC), {ppm} (65000 PPM)"
     );
     assert_eq!(none, [0; 3]);
     for held in counts {
@@ -251,8 +263,7 @@ fn header_holds_what_the_files_tiles_need() {
     // Up to about 12 bytes for each byte of these segments, whose component
     // indexes are two bytes, at least 2 for what is kept to count at all, and
     // about 24 bytes a `PPM` segment. The 13x bound covers only these
-    // 16384-component shapes: with a one-byte index (at most 256 components)
-    // a one-step `QCC` keeps about 14, the figure the docs give.
+    // 16384-component shapes, whose tables have no spare capacity.
     for (name, _, segments, held) in cut {
         assert!(
             (2 * segments..=13 * segments).contains(&held),
@@ -261,6 +272,13 @@ fn header_holds_what_the_files_tiles_need() {
         // The most a component can hold, 16384 times: about 12 MB.
         assert!(held <= 13_000_000, "{name}: {held} bytes held");
     }
+    // With a one-byte index and the tables' spare capacity, a one-step `QCC`
+    // keeps about 20 bytes for each byte, the figure the docs give (19.6
+    // measured; 17.0 at 257 components and 16.8 at 4097).
+    assert!(
+        (2 * narrow_segments..=20 * narrow_segments).contains(&narrow),
+        "{narrow} bytes held for {narrow_segments}"
+    );
     assert!(
         (16 * 65_000..=32 * 65_000).contains(&ppm),
         "{ppm} bytes held"
