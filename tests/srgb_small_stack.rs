@@ -1,10 +1,10 @@
 //! sRGB output on a thread with a small stack.
 //!
-//! Building a matrix/shaper transform used to put a 98 KB table on the
-//! stack before moving it to the heap, which aborts the process on a small
-//! stack (a 64 KiB runtime, wasm). Every 8-bit ICC profile case that
-//! OpenJPEG converts must decode on such a thread, with the same samples as
-//! on a normal one.
+//! The matrix/shaper transform's 98 KB table is allocated on the heap
+//! directly, so it is never built on the stack whatever the codegen. This
+//! test guards the sRGB path's stack use on a 64 KiB thread (a small runtime,
+//! wasm): every 8-bit ICC profile case that OpenJPEG converts must decode
+//! there, with the same samples as on a normal thread.
 
 mod support;
 use support::srgb;
@@ -53,6 +53,7 @@ fn wrap(codestream: &[u8], profile: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+#[cfg_attr(target_os = "wasi", ignore = "WASI cannot spawn threads")]
 fn icc_conversion_decodes_on_a_small_stack() {
     let root = support::synth::fixtures("");
     let text = std::fs::read_to_string(root.join("icc/profiles.json")).unwrap();
@@ -93,4 +94,8 @@ fn icc_conversion_decodes_on_a_small_stack() {
         .join()
         .unwrap();
     assert_eq!(got, want);
+    // Equal errors on both sides would pass vacuously. 62 of the cases build
+    // a matrix/shaper transform and convert.
+    let ok = got.iter().filter(|r| r.is_ok()).count();
+    assert!(ok >= 60, "only {ok} cases converted");
 }
