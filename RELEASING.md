@@ -9,8 +9,8 @@ environment.
 ## One-time bootstrap (first release only)
 
 crates.io has no "pending publisher" concept, so the trusted publisher cannot be
-registered until the crate already exists on crates.io. The first version must be
-published manually:
+registered until the crate already exists on crates.io. The first version must
+be published manually:
 
 1. Create a scoped API token at <https://crates.io/settings/tokens> with the
    `publish-new` and `publish-update` scopes for `rust-j2k`.
@@ -32,9 +32,10 @@ After this, every later release goes through the workflow with no token.
 
 Every release starts with a full-project review, before any version bump. The
 point is production completeness: the tag should never be the first time a
-whole-crate look happens. [docs/release-validation.md](docs/release-validation.md)
-describes every check a release runs, including the manual rounds,
-differential checks and mutation testing that are not listed here.
+whole-crate look happens.
+[docs/release-validation.md](docs/release-validation.md) describes every check a
+release runs, including the manual rounds, differential checks and mutation
+testing that are not listed here.
 
 1. **Pre-flight.** `rustup update stable` (CI uses the newest stable), clean
    tree on an up-to-date `main`, latest `main` CI run green.
@@ -62,9 +63,10 @@ differential checks and mutation testing that are not listed here.
 
 ## Cutting a release
 
-1. Update `CHANGELOG.md`: move items from `[Unreleased]` into a new dated version
-   section and refresh the compare links at the bottom. Consolidate duplicate
-   Keep-a-Changelog section headers that accumulated while features landed.
+1. Update `CHANGELOG.md`: move items from `[Unreleased]` into a new dated
+   version section and refresh the compare links at the bottom. Consolidate
+   duplicate Keep-a-Changelog section headers that accumulated while features
+   landed.
 2. Bump `version` in `Cargo.toml` to match, and the `rust-j2k` entry in both
    lockfiles. Cargo updates `Cargo.lock` on the next build, but not
    `fuzz/Cargo.lock`, which belongs to the detached fuzz workspace, so edit
@@ -74,10 +76,10 @@ differential checks and mutation testing that are not listed here.
 4. Point the published docs at the release, so docs.rs, crates.io and the
    `docs/` folder packaged in the crate show the docs for that version
    rather than `main`:
-   - In `src/`, `docs/` and `README.md`, change every `rust-j2k/blob/main/`
-     and `rust-j2k/tree/main/` link, and every such link pinned at an older
-     tag, to the new tag
-     (`sed -i -E 's#rust-j2k/(blob|tree)/(main|v[0-9]+\.[0-9]+\.[0-9]+)/#rust-j2k/\1/vX.Y.Z/#g' $(grep -rlE 'rust-j2k/(blob|tree)/' src docs README.md)`;
+   - In `src/`, `docs/`, `README.md` and `SECURITY.md`, change every
+     `rust-j2k/blob/main/` and `rust-j2k/tree/main/` link, and every such
+     link pinned at an older tag, to the new tag
+     (`sed -i -E 's#rust-j2k/(blob|tree)/(main|v[0-9]+\.[0-9]+\.[0-9]+)/#rust-j2k/\1/vX.Y.Z/#g' $(grep -rlE 'rust-j2k/(blob|tree)/' src docs README.md SECURITY.md)`;
      this is GNU sed, and BSD or macOS sed needs `sed -i '' -E` instead).
    - In `src/`, `docs/`, `README.md` and `SECURITY.md`, pin every docs.rs
      link at the new version:
@@ -88,7 +90,7 @@ differential checks and mutation testing that are not listed here.
 
    The tag does not exist yet when the PR is written, but it does by the time
    docs.rs builds the published crate. Afterwards, both
-   `grep -rnoE 'rust-j2k/(blob|tree)/[^/]+/' src docs README.md | grep -vE '(blob|tree)/vX.Y.Z/'`
+   `grep -rnoE 'rust-j2k/(blob|tree)/[^/]+/' src docs README.md SECURITY.md | grep -vE '(blob|tree)/vX.Y.Z/'`
    (with the new version in place of `vX.Y.Z`; `-o` prints each link on its
    own, so a stale link on the same line as a new one still shows) and
    `grep -nE '\]\((docs|[A-Z][A-Za-z-]*\.md|LICENSE)' README.md` should print
@@ -106,15 +108,16 @@ differential checks and mutation testing that are not listed here.
    deployment in the GitHub UI (Actions → the run → Review deployments).
 8. On approval it publishes to crates.io and creates the GitHub Release.
 9. Once the release is published, open a PR that moves the pinned links in
-   `src/`, `docs/` and `README.md` back to `main`, so `main` does not keep
-   pointing at the old tag:
-   `sed -i -E 's#rust-j2k/(blob|tree)/v[0-9]+\.[0-9]+\.[0-9]+/#rust-j2k/\1/main/#g' $(grep -rlE 'rust-j2k/(blob|tree)/v' src docs README.md)`.
-   `grep -rnE 'rust-j2k/(blob|tree)/v[0-9]' src docs README.md` should then
-   print nothing. Move the docs.rs links back to `latest` the same way:
+   `src/`, `docs/`, `README.md` and `SECURITY.md` back to `main`, so `main`
+   does not keep pointing at the old tag:
+   `sed -i -E 's#rust-j2k/(blob|tree)/v[0-9]+\.[0-9]+\.[0-9]+/#rust-j2k/\1/main/#g' $(grep -rlE 'rust-j2k/(blob|tree)/v' src docs README.md SECURITY.md)`.
+   `grep -rnE 'rust-j2k/(blob|tree)/v[0-9]' src docs README.md SECURITY.md`
+   should then print nothing. Move the docs.rs links back to `latest` the
+   same way:
    `sed -i -E 's#docs\.rs/rust-j2k/[0-9]+\.[0-9]+\.[0-9]+/#docs.rs/rust-j2k/latest/#g' $(grep -rlE 'docs\.rs/rust-j2k/[0-9]' src docs README.md SECURITY.md)`.
-   The tagged commit keeps its pins, so the published crate
-   still shows the release's docs. The `README.md` links that step 4 made
-   absolute can stay absolute, now at `main`.
+   The tagged commit keeps its pins, so the published crate still shows the
+   release's docs. The `README.md` links that step 4 made absolute can stay
+   absolute, now at `main`.
 
 ## Versioning
 

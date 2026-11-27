@@ -42,23 +42,26 @@ If you use the crate:
 
 If you work on the crate:
 
-- [roadmap.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md) says what comes next, and the gate each phase must
-  pass.
-- [development.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/development.md) sets up the reference decoders and the
-  extra tools, shows how to regenerate an oracle snapshot, and lists the
-  checks for work on a decode stage. You don't need it to run the tests.
+- [roadmap.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md)
+  says what comes next, and the gate each phase must pass.
+- [development.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/development.md)
+  sets up the reference decoders and the extra tools, shows how to regenerate
+  an oracle snapshot, and lists the checks for work on a decode stage. You
+  don't need it to run the tests.
 - [`tests/fixtures/README.md`](../tests/fixtures/README.md) describes each
   test fixture, where it came from and the command that made it.
-- [`fuzz/README.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/fuzz/README.md) shows how to run the fuzz targets.
+- [`fuzz/README.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/fuzz/README.md)
+  shows how to run the fuzz targets.
 - [release-validation.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/release-validation.md)
   lists the checks a release runs before it is tagged: what each catches, how
   to run it, its cost and when it runs.
 - [roadmap-phase1.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase1.md),
   [roadmap-phase2.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase2.md),
-  [roadmap-phase3.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase3.md) and
-  [roadmap-phase4.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase4.md) are the plans of the finished phases,
-  with each step tied to its module and the oracle that checked it. They are
-  kept as the record of how the decoder was built.
+  [roadmap-phase3.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase3.md)
+  and [roadmap-phase4.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase4.md)
+  are the plans of the finished phases, with each step tied to its module and
+  the oracle that checked it. They are kept as the record of how the decoder
+  was built.
 - [roadmap-phase5.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase5.md)
   is the plan for the Part 1 encoder, with each step tied to its module and the
   oracle that checks it.

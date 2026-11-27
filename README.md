@@ -159,7 +159,8 @@ The API docs use the standard's names for the parts of a codestream:
   "Part 1"): lossless and lossy compression, images cut into tiles, quality
   layers, every order the data can be stored in, and regions coded at higher
   quality.
-  [docs/scope.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md) lists every feature.
+  [docs/scope.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/scope.md)
+  lists every feature.
 - It reads **HTJ2K** (ISO/IEC 15444-15, "Part 15"), the high-throughput
   variant, including files that mix HT and Part 1 code-blocks, and `.jph`
   files, the HTJ2K version of `.jp2`. You don't need to know whether a file
@@ -171,8 +172,8 @@ The API docs use the standard's names for the parts of a codestream:
 - It can **convert to sRGB** if you ask (`ColorOutput::Srgb`). It converts
   sYCC, and the restricted ICC profiles JP2 allows (gray, or RGB defined by a
   matrix and curves), giving the same samples as OpenJPEG with LittleCMS.
-- It can **decode a smaller image**. Each resolution level you drop about halves the
-  width and height (`DecodeOptions::with_resolution_reduction`).
+- It can **decode a smaller image**. Each resolution level you drop about
+  halves the width and height (`DecodeOptions::with_resolution_reduction`).
 - It can **decode fewer quality layers**, for a coarser image at full size in
   less time (`DecodeOptions::with_max_quality_layers`).
 - It can **decode part of an image**: a rectangle of it, one tile, or some of
@@ -188,8 +189,9 @@ The API docs use the standard's names for the parts of a codestream:
 ## What it doesn't do
 
 - It doesn't **encode**. It reads JPEG 2000 but can't write it. An encoder is
-  planned ([docs/roadmap.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md)). To write JPEG 2000 today, use
-  OpenJPEG's `opj_compress`.
+  planned
+  ([docs/roadmap.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap.md)).
+  To write JPEG 2000 today, use OpenJPEG's `opj_compress`.
 - It doesn't **give you display pixels**. You get each channel as its own
   `Vec<i32>` at the file's depth and in the file's color space, not 8-bit RGBA.
   To show an image, ask for sRGB and scale each value to 8 bits yourself (see
@@ -206,8 +208,8 @@ The API docs use the standard's names for the parts of a codestream:
   ICC profiles that work through a lookup table or through Lab, are refused with
   `Error::Unsupported` when you ask for sRGB. Decoding without the option still
   gives you the values as stored.
-  [docs/srgb-output.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/srgb-output.md#every-input-and-its-result) lists
-  every case.
+  [docs/srgb-output.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/srgb-output.md#every-input-and-its-result)
+  lists every case.
 - It doesn't **read GRIB2 files**. You find the JPEG 2000 bytes in the message
   and turn the decoded numbers into physical values yourself (see
   [GRIB2 grids](#grib2-grids)).
@@ -325,14 +327,15 @@ file's size or padding.
 
 Three limits can be raised: `sample_limit`, `packet_work_limit` and
 `code_block_work_limit` on `DecodeOptions`. For a file you trust, set them to
-`SampleLimit::Unlimited` and `WorkLimit::Unlimited`. The process then aborts if memory runs out, instead of
-returning an error. Damage can also look like a limit, since one flipped bit
-in the header can declare an absurd size, so don't lift the limits on that
-evidence alone. The error says which limit refused the file and what to
-raise it to, as data: `LimitDetail::kind` and `LimitDetail::retry_with`.
-A code-block work or tile cap refusal also gives the tile, the amount it
-needs and the amount's unit (`LimitDetail::refused_at`), on every target. `DecodeOptions::raised_for` sets that limit
-for you:
+`SampleLimit::Unlimited` and `WorkLimit::Unlimited`. The process then
+aborts if memory runs out, instead of returning an error. Damage can also
+look like a limit, since one flipped bit in the header can declare an
+absurd size, so don't lift the limits on that evidence alone. The error says
+which limit refused the file and what to raise it to, as data:
+`LimitDetail::kind` and `LimitDetail::retry_with`. A code-block work or tile
+cap refusal also gives the tile, the amount it needs and the amount's unit
+(`LimitDetail::refused_at`), on every target. `DecodeOptions::raised_for`
+sets that limit for you:
 
 ```rust
 use rust_j2k::{DecodeOptions, Error, Image, LimitKind, Raise, SampleLimit, WorkLimit, decode_with};
@@ -386,9 +389,9 @@ fn decode_raising_limits(bytes: &[u8]) -> Result<Image, Error> {
 }
 ```
 
-For files from outside, don't retry: set `sample_limit` to `SampleLimit::AtMost(n)`
-and run each decode under a timeout (see [Running a decode
-service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service)).
+For files from outside, don't retry: set `sample_limit` to
+`SampleLimit::AtMost(n)` and run each decode under a timeout (see [Running
+a decode service](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md#running-a-decode-service)).
 A retry can be refused again, by the same limit or another, so the loop stops
 after a few. The [`WorkLimit`
 docs](https://docs.rs/rust-j2k/latest/rust_j2k/enum.WorkLimit.html) say how
@@ -401,19 +404,22 @@ It decodes all 23 test codestreams of the JPEG 2000 conformance suite
 files within theirs, and its 41 HTJ2K codestreams and 20 JPH files within
 theirs. Lossless images, including GRIB2 grids written by eccodes, match
 OpenJPEG bit for bit. The details are in
-[docs/correctness.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md), and the places where this decoder
-and OpenJPEG differ on purpose are in
-[docs/openjpeg-departures.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/openjpeg-departures.md). The test suite
-needs no external tools.
+[docs/correctness.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/correctness.md),
+and the places where this decoder and OpenJPEG differ on purpose are in
+[docs/openjpeg-departures.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/openjpeg-departures.md).
+The test suite needs no external tools.
 
 The speed and memory of this decoder next to OpenJPEG, Grok, OpenJPH and
-hayro-jpeg2000 are in [docs/performance.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/performance.md).
+hayro-jpeg2000 are in
+[docs/performance.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/performance.md).
 
 ## Contributing and security
 
-To contribute, start with [CONTRIBUTING.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/CONTRIBUTING.md). It has the
-workflow and the checks every pull request must pass. To report a crash, a hang
-or another vulnerability, see [SECURITY.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md).
+To contribute, start with
+[CONTRIBUTING.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/CONTRIBUTING.md).
+It has the workflow and the checks every pull request must pass. To report a
+crash, a hang or another vulnerability, see
+[SECURITY.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/SECURITY.md).
 
 ## License
 
