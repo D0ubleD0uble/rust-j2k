@@ -20,6 +20,9 @@ thread_local! {
     /// The first tile-part headers the fault walk has read again, for a
     /// later tile-part that restates a coding value, on this thread.
     pub(crate) static FIRST_REREADS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The bytes of the main-header marker segments the walk has located
+    /// on this thread.
+    pub(crate) static MAIN_HEADER_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 fn be16(v: u16) -> [u8; 2] {

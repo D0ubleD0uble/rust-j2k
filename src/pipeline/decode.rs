@@ -83,9 +83,47 @@ fn read_header_from(
     debug_assert!(kept.is_none() || !options.strict);
     debug_assert!(!hold || !options.strict);
     check_options(options)?;
+    let Some(kept) = kept else {
+        return read_header_cut(bytes, options, None, None, hold);
+    };
+    // What an earlier call kept of a header cut short, if it holds for
+    // these bytes, and kept again only while the header is cut short.
+    let mut cut = kept
+        .cut
+        .take()
+        .filter(|cut| cut.holds_for(bytes))
+        .map_or_else(KeptCut::default, |cut| *cut);
+    let read = read_header_cut(bytes, options, Some(&mut *kept), Some(&mut cut), hold);
+    if matches!(read, Err(Error::Incomplete(_))) && cut.keeps() {
+        cut.key(bytes);
+        kept.cut = Some(Box::new(cut));
+    }
+    read
+}
+
+/// [`read_header_from`], going on from `cut` where an earlier call found
+/// the main header cut short.
+fn read_header_cut(
+    bytes: &[u8],
+    options: &DecodeOptions,
+    kept: Option<&mut HeaderCache>,
+    mut cut: Option<&mut KeptCut>,
+    hold: bool,
+) -> Result<Header> {
     let reduction = options.resolution_reduction;
     if !bytes.starts_with(&[0xFF, 0x4F]) && jp2::looks_like_jp2(bytes) {
-        let prefix = match read_jp2_prefix(bytes, options, hold) {
+        // Where an earlier call found the input ending before the main
+        // header is whole, a call goes on from there, and gives the same
+        // while it still ends there.
+        if let Some(cut) = cut.as_deref_mut() {
+            if let Some(ended) = cut.boxes_still_cut(bytes) {
+                return Err(ended);
+            }
+            if let Some(ended) = cut.main_still_cut(bytes) {
+                return Err(ended);
+            }
+        }
+        let prefix = match read_jp2_prefix(bytes, options, hold, cut.as_deref_mut()) {
             Ok(prefix) => prefix,
             // A fault in a box before the codestream that more bytes can
             // change: the main header is not in, and may never be.
@@ -96,7 +134,16 @@ fn read_header_from(
                     fault.error
                 )));
             }
-            Err(fault) => return Err(fault.error),
+            Err(fault) => {
+                // The input ends before the `jp2c` box: the next call walks
+                // the boxes from where this one stops.
+                if let Some(cut) = cut {
+                    if matches!(fault.error, Error::Incomplete(_)) && cut.jp2c.is_none() {
+                        cut.boxes = jp2::BoxesCut::start(bytes);
+                    }
+                }
+                return Err(fault.error);
+            }
         };
         // Where the codestream starts in the input, which keys what is kept.
         let start = prefix
@@ -160,7 +207,10 @@ fn read_header_from(
         });
     }
     check_format_known(bytes)?;
-    let parsed = codestream::parse_header(bytes)?;
+    let parsed = match cut {
+        Some(cut) => cut.parse_main(bytes, 0)?,
+        None => codestream::parse_header(bytes)?,
+    };
     let siz = &parsed.header.siz;
     // The selection's refusals come after the checks before it, as the decode
     // has them. The sample limit counts the tiles the selection reads, so it
@@ -599,6 +649,113 @@ pub(crate) struct HeaderCache {
     /// The walk for the decode's error for the tile-parts, which does not
     /// depend on the selection or the reduction, so it is kept apart.
     fault: Option<Box<KeptFault>>,
+    /// Where the last call stopped, if it found the main header cut short.
+    /// It depends on no option, so a change of options keeps it.
+    cut: Option<Box<KeptCut>>,
+}
+
+/// What a header read that found the input ending before the main header
+/// is whole keeps, so that the next read goes on from there instead of from
+/// the start: where the walk of a JP2 file's boxes before the codestream
+/// stopped ([`jp2::BoxesCut`]), or where the parse of the main header
+/// stopped ([`codestream::MainCut`]). A read on more bytes then reads each
+/// box and marker segment once over the reads, and gives what a read from
+/// the start gives. It is kept only while the reads find the main header
+/// cut short: the first read that gives anything else drops it.
+#[derive(Default)]
+pub(crate) struct KeptCut {
+    /// The bytes of the input when it was kept, and a hash of the first 64
+    /// of them, which a later input must start with: as cheap a defense as
+    /// [`MainKey`]'s against a read of another input on the same cache.
+    len: usize,
+    head: u64,
+    /// In a JP2 file, where the walk of the boxes before the codestream
+    /// stopped.
+    boxes: Option<jp2::BoxesCut>,
+    /// In a JP2 file, where the codestream starts, once a read has read the
+    /// boxes before it and they pass. More bytes change neither.
+    jp2c: Option<usize>,
+    /// Where the parse of the main header stopped, for the codestream that
+    /// starts at `.0` in the input.
+    main: Option<(usize, codestream::MainCut)>,
+}
+
+impl KeptCut {
+    /// The hash of the first bytes of `bytes`, up to 64.
+    fn head_of(bytes: &[u8]) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes[..bytes.len().min(64)].hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Key what is kept on `bytes`, the input it was kept for.
+    fn key(&mut self, bytes: &[u8]) {
+        self.len = bytes.len();
+        self.head = Self::head_of(bytes);
+    }
+
+    /// Whether what is kept holds for `bytes`: they are no shorter than the
+    /// input it was kept for, and start with the same bytes.
+    fn holds_for(&self, bytes: &[u8]) -> bool {
+        bytes.len() >= self.len && Self::head_of(&bytes[..self.len]) == self.head
+    }
+
+    /// Whether there is anything to go on from.
+    fn keeps(&self) -> bool {
+        self.boxes.is_some() || self.main.is_some()
+    }
+
+    /// The error a read of `bytes` gives where the walk of the boxes before
+    /// the codestream still ends before the `jp2c` box, going on from where
+    /// it stopped. `None` where there is no such walk or the read may give
+    /// anything else, which drops the walk.
+    fn boxes_still_cut(&mut self, bytes: &[u8]) -> Option<Error> {
+        let ended = self.boxes.as_mut()?.resume(bytes);
+        if ended.is_none() {
+            self.boxes = None;
+        }
+        ended
+    }
+
+    /// The error a read of the JP2 file `bytes` gives where the main header
+    /// is still cut short, going on from where its parse stopped. `None`
+    /// where there is no such parse or the main header may be whole, which
+    /// drops the parse.
+    ///
+    /// The boxes before the codestream passed, and more bytes do not change
+    /// them. The codestream the read parses starts where the parse kept
+    /// started, and runs at most to the end of the input, so where the
+    /// input still ends inside the main header, so does the codestream: a
+    /// main header the input cuts short is cut short in any shorter input.
+    fn main_still_cut(&mut self, bytes: &[u8]) -> Option<Error> {
+        let start = self.jp2c?;
+        let (at, main) = self.main.take()?;
+        let tail = bytes.get(start..).filter(|_| at == start)?;
+        match codestream::parse_header_resumed(tail, Some(main)) {
+            Err((error @ Error::Incomplete(_), Some(main))) => {
+                self.main = Some((start, main));
+                Some(error)
+            }
+            _ => None,
+        }
+    }
+
+    /// Parse the main header of `codestream`, which starts at `start` in the
+    /// input, going on from where an earlier parse of the same codestream
+    /// stopped, and keep where this one stops, if the input ends inside the
+    /// header.
+    fn parse_main(&mut self, codestream: &[u8], start: usize) -> Result<codestream::ParsedHeader> {
+        let from = self
+            .main
+            .take()
+            .filter(|(at, main)| *at == start && main.len() <= codestream.len())
+            .map(|(_, main)| main);
+        codestream::parse_header_resumed(codestream, from).map_err(|(error, main)| {
+            self.main = main.map(|main| (start, main));
+            error
+        })
+    }
 }
 
 /// [`HeaderCache::fault`], and what it was kept for.
@@ -1283,10 +1440,14 @@ struct Jp2Prefix<'a> {
 /// The faults before these, and those of whole boxes, are final, as more
 /// bytes change neither the boxes they are in nor the ones before them.
 /// The metadata fails only on an internal inconsistency, so it is not held.
+///
+/// `cut` is what a header read keeps while the main header is cut short
+/// ([`KeptCut`]): the main header's parse goes on from there.
 fn read_jp2_prefix<'a>(
     bytes: &'a [u8],
     options: &DecodeOptions,
     streamed: bool,
+    cut: Option<&mut KeptCut>,
 ) -> std::result::Result<Jp2Prefix<'a>, jp2::BoxFault> {
     let file =
         jp2::parse_boxes(bytes, &options.packet_work_limit).map_err(|fault| jp2::BoxFault {
@@ -1294,7 +1455,20 @@ fn read_jp2_prefix<'a>(
             ..fault
         })?;
     jp2::check_box_layout(&file)?;
-    let parsed = codestream::parse_header(file.codestream)?;
+    let parsed = match cut {
+        Some(cut) => {
+            // The boxes before the codestream are read and pass, and more
+            // bytes do not change them.
+            let start = file
+                .codestream
+                .as_ptr()
+                .addr()
+                .wrapping_sub(bytes.as_ptr().addr());
+            cut.jp2c = Some(start);
+            cut.parse_main(file.codestream, start)?
+        }
+        None => codestream::parse_header(file.codestream)?,
+    };
     let siz = &parsed.header.siz;
     let cap = samples::cap(&options.sample_limit, bytes.len());
     let selection = window::select(siz, options);
@@ -1392,7 +1566,7 @@ fn decode_jp2(
 ) -> Result<Image> {
     // A refine reads a stream that may still grow, and holds an error that
     // more bytes can replace.
-    let prefix = match read_jp2_prefix(bytes, options, ledger.is_some()) {
+    let prefix = match read_jp2_prefix(bytes, options, ledger.is_some(), None) {
         Ok(prefix) => prefix,
         Err(fault) => return held_unless(!fault.open, ledger, Err(fault.error)),
     };

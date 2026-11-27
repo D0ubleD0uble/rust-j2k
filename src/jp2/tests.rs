@@ -21,6 +21,12 @@ mod palette;
 mod rreq;
 mod uuid_info;
 
+thread_local! {
+    /// The bytes of the whole top-level boxes the box walks have read on
+    /// this thread.
+    pub(crate) static BOX_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 const CODESTREAM: &[u8] = include_bytes!("../../tests/fixtures/multicomponent_lossless.j2k");
 const WIDTH: u32 = 24;
 const HEIGHT: u32 = 16;
