@@ -299,18 +299,21 @@ const CHECKED: [&[u8; 4]; 8] = [
 /// Whether no byte appended to the input changes what [`check`] gives on
 /// the walk after the codestream `after`, once OpenJPEG reads it:
 ///
-/// - the walk stopped for good on bytes in ([`AfterCodestream::ended`]);
-/// - or it ends on a box of length 0 of a type [`check_box`] does not read
-///   ([`CHECKED`]), such as `xml `. That box runs to the end of the input,
-///   so no box follows it whatever is appended. While under 2^32 bytes
-///   follow its header, the walk takes it and [`check`] passes it; from
-///   2^32 on, the walk ends before it with no fault. Either way [`check`]
-///   reads the same whole boxes before it, in the same state.
+/// - the walk stopped for good on bytes in ([`AfterCodestream::ended`]),
+///   a box of length 0 with 2^32 bytes or more from its start among them:
+///   the walk ends before it with no fault, and more bytes keep it so;
+/// - or it ends on a box of length 0, under 2^32 bytes from its start, of
+///   a type [`check_box`] does not read ([`CHECKED`]), such as `xml `. That
+///   box runs to the end of the input, so no box follows it whatever is
+///   appended. While it stays under 2^32 bytes, the walk takes it and
+///   [`check`] passes it; from 2^32 on, the walk ends before it as above.
+///   Either way [`check`] reads the same whole boxes before it, in the same
+///   state.
 ///
-/// A box of length 0 of a type [`check_box`] reads can still change the
-/// answer: its contents grow (a `colr`, a `jp2h`), and from 2^32 bytes on
-/// it is skipped, which takes away a fault of its type alone (an `ftyp`, a
-/// second `pclr`).
+/// Under 2^32 bytes, a box of length 0 of a type [`check_box`] reads can
+/// still change the answer: its contents grow (a `colr`, a `jp2h`), and
+/// from 2^32 bytes on it is skipped, which takes away a fault of its type
+/// alone (an `ftyp`, a second `pclr`).
 pub(crate) fn settled(after: &AfterCodestream<'_>) -> bool {
     let open_last = after.open && after.fault.is_none();
     after.ended

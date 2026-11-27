@@ -2464,3 +2464,62 @@ fn header_on_fixtures_whose_jp2c_box_ends_inside_the_main_header_is_a_read_from_
     println!("{} files, {cases} cases", files.len());
     assert!(cases > least_cases, "{cases} cases");
 }
+
+/// A gray JP2 file whose one tile-part's header has a `COC` for component
+/// 5, which the image does not have, then `trailing` after the codestream.
+fn coc_fault_file(trailing: &[u8]) -> Vec<u8> {
+    use crate::synth;
+    let mut codestream = vec![0xFF, 0x4F];
+    let siz = synth::siz_body([4, 4, 0, 0, 4, 4, 0, 0], &[[7, 1, 1]]);
+    codestream.extend(synth::seg(0xFF51, &siz));
+    codestream.extend(synth::seg(0xFF52, &synth::cod_body(1, 0, 0, 0)));
+    codestream.extend(synth::seg(0xFF5C, &synth::qcd_none_body(2, &[8])));
+    let coc = synth::seg(0xFF53, &[5, 0, 0, 0, 0, 0, 0]);
+    codestream.extend(synth::tile_part(0, 0, 1, &coc, &[0]));
+    codestream.extend([0xFF, 0xD9]);
+    let mut bytes = synth::jp2_file(
+        &[
+            synth::ihdr_for(&codestream),
+            synth::bx(b"colr", &synth::colr_enum(17)),
+        ],
+        &[],
+        &codestream,
+        &[],
+    );
+    bytes.extend(trailing);
+    bytes
+}
+
+/// A fault of the tile-parts, then a box of length 0 after the codestream
+/// with 2^32 bytes or more from its start: OpenJPEG's walk there ends
+/// before the box with no fault, and more bytes keep it so, so `refine`
+/// gives the fault at once, after an `xml ` and after a `bpcc`, a type the
+/// decode checks. Under 2^32 bytes it waits after the `bpcc`. The bytes
+/// are moved in rather than fed, so the zeros stay allocated lazily and
+/// the test needs little memory.
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn a_fault_before_a_box_of_length_0_past_2_32_bytes_is_final() {
+    let lenient = DecodeOptions::default().with_strict(false);
+    for kind in [b"xml ", b"bpcc"] {
+        let name = String::from_utf8_lossy(kind).into_owned();
+        let bytes = coc_fault_file(&[&[0, 0, 0, 0][..], kind, &[7]].concat());
+        let mut short = IncrementalDecoder::new(lenient.clone()).unwrap();
+        short.feed(&bytes);
+        let waits = matches!(short.refine(), Ok(Refined::Waiting(Waiting::Held { .. })));
+        assert_eq!(waits, kind == b"bpcc", "{name}: under 2^32 bytes");
+        let mut padded = vec![0u8; bytes.len() + (1 << 32) + 16];
+        padded[..bytes.len()].copy_from_slice(&bytes);
+        let whole = decode_with(&padded, &lenient)
+            .err()
+            .map(|e| format!("{e:?}"));
+        assert!(
+            whole.as_ref().is_some_and(|e| e.contains("COC")),
+            "{name}: {whole:?}"
+        );
+        let mut decoder = IncrementalDecoder::new(lenient.clone()).unwrap();
+        decoder.bytes = padded;
+        let refined = decoder.refine().err().map(|e| format!("{e:?}"));
+        assert_eq!(refined, whole, "{name}");
+    }
+}
