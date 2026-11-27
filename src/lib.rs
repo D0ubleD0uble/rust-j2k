@@ -327,12 +327,15 @@ mod readme_examples {}
 ///   times the output for a square tile, about 2.7 GiB at 2^29 samples,
 ///   and more for a tall, narrow tile or while a palette expands (see [the
 ///   sample limit][sample-limit]). A tile's code-block segment records can
-///   add up to about 65 bytes per byte of input. The limit also sets the code-blocks and
-///   precincts one tile may hold: one for each 512 and each 2048 samples it
-///   allows, and at least 2^20 and 2^18. This is for the one-shot functions; an
-///   [`IncrementalDecoder`] keeps per-tile state and can hold up to about
-///   three times one decode's peak, plus the bytes fed and a table of 24 bytes
-///   per tile index up to the highest seen (about 1.5 MiB for 65535 tiles).
+///   add up to about 65 bytes per byte of input, and JP2 metadata boxes up to
+///   about 6.5 bytes for each byte of them. The limit also sets the
+///   code-blocks and precincts one tile may hold: one for each 512 and each
+///   2048 samples it allows, and at least 2^20 and 2^18. This is for the
+///   one-shot functions; an [`IncrementalDecoder`] keeps per-tile state and can
+///   hold one decode's peak plus the packet walks it keeps, at most twice the
+///   image's samples plus twice the walk of the largest tile walked so far,
+///   plus up to twice the bytes fed and a table of 24 bytes per tile index up
+///   to the highest seen (about 1.5 MiB for 65535 tiles).
 /// - Reading the packet headers of every tile may take
 ///   at most 2^24 steps, or 32 per byte of tile data when that is more. A
 ///   step is a packet read, a run of code-blocks a header skips without
@@ -1393,7 +1396,7 @@ impl DecodeOptions {
     /// wide: about 4.1 GiB and 9.6 GiB for a file of 100 MB, input included.
     /// A file that spends its bytes on code-block segments can peak past 43
     /// with square tiles; about 102 bytes per byte is the bound for any
-    /// file.
+    /// file, plus up to about 6.5 bytes for each byte of JP2 metadata boxes.
     ///
     /// Under a window or a tile ([`region`](Self::region)), the count
     /// is the samples of the tiles the decode reads, in every component, as

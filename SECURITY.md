@@ -44,11 +44,14 @@ input may be hostile. With the default limits, the public functions (`decode`,
 the setters) return either a result or a typed `Error` for any input. They
 never panic, read out of bounds or hang, and they allocate at most what the
 limits allow. For the one-shot functions that is about 6.4 GiB at peak for an
-input of up to 64 MiB, and about 102 bytes per byte of input past that. An
-`IncrementalDecoder` holds up to about three times one decode's peak, plus
-the bytes fed. If the machine can't supply that, the process aborts, as any
-Rust program does; that is not a bug. If a panic, an out-of-bounds read, a
-hang or a larger allocation from any other input happens, report it as
+input of up to 64 MiB, and about 102 bytes per byte of input past that, plus
+up to about 6.5 bytes for each byte of JP2 metadata boxes (step 1 of [Running
+a decode service](#running-a-decode-service)). An `IncrementalDecoder` holds
+one decode's peak plus the packet walks it keeps, at most twice the image's
+samples plus twice the walk of the largest tile walked so far, plus up to
+twice the bytes fed. If the machine can't supply that, the process aborts, as
+any Rust program does; that is not a bug. If a panic, an out-of-bounds read,
+a hang or a larger allocation from any other input happens, report it as
 above.
 
 By default the decoded image may hold 2^29 samples (2 GiB as `i32`), or 8
@@ -62,12 +65,15 @@ images; see the [`decode`
 docs](https://docs.rs/rust-j2k/latest/rust_j2k/fn.decode.html)). A file
 that spends its bytes on code-block segments peaks past 43 with square
 tiles too: a 96 MB file of one such tile after 39 tiles of samples peaked
-at about 77 bytes per byte. About 102 is the bound for any file. Padding counts
+at about 77 bytes per byte. About 102 is the bound for any file, plus up to
+about 6.5 for each byte of JP2 metadata boxes. Padding counts
 as input, even in a conformant file (`COM` segments, a JP2 `xml ` box, bytes
 after `EOC`), and it compresses well: 67 MB of zeros gzips to 65 KB. Bound the
 input's size (step 1 of [Running a decode service](#running-a-decode-service)).
-Past 64 MiB the worst-case peak is about 102 times that size, and up to about
-three times that for an `IncrementalDecoder`. A one-tile 1 x 2^30 image
+Past 64 MiB the worst-case peak is about 102 times that size, plus up to about
+6.5 bytes for each byte of JP2 metadata boxes, and, for an
+`IncrementalDecoder`, one decode's peak plus the packet walks it keeps and the
+bytes fed (see below). A one-tile 1 x 2^30 image
 followed by 128 MiB of zeros after `EOC` (134,283,241 bytes) decodes at the
 defaults (`strict` on) in 23.5 s with a peak RSS of 8.30 GiB, measured. The
 sample limit also sets how many code-blocks and precincts one tile may hold:
@@ -79,9 +85,12 @@ For a ceiling that does not grow with the input, and the other limits to put
 around a decode, see [Running a decode service](#running-a-decode-service). A
 file past a limit is refused with `Error::Limit`, which is the guard working,
 not a bug. These figures cover the one-shot decode functions. An
-`IncrementalDecoder` keeps per-tile state between calls and can hold up to
-about three times one decode's peak, plus the bytes fed and a table of 24 bytes
-per tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see "Work
+`IncrementalDecoder` keeps per-tile state between calls. It can hold one
+decode's peak plus the packet walks it keeps, at most twice the image's
+samples plus twice the walk of the largest tile walked so far (a change of
+region or reduction keeps that walk), plus up to twice the bytes fed (their
+`Vec` may hold twice their length in capacity) and a table of 24 bytes per
+tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see "Work
 and memory" in [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
 
 For input from a source you trust, `DecodeOptions` can raise these limits
@@ -111,6 +120,16 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    input and raises the default sample limit, and the tile-part parse keeps a
    record of under 1 KiB for each tile the input carries, at most about 52
    times the input plus 128 KiB (see "The sample limit" in
+   [`docs/resource-bounds.md`](docs/resource-bounds.md)). The JP2 box walk
+   keeps a 24-byte record for each box it reads or reports and for each box
+   after the codestream, and the image's metadata keeps an entry and a copy
+   of the payload for each `xml `, `uuid`, `jp2i`, `uinf` and `colr` box. A
+   payload of a few bytes still takes a whole heap block, so a file padded
+   with 9-byte `xml ` boxes holds up to about 12 bytes for each byte of them
+   while the boxes are read (about 9 unless a `jp2c` box longer than its
+   codestream makes the boxes after it walked twice), and up to about 6.5
+   through the decode and after it, measured. A box before the codestream
+   that is neither read nor reported holds nothing (see "JP2 box records" in
    [`docs/resource-bounds.md`](docs/resource-bounds.md)).
 2. **Set a fixed sample ceiling.** Set `DecodeOptions::sample_limit` to
    `SampleLimit::AtMost(n)`. The decode then holds at most `n` samples, `4·n`
@@ -177,8 +196,10 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    reserve one decode's peak (with its input) for each decode you run at
    once. Count a decode you stopped waiting for as running until it returns:
    a thread past its timeout keeps its memory. Only ending a process gives it
-   back. For each live `IncrementalDecoder`, reserve up to about three times
-   one decode's peak during a refine, plus the bytes fed. Between calls it
+   back. For each live `IncrementalDecoder`, reserve during a refine one
+   decode's peak plus the walks it keeps (at most twice the image's samples
+   plus twice the walk of the largest tile walked so far), plus up to twice
+   the bytes fed. Between calls it
    keeps less (measured: about one peak, 2.7 GiB on a 296 MB file, reported
    in #474). See "Work and memory" in
    [`docs/incremental-decoding.md`](docs/incremental-decoding.md), which also
