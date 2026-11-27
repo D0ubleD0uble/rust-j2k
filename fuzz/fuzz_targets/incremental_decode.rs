@@ -202,18 +202,22 @@ fuzz_target!(|input: &[u8]| {
         _ => None,
     };
     options = options.with_components(subset);
-    // The output: sRGB for one input in four, else the channels as the file
-    // codes them for one in three of the rest (the two together are refused
-    // by `new`). They come from a hash of the file, not from the control
-    // bytes, which the seeds fix, and they cannot change between refines (the
-    // decoder has no setter for either), so the held conversion and the
-    // channel-box faults in `refine` are checked under the options as
-    // `new` took them.
-    let output = splitmix(hash ^ 0x434f_4c4f_5253);
-    if output & 3 == 0 {
-        options = options.with_color(ColorOutput::Srgb);
-    } else if (output >> 2) % 3 == 1 {
-        options = options.with_raw_channels(true);
+    // The output, for a JP2 file only: sRGB for one file in four (not under
+    // a component subset, which sRGB refuses), else the channels as the file
+    // codes them for one in three of the rest. A codestream has no `colr`
+    // or channel boxes, and sRGB refuses one of three components or more,
+    // so it keeps the options above. They come from a hash of the file, so a
+    // `tmin` of a crash can flip them, and not from the control bytes, which
+    // the seeds fix. They cannot change between refines (the decoder has no
+    // setter for either), so the held conversion and the channel-box faults
+    // in `refine` are checked under the options as `new` took them.
+    if data.get(4..8) == Some(&JP2_SIGNATURE[4..]) {
+        let output = splitmix(hash ^ 0x434f_4c4f_5253);
+        if output & 3 == 0 && options.components().is_none() {
+            options = options.with_color(ColorOutput::Srgb);
+        } else if (output >> 2) % 3 == 1 {
+            options = options.with_raw_channels(true);
+        }
     }
     let changes = control[0] & 0x40 != 0;
     let mut lenient = options.clone().with_strict(false);

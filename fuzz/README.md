@@ -56,13 +56,14 @@ not public API, and built only with the private `__fuzz` feature, which this
 workspace turns on) to drive the EBCOT block decoder and MQ coder directly.
 
 Besides the plain decode, `decode` draws its options from a hash of the input
-(`fuzz_targets/decode.rs`): a layer cap of 1 to 3, with `strict` off too; a
-window, a tile or a component subset, at reduction 0 or 1; for one window or
-tile draw in four, `ColorOutput::Srgb` as well, which a sub-sampled sYCC image
-refuses on part of the image (seeds `jp2_sycc_*_odd.jp2` and the other sYCC
-files reach it); and, for one input in four, a packet work limit of
-`Raised(2)` or `Raised(4)` on every decode but the plain one. The hash changes
-with any byte, so a seed reaches the draws a mutation of it picks, not its own.
+(`fuzz_targets/decode.rs`): a layer cap of 1 to 3, with `strict` off too, and
+for one such input in four a packet work limit of `Raised(2)` or `Raised(4)` on
+the decode with `strict` off only (the budget prices code-block work, not
+packet work); a window, a tile or a component subset, at reduction 0 or 1; and,
+for a JP2 file, `ColorOutput::Srgb` on one window or tile draw in four, which a
+sub-sampled sYCC image refuses on part of the image. Seed the last with the
+`jp2_sycc_*.jp2` files (below). The hash changes with any byte, so a seed
+reaches the draws a mutation of it picks, not its own.
 
 `tile_body`'s second input byte steers a region of interest: with bit 7 set
 it writes an `RGN` marker (a maxshift of 0 to 19 from the low 5 bits, on
@@ -223,9 +224,10 @@ bytes. The control bytes:
 | 1 | 5-7 | a component subset of one or two distinct indices |
 | 2-5 | | the window: `x0` and `y0` are bytes 2 and 3 mod 24, its width and height 1 + bytes 4 and 5 mod 40 |
 
-A hash of the file also draws the output, which the decoder cannot change
-once it is built: `ColorOutput::Srgb` for one input in four, else
-`raw_channels` for one in three of the rest. So the held conversion and the
+For a JP2 file, a hash of the file also draws the output, which the decoder
+cannot change once it is built: `ColorOutput::Srgb` for one file in four
+(never with a component subset), else `raw_channels` for one in three of the
+rest. A codestream keeps the control bytes' options. So the held conversion and the
 channel-box faults in `refine` are checked against the one-shot decode under
 the same options.
 
@@ -461,6 +463,8 @@ bytes:
 # byte makes the body's code-blocks HT, and bit 6 with it makes them MIXED).
 mkdir -p fuzz/corpus/decode
 cp tests/fixtures/*.j2k tests/fixtures/openjph/files/*.j2c fuzz/corpus/decode/
+# Not in the CI smoke yet: the sYCC JP2 files, which the sRGB window draw needs.
+cp tests/fixtures/jp2_sycc_*.jp2 fuzz/corpus/decode/
 find tests/fixtures/conformance/ht/codestreams -size -6145c -name '*.j2k' -exec cp {} fuzz/corpus/decode/ \;
 # Optional, not in the CI smoke: the ISO/IEC 15444-4 codestreams carry
 # multi-tile, multi-component, multi-layer, precinct-partitioned geometry that

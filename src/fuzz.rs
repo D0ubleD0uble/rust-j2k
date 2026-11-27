@@ -595,7 +595,8 @@ mod tests {
             std::fs::write(dir.join("restarted_poc_tile_4_8_299.j2k"), &data).unwrap();
         }
         // The target's options for an input that starts with `SOC`: all
-        // control bytes zero, `strict` off for the refines.
+        // control bytes zero (a codestream draws no color output), `strict`
+        // off for the refines.
         let options = DecodeOptions::default().with_strict(false);
         let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
         // The target's schedule: FNV-1a of the file, then a splitmix step
