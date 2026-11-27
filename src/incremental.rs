@@ -82,10 +82,11 @@ use crate::{
 /// comes to about 140 bytes for each tile counted under its own header and
 /// a byte for each other tile, plus a key of the main header, its length and
 /// a hash. Each refine also holds what [`decode_with`] holds for the same
-/// bytes, so the decoder holds at most about three times the largest
-/// one-decode peak under the options used so far (a change of the region or
-/// the reduction keeps the largest walk), plus up to twice the bytes fed, as
-/// their `Vec` may hold twice their length in capacity. After the options
+/// bytes, so the decoder holds at most one decode's peak plus the walks kept
+/// (twice the image's samples plus twice the walk of the largest tile walked
+/// so far; a change of the region or the reduction keeps that walk), plus up
+/// to twice the bytes fed, as their `Vec` may hold twice their length in
+/// capacity. After the options
 /// change,
 /// these bounds hold from the first refine that decodes under the new
 /// options. A refine refused before that, partway through the tiles, can

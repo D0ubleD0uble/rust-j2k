@@ -222,10 +222,11 @@ bytes per byte resident.
 A tiled image peaks lower, as each tile is reconstructed in turn, and a
 one-tile image is also held to the code-blocks and precincts a tile allows
 ([Code-blocks and precincts per tile](#code-blocks-and-precincts-per-tile)),
-which grow with the limit. JP2 metadata boxes add up to 3 bytes for each
-byte of them (see [JP2 box records](#jp2-box-records)). An
-`IncrementalDecoder` can hold up to about three times the largest one-decode
-peak under the options used so far, plus up to twice the bytes fed.
+which grow with the limit. JP2 metadata boxes add up to about 6.5 bytes for
+each byte of them (see [JP2 box records](#jp2-box-records)). An
+`IncrementalDecoder` can hold one decode's peak plus the packet walks it
+keeps, at most twice the image's samples plus twice the walk of the largest
+tile walked so far, plus up to twice the bytes fed.
 
 Measured on a release build, a lossless 23171x23171 one-tile 5/3 image of 5
 levels (536.9 M samples, just over 2^29; 234 MB, from `opj_compress -n 5`
@@ -242,7 +243,8 @@ on: `COM` segments, a JP2 `xml ` box and bytes after `EOC` all count. The bytes
 counted are the bytes in memory, not on the wire, and padding compresses well:
 67 MB of zeros gzips to 65 KB. So a service should bound the input size it
 accepts, measured after any decompression. Past 64 MiB the worst-case peak is
-about 102 times that size, and up to about three times that for an
+about 102 times that size, plus up to about 6.5 bytes for each byte of JP2
+metadata boxes, and up to about three times that for an
 `IncrementalDecoder`. A one-tile 1 x 2^30 image needs 128 MiB of input to fit
 the default. Measured: with 128 MiB of zeros after `EOC` (134,283,241 bytes) it
 decodes at the defaults (`strict` on) in 23.5 s with a peak RSS of 8.30 GiB, and
@@ -282,11 +284,12 @@ bytes + 2^18 precincts x 750 bytes, from the peaks in [Figures for a decode
 service](#figures-for-a-decode-service)). So below about 2^26 the records, not
 the samples, set the peak. The figure to plan on is 3.2 x 4n for the samples,
 plus about 0.8 GiB for one tile's records, plus up to about 65 bytes for each
-byte of input for [segment records](#segment-records), plus up to 3 bytes for
-each byte of JP2 metadata boxes ([JP2 box records](#jp2-box-records)), plus
-the input. The measured peaks against `n` are in that section. An
-`IncrementalDecoder` can hold up to about three times the largest one-decode
-peak under the options used so far, plus up to twice the bytes fed. What to
+byte of input for [segment records](#segment-records), plus up to about 6.5
+bytes for each byte of JP2 metadata boxes ([JP2 box records](#jp2-box-records)),
+plus the input. The measured peaks against `n` are in that section. An
+`IncrementalDecoder` can hold one decode's peak plus the packet walks it
+keeps, at most twice the image's samples plus twice the walk of the largest
+tile walked so far, plus up to twice the bytes fed. What to
 set around a decode besides the ceiling (the input size, a timeout, memory for each concurrent decode) is in
 [Running a decode service](../SECURITY.md#running-a-decode-service).
 
@@ -365,35 +368,47 @@ each top-level box before the codestream that the metadata reports (`xml `,
 (`colr`, `bpcc`, `pclr`, `cmap`, `cdef`, `res `), and for each box after the
 codestream, which OpenJPEG's walk there reads. Other boxes before the
 codestream are skipped without a record. The records are let go before any
-tile is read. The image's metadata keeps one entry for each `xml `, `uuid`,
-`jp2i`, `uinf` and `colr` box through the decode and after it: 24 bytes for an
-`xml ` or `jp2i` box of at least 8 bytes, 32 for a `colr` of at least 11, 40
-for a `uuid` of at least 24 and 56 for a `uinf` of at least 30, each with its
-payload copied. So past the bytes of the payloads, the metadata holds at most
-3 bytes for each byte of such boxes, and the walk, with the metadata built
-from its records, about twice that.
+tile is read.
 
-Measured on `tests/fixtures/jp2_sycc_422_even.jp2` (390 bytes) with 2^21 empty
-8-byte boxes added (16 MiB; 11-byte `colr` boxes for that row), decoded once
-by a release program that reads the file and calls `decode`, as
-`/usr/bin/time -v` reports the peak resident set:
+The image's metadata keeps an entry for each `xml `, `uuid`, `jp2i`, `uinf`
+and `colr` box, through the decode and after it, with a copy of its payload:
+24 bytes for an `xml ` or `jp2i` box, 32 for a `colr`, 40 for a `uuid` and 56
+for a `uinf`. A payload of no bytes takes no heap. A payload of 1 to 24 bytes
+takes a whole 32-byte heap block (on glibc), so the smallest box with a
+payload costs the most for its size. A 9-byte `xml ` or `jp2i` box (one byte
+of payload) holds 24 + 32 = 56 bytes in the metadata, about 6.2 bytes for each
+byte of the box, and 80 with its walk record while the boxes are read, about
+8.9. A 12-byte `colr` (one byte past its three header fields) gives about 5.3
+and 8.7, a `uuid` or `uinf` under 4. So the metadata holds up to about 6.5
+bytes for each byte of metadata boxes, and the walk up to about 9.
 
-| Padding | Before #678 | Now |
-| ------- | ----------- | --- |
-| zeros after the `jp2c` box | 19 MB | 19 MB |
-| `xml ` boxes after `jp2c` | 166 MB | 117 MB |
-| `xml ` boxes before `jp2c` | 117 MB | 117 MB |
-| `jp2i` boxes before `jp2c` | 117 MB | 117 MB |
-| unknown boxes before `jp2c` | 68 MB | 19 MB |
-| unknown boxes inside `jp2h` | 68 MB | 19 MB |
-| `colr` boxes inside `jp2h` | 126 MB | 126 MB |
-| unknown boxes after `jp2c` | 117 MB | 68 MB |
+Measured on `tests/fixtures/jp2_sycc_422_even.jp2` (390 bytes) with 16 MiB of
+boxes added, all of one shape. Each file was decoded once by a release program
+that reads it and calls `decode`. The peak is `/usr/bin/time -v`'s peak
+resident set. "Held" is the program's resident set after `decode` returns,
+less its resident set before, so it leaves out the input, which the peak
+includes. The zeros row is the baseline.
 
-That is up to about 6.5 bytes for each byte of padding while the boxes are
-read, and up to 3 for the rest of the decode. A decode whose peak is its
-samples reaches that peak after the walk, so the walk's term does not add to
-it; the metadata's does. Before #678 the boxes after the codestream were held
-twice and every skipped box had a record, up to about 9 bytes a byte.
+| Padding (box size) | Peak before #678 | Peak now | Held now |
+| ------------------ | ---------------- | -------- | -------- |
+| zeros after the `jp2c` box | 19 MB | 19 MB | 0.5 MB |
+| `xml ` after `jp2c` (8 bytes, empty) | 166 MB | 117 MB | 50 MB |
+| `xml ` after `jp2c` (9 bytes) | 208 MB | 165 MB | 102 MB |
+| `xml ` before `jp2c` (8 bytes, empty) | 117 MB | 117 MB | |
+| `xml ` before `jp2c` (9 bytes) | 165 MB | 165 MB | 102 MB |
+| `jp2i` before `jp2c` (9 bytes) | 165 MB | 165 MB | 102 MB |
+| `uuid` before `jp2c` (25 bytes) | | 82 MB | 48 MB |
+| unknown before `jp2c` (8 bytes) | 68 MB | 19 MB | |
+| unknown inside `jp2h` (8 bytes) | 68 MB | 19 MB | |
+| `colr` inside `jp2h` (11 bytes, empty) | 126 MB | 126 MB | |
+| `colr` inside `jp2h` (12 bytes) | 161 MB | 161 MB | 88 MB |
+| unknown after `jp2c` (8 bytes) | 117 MB | 68 MB | |
+
+Over the baseline, the 9-byte `xml ` boxes peak at 8.9 bytes for each byte of
+them and hold 6.3 after the decode, as the arithmetic above gives. A decode
+whose peak is its samples reaches that peak after the walk, so the walk's term
+does not add to it, but the metadata's does. Before #678, the boxes after the
+codestream were held twice, and every skipped box had a record.
 
 ### Segment records
 

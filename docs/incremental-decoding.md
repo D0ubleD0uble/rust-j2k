@@ -534,10 +534,10 @@ in `src/tier2/resume.rs`). That is about 1.5 MiB for the 65535 tiles a file
 can have, and up to twice that in capacity as the table grows: an 82-byte
 file of 1 x 1 tiles whose one tile-part is tile 65534 holds 1.57 MB between
 calls. Each refine holds what `decode_with` holds for the same bytes on top
-of the walks kept, so the decoder holds at most about three times the
-largest one-decode peak under the options used so far (a change of the
-region or the reduction keeps the largest walk), plus up to twice the bytes
-fed. `tests/incremental_alloc.rs` counts the
+of the walks kept, so the decoder holds at most one decode's peak plus the
+walks kept (twice the image's samples plus twice the walk of the largest
+tile walked so far; a change of the region or the reduction keeps that
+walk), plus up to twice the bytes fed. `tests/incremental_alloc.rs` counts the
 bytes held on files of many one-sample tiles of 512 components, in LRCP
 order and under 32 PCRL `POC` volumes, fed in pieces, and
 `tests/incremental_kept_alloc.rs` on a file of 1228 bytes that declares a

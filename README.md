@@ -233,12 +233,14 @@ has the value R, which is how eccodes and NCEP's g2clib read it.
 
 Every failure comes back as an `Error`. With the default limits, decoding never
 panics or hangs, whatever the input, and needs at most about 6.4 GiB of memory
-for an input of up to 64 MiB, or about 102 bytes per byte of input past that.
-If the machine can't supply that, the allocation fails and
-the process aborts, as in any Rust program. Those figures cover the one-shot decode functions;
-`IncrementalDecoder` keeps per-tile state and can hold up to about three times
-the largest one-decode peak under the options used so far, plus up to twice the
-bytes fed and a table of 24 bytes per tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see
+for an input of up to 64 MiB, or about 102 bytes per byte of input past that,
+plus up to about 6.5 bytes for each byte of JP2 metadata boxes. If the machine
+can't supply that, the allocation fails and the process aborts, as in any Rust
+program. Those figures cover the one-shot decode functions;
+`IncrementalDecoder` keeps per-tile state and can hold one decode's peak plus
+the packet walks it keeps, at most twice the image's samples plus twice the walk
+of the largest tile walked so far, plus up to twice the bytes fed and a table of
+24 bytes per tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see
 [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)).
 
 `Error::Unsupported` usually means the file is valid JPEG 2000 that uses

@@ -293,10 +293,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unknown `jp2h` child) no longer takes a record. 2^21 empty `xml ` boxes
   after the codestream peaked at 166 MB and now peak at 117 MB; unknown boxes
   before it went from 68 MB to 19 MB. `SECURITY.md` and
-  `docs/resource-bounds.md` now count what remains: up to 3 bytes for each
-  byte of metadata boxes through the decode. They also state the
-  `IncrementalDecoder` bound as three times the largest one-decode peak
-  under the options used so far, plus up to twice the bytes fed (#678).
+  `docs/resource-bounds.md` now count what remains. The metadata holds up
+  to about 6.5 bytes for each byte of metadata boxes through the decode, and
+  the walk up to about 9 while the boxes are read, as a payload of a few
+  bytes takes a whole heap block. They also state the `IncrementalDecoder`
+  bound as one decode's peak plus the packet walks it keeps (at most twice
+  the image's samples plus twice the walk of the largest tile walked so
+  far), plus up to twice the bytes fed (#678).
 - The published crate's own tests pass. A test that reads a fixture the
   package leaves out (the conformance corpus, the GDAL JP2 files, the OpenJPH
   files and the benchmark inputs) now skips, and says so, in the
