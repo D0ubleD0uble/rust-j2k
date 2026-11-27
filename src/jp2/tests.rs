@@ -612,7 +612,8 @@ fn header_boxes_misplaced_before_jp2h_are_ignored() {
     assert_decodes_like_raw(&bytes);
     let parsed = super::parse(&bytes, &crate::WorkLimit::Default).expect("parses");
     assert_eq!(parsed.header.colr(), vec![&colr()[8..]]);
-    assert_eq!(parsed.other.len(), 4);
+    // Nothing reads them, so the walk keeps no record of them.
+    assert!(parsed.other.is_empty());
 }
 
 /// `color_specifications` holds every `colr` the header reads, in file
@@ -1039,6 +1040,77 @@ fn the_walk_records_header_boxes_and_the_bytes_around_the_codestream() {
     assert_eq!(parsed.after_codestream.len(), 1);
     assert_eq!(&parsed.after_codestream[0].kind, b"xml ");
     assert_eq!(parsed.after_codestream[0].payload, b"<after/>");
+}
+
+/// Before the codestream the walk keeps a record only of the boxes the
+/// metadata reads: the `xml `, `uuid`, `jp2i` and `uinf` boxes and the first
+/// `rreq`, in file order. Unknown boxes, JPX boxes, later `rreq` boxes and
+/// header boxes misplaced before `jp2h` cost no record, so padding a file
+/// with them holds no memory.
+#[test]
+fn before_the_codestream_only_the_boxes_the_metadata_reads_are_kept() {
+    let bytes = file(&[
+        jp2_ftyp(),
+        bx(b"zzzz", b""),
+        bx(b"cdef", &[0, 0]),
+        bx(b"xml ", b"<a/>"),
+        bx(b"rreq", b"first"),
+        bx(b"jpch", b""),
+        bx(b"uuid", &[7; 16]),
+        bx(b"rreq", b"second"),
+        bx(b"jp2i", b"ipr"),
+        bx(b"uinf", b""),
+        good_jp2h(),
+        bx(b"zzzz", b""),
+        bx(b"xml ", b"<b/>"),
+        jp2c(),
+    ]);
+    let parsed = super::parse(&bytes, &crate::WorkLimit::Default).expect("parses");
+    let kept: Vec<_> = parsed
+        .other
+        .iter()
+        .map(|item| (item.kind, item.payload))
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            (*b"xml ", &b"<a/>"[..]),
+            (*b"rreq", b"first"),
+            (*b"uuid", &[7; 16]),
+            (*b"jp2i", b"ipr"),
+            (*b"uinf", b""),
+            (*b"xml ", b"<b/>"),
+        ]
+    );
+}
+
+/// The boxes after the codestream are held once when the two walks after it
+/// start at the same byte, and walked again only for a `jp2c` box longer
+/// than its codestream, whose padding the second walk skips.
+#[test]
+fn the_boxes_after_the_codestream_are_held_once() {
+    let trailing = [bx(b"xml ", b"<after/>"), bx(b"zzzz", b"")].concat();
+    let exact = [file(&[jp2_ftyp(), good_jp2h(), jp2c()]), trailing.clone()].concat();
+    let parsed = super::parse(&exact, &crate::WorkLimit::Default).expect("parses");
+    assert!(parsed.after_box.is_none(), "a second copy of the boxes");
+    assert_eq!(parsed.after_box().len(), 2);
+    assert_eq!(parsed.after_box()[0].payload, b"<after/>");
+
+    let padded = [
+        file(&[
+            jp2_ftyp(),
+            good_jp2h(),
+            bx(b"jp2c", &[CODESTREAM, &[0; 8]].concat()),
+        ]),
+        trailing,
+    ]
+    .concat();
+    let parsed = super::parse(&padded, &crate::WorkLimit::Default).expect("parses");
+    let after_box = parsed.after_box.as_deref().expect("a walk past the box");
+    assert_eq!(after_box.len(), 2);
+    assert_eq!(after_box[0].payload, b"<after/>");
+    // The zeros inside the box read as one box running to the end.
+    assert_eq!(parsed.after_codestream.len(), 1);
 }
 
 /// `ihdr.NC` is not held to `Csiz`: the codestream decides the image, as in
