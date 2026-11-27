@@ -686,15 +686,14 @@ doubling, so 129 entries leave the most spare room: 903 bytes of segments
 keep 17.7 KB, 19.6 bytes for each byte. With two-byte indexes, the ratio is
 17.0 at 257 components and 16.8 at 4097. At 16384 components, a power of
 two, 128 KiB of one-step `QCC` segments keep 1.54 MB, about 12 bytes for
-each byte. A component
-holds at most one `COC`, one `QCC` and one `RGN`, so the total is about
-12 MB at most: a `COC` of precincts, a 97-step `QCC` and an `RGN` for each
-of 16384 components, 4.2 MB of segments, keep 12.2 MB. `PPM` segments keep
-24 bytes each, 1.6 MB at most under the 65536 segments a main header may
-have; the rest (`POC`, of 32 volumes at most, `CRG`, the `TLM` count) is
-small (`tests/incremental_header_cache_alloc.rs`). The header of a tile-part not
-yet fed in full, or of a last tile-part whose `Psot` is 0, is read again on
-each call. What it keeps, about 140 bytes for each tile counted under its
+each byte. A component holds at most one `COC`, one `QCC` and one `RGN`, so the
+total is about 12 MB at most: a `COC` of precincts, a 97-step `QCC` and an `RGN`
+for each of 16384 components, 4.2 MB of segments, keep 12.2 MB. `PPM` segments
+keep 24 bytes each, 1.6 MB at most under the 65536 segments a main header may
+have; the rest (`POC`, of 32 volumes at most, `CRG`, the `TLM` count) is small
+(`tests/incremental_header_cache_alloc.rs`). The header of a tile-part not yet
+fed in full, or of a last tile-part whose `Psot` is 0, is read again on each
+call. What it keeps, about 140 bytes for each tile counted under its
 own header and a byte for each other tile, is held until the options
 change. It keeps no copy of the main header, only a key of it (two
 integers). A file whose tiles' sizes show them within the caps keeps nothing
