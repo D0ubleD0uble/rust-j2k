@@ -3,7 +3,8 @@
 //! `example | head -n 1` closes the pipe after one line. Rust ignores
 //! SIGPIPE, so the next `println!` fails with `BrokenPipe` and panics. Each
 //! example is run with its stdout closed at once. It must not panic or print
-//! an error, and its exit status must be the one an open pipe gives.
+//! an error, and its exit status must be the one an open pipe gives. With
+//! stderr closed too, an error message must not panic either.
 
 #![cfg(not(target_family = "wasm"))]
 

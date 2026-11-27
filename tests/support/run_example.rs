@@ -58,6 +58,20 @@ fn run(example: &str, args: &[&OsStr], out: bool, err: bool) -> Output {
     // is still safe.
     let _turn = TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    if out || err {
+        // Build with stderr piped first. The run below may have no stderr
+        // to show a compiler message, and cargo would then exit 101 with
+        // no diagnostic.
+        let build = Command::new(&cargo)
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .args(["build", "--quiet", "--offline", "--profile", "test"])
+            .args(["--example", example])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let message = String::from_utf8_lossy(&build.stderr);
+        assert!(build.status.success(), "building {example}: {message}");
+    }
     let mut child = Command::new(cargo)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args(["run", "--quiet", "--offline", "--profile", "test"])

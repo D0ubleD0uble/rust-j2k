@@ -63,4 +63,4 @@ cargo run --example grib2 -- \
 `common/pnm.rs` is the PGM and PPM writer the examples share, and
 `common/say.rs` holds `say!` and `say_err!`, which print without panicking
 when the output is piped to a command that exits early, such as `head`.
-Neither is an example. An example you copy needs both files it includes.
+Neither is an example. An example you copy needs the `common/` files it includes.
