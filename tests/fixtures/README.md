@@ -707,6 +707,45 @@ refuses; `tests/jp2_box_error_final.rs` checks every prefix. Replay it with
 `cargo +nightly fuzz run header_split
 tests/fixtures/incremental/header_split_jp2c_after_signature_cut_xlbox.seed`.
 
+`incremental/header_split_ftyp_lbox0_after_codestream.seed` (193 bytes,
+SHA-256 `56f2e67590c7b2f6b95c1f5740d758a3fde2cf5ff4d792d7e58450cb17aea658`)
+is a seed of the `header_split` fuzz target, which found it on 2026-11-27
+in the review of #721 (#722). It is committed as found: 12 control bytes, then
+a 4 x 4 gray JP2 file whose codestream ends at its `EOC`, then an `ftyp`
+box of length 0 holding 6 bytes. It was made by the fuzzer, so it has no
+license restriction. `read_header_with` refuses it for the `ftyp`, as
+`opj_decompress` 2.5.0 does ("The ftyp box must be the second box in the
+file"), and `header` holds that fault, as OpenJPEG skips the box once 2^32
+bytes or more follow it. The target built no suffix that long and failed on
+it; `tests/jp2_box_error_final.rs` checks every prefix. Replay it with
+`cargo +nightly fuzz run header_split
+tests/fixtures/incremental/header_split_ftyp_lbox0_after_codestream.seed`.
+
+Two more `header_split` seeds pin faults that are final, which the
+target's stand-in for a box of length 0 after the codestream must not let
+through (#722). Each is a file of `final_shapes` in
+`tests/jp2_box_error_final.rs`, written out by a one-off test, behind the
+12 control bytes of the seed above (strict off and the defaults, and the
+same pieces). They are synthetic, so they have no license restriction.
+
+- `incremental/header_split_ftyp_then_xml_lbox0_after_codestream.seed`
+  (211 bytes, SHA-256
+  `442a137983202148e33d2121f5f32ab844faf9b6778f17977d31ed3a6244e865`): a
+  gray JP2 file whose codestream ends at its `EOC`, then a whole `ftyp`, then
+  an `xml ` of length 0. The `ftyp` is refused for its type, and the box of
+  length 0 after it does not reopen that fault. With `after::check` marking
+  every box open while the last has length 0, `header` holds the fault and
+  the target fails on it.
+- `incremental/header_split_jp2h_lbox0_child_of_length_4.seed` (97 bytes,
+  SHA-256 `eb9361b0d40f99e27e35195623df078a780ba4643c550ef3118d89b4fb92cd6b`):
+  a `jp2h` of length 0 before the codestream whose child after the `ihdr`
+  has length 4. With that child's fault taken as open (`Jp2Header::read`),
+  `header` gives `None` and the target fails on it.
+
+`tests/jp2_box_error_final.rs` also checks the target's `replaceable`
+(`tests/support/replaceable.rs`) on the three seeds: it finds a suffix that
+changes the error of the first, and none for these two.
+
 ### Retry ladder fixtures
 
 `retry_ladder/tile_precincts.j2k` (98 bytes, SHA-256
