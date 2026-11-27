@@ -381,28 +381,27 @@ impl IncrementalDecoder {
     /// bytes can change, of length 0 or cut inside its `XLBox`, gives
     /// `Ok(None)`.
     ///
-    /// While the bytes fed end before the main header is whole, a call goes
-    /// on from where the last one stopped: in a JP2 file, after the last
-    /// whole box before the codestream, and in the main header, after its
-    /// last whole marker segment. So the calls after each feed read the
-    /// boxes before the codestream and the main header about once in all,
-    /// however small the pieces, with two exceptions. A call that finds a
-    /// box of length 0 before the codestream reads the boxes from the start,
-    /// as that box runs to the end of the bytes fed. And where the `jp2c`
-    /// box ends inside its own main header and the bytes after the box do
-    /// not parse as more of that header, each call reads the boxes and the
-    /// main header from the start. For this the decoder keeps where the last
-    /// call stopped, the first `ihdr`, and what the main header's segments
-    /// read so far set (its `PPM` data as offsets into the bytes fed, not a
-    /// copy), until a call finds the main header whole, or an error. It is
-    /// held while the main header stays cut short, whether or not `header`
-    /// is called again. It takes up to about 20 bytes for each byte of
-    /// `COC`, `QCC` and `RGN` segments, plus under 1 KB (the highest ratio
-    /// is for a one-step `QCC` on each of 129 components), and about 12 MB
-    /// at most, with the largest `COC`, `QCC` and `RGN` on each of 16384
-    /// components.
-    /// Each `PPM` segment adds 24 bytes, 1.6 MB at most under the 65536
-    /// segments a main header may have.
+    /// While the bytes fed end before the main header is whole, a call goes on
+    /// from where the last one stopped: in a JP2 file, after the last whole box
+    /// before the codestream, and in the main header, after its last whole
+    /// marker segment. So the calls after each feed read the boxes before the
+    /// codestream and the main header about once in all, however small the
+    /// pieces, with two exceptions. A call that finds a box of length 0 before
+    /// the codestream reads the boxes from the start, as that box runs to the
+    /// end of the bytes fed. And where the `jp2c` box ends inside its own main
+    /// header and the bytes after the box do not parse as more of that header,
+    /// each call reads the boxes and the main header from the start. To go
+    /// on, the decoder keeps where the last call stopped, the first `ihdr`,
+    /// and what the main header's segments read so far set (its `PPM` data
+    /// as offsets into the bytes fed, not a copy), until a call finds the
+    /// main header whole, or an error. It is held while the main
+    /// header stays cut short, whether or not `header` is called again. It
+    /// takes up to about 20 bytes for each byte of `COC`, `QCC` and `RGN`
+    /// segments, plus under 1 KB (the highest ratio is for a one-step `QCC` on
+    /// each of 129 components), and about 12 MB at most, with the largest
+    /// `COC`, `QCC` and `RGN` on each of 16384 components. Each `PPM` segment
+    /// adds 24 bytes, 1.6 MB at most under the 65536 segments a main header may
+    /// have.
     ///
     /// Once the main header is whole, each call parses it again (its `PPM`
     /// data included), and in a JP2 file reads the boxes before the

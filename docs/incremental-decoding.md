@@ -330,22 +330,20 @@ whole, a call goes on from where the last one stopped instead, in
 `pipeline::decode::KeptCut`: after the last whole box before a JP2 file's
 `jp2c`, and after the main header's last whole marker segment, with what
 the segments before it set (`PPM` data as offsets, not a copy). The calls
-then read those boxes and segments about once in all. Two cases are read
-from the start on each call: a box of length 0 before the codestream, which
-runs to the end of the bytes fed, and a `jp2c` box that ends inside its own
-main header where the bytes after the box do not parse as more of that
-header (`KeptCut::main_still_cut` then drops its parse). The
-header of a
-tile-part not yet fed in full is read again on each call, as is that of a
-last tile-part whose `Psot` is 0, which is never whole. The tiles it
-learned of are charged the read's budget again, as a read from the start
-charges them, so each call gives what `read_header_with` gives with
-`strict` off on the same bytes. It keeps about 140 bytes for each tile
-counted under its own header and a byte for each other tile, and a key of
-the main header (two integers), not a copy. A file whose tiles' sizes show
-them within the caps keeps nothing; any other keeps a few hundred bytes, plus
-the per-tile counts. What it keeps is for one selected area and reduction,
-and a change of options drops it.
+then read those boxes and segments about once in all. Two cases are read from
+the start on each call: a box of length 0 before the codestream, which runs to
+the end of the bytes fed, and a `jp2c` box that ends inside its own main header
+where the bytes after the box do not parse as more of that header
+(`KeptCut::main_still_cut` then drops its parse). The header of a tile-part not
+yet fed in full is read again on each call, as is that of a last tile-part whose
+`Psot` is 0, which is never whole. The tiles it learned of are charged the
+read's budget again, as a read from the start charges them, so each call gives
+what `read_header_with` gives with `strict` off on the same bytes. It keeps
+about 140 bytes for each tile counted under its own header and a byte for each
+other tile, and a key of the main header (two integers), not a copy. A file
+whose tiles' sizes show them within the caps keeps nothing; any other keeps a
+few hundred bytes, plus the per-tile counts. What it keeps is for one selected
+area and reduction, and a change of options drops it.
 
 ## Changing the options
 

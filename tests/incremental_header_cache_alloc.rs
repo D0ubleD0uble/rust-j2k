@@ -10,18 +10,17 @@
 //! header would be 100 MB, six times the input.
 //!
 //! While the bytes fed end inside the main header, a call keeps what the
-//! segments read so far set, so the next goes on from there. That is
-//! measured on main headers of 16384 components, each with segments that
-//! override its coding: a `QCC` of one, two or 97 steps, a `COC`, an `RGN`,
-//! or a `COC` of precincts, a 97-step `QCC` and an `RGN`. A one-step `QCC`
-//! keeps the most for each of its bytes, about 12; the last shape keeps the
-//! most a component can, 12.2 MB in all. A one-step `QCC` on each of 129
-//! components, whose indexes are one byte, keeps 19.6 bytes for each byte.
-//! The tables that hold the overrides grow by doubling: at 16384, a power of
-//! two, they have no room spare, and at 129 they have nearly half. It is
-//! also measured on 65000 `PPM` segments of one record
-//! each. Each header is cut inside a `COM` after its segments, so all of
-//! them are read.
+//! segments read so far set, so the next goes on from there. That is measured
+//! on main headers of 16384 components, each with segments that override its
+//! coding: a `QCC` of one, two or 97 steps, a `COC`, an `RGN`, or a `COC` of
+//! precincts, a 97-step `QCC` and an `RGN`. Of these shapes, a one-step `QCC`
+//! keeps the most for each of its bytes, about 12; the last keeps the most a
+//! component can, 12.2 MB in all. A one-step `QCC` on each of 129 components,
+//! whose indexes are one byte, keeps 19.6 bytes for each byte. The tables that
+//! hold the overrides grow by doubling: at 16384, a power of two, they have no
+//! room spare, and at 129 they have nearly half. It is also measured on 65000
+//! `PPM` segments of one record each. Each header is cut inside a `COM` after
+//! its segments, so all of them are read.
 //!
 //! The bytes are counted with a counting global allocator, so this file
 //! holds a single test: a second one running in parallel would count into
