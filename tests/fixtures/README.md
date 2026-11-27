@@ -742,9 +742,23 @@ same pieces). They are synthetic, so they have no license restriction.
   has length 4. With that child's fault taken as open (`Jp2Header::read`),
   `header` gives `None` and the target fails on it.
 
+`incremental/header_split_ftyp_then_xml_lbox0_fixture_prefix.seed` (211
+bytes, SHA-256
+`69db250dba4c0fb75888291ff2490ad20a74628eee1d7e12fdcb09041e99d757`) is the
+`ftyp` then `xml ` seed above behind the fixtures' control prefix
+`00 00 00 00 00 00 01 02 00 00 00 00` instead (#726), written by a one-off
+script. At the last feed, that piece stream changes the reduction to 2,
+which the file's one resolution refuses, so the check of the whole file
+meets that refusal and nothing else. With `after::check` marking every box
+open while the last has length 0, the target fails on it only through its
+check of the whole input under the options it starts with. It is
+synthetic, so it has no license restriction.
+
 `tests/jp2_box_error_final.rs` also checks the target's `replaceable`
-(`tests/support/replaceable.rs`) on the three seeds: it finds a suffix that
-changes the error of the first, and none for these two.
+(`tests/support/replaceable.rs`) on the #722 seed and the two seeds of
+final faults: it finds a suffix that changes the error of the first, and
+none for the other two. It finds one for each file of `held_after_shapes`
+too.
 
 ### Retry ladder fixtures
 

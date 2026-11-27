@@ -1401,8 +1401,17 @@ fn an_srgb_refusal_more_bytes_lift_waits_for_a_box_after_the_codestream() {
 /// `jp2h` of length 0 before the codestream with a child of length 4: both
 /// faults are final. A harness that stood in for more than the box of
 /// length 0 after the codestream would pass a decoder that held them.
+///
+/// It finds one for each of [`held_after_shapes`] too, whose faults
+/// `header` holds: a harness that stood in for less, such as one that
+/// skipped a `jp2h` of length 0 there, would fail a decoder that is right.
 #[test]
 fn header_split_finds_a_suffix_only_where_one_changes_the_error() {
+    for (name, bytes, options, _) in held_after_shapes() {
+        let lenient = options.clone().with_strict(false);
+        assert!(read_header_with(&bytes, &lenient).is_err(), "{name}: read");
+        assert!(replaceable::replaceable(&bytes, &options), "{name}");
+    }
     for (name, expected) in [
         ("header_split_ftyp_lbox0_after_codestream", true),
         ("header_split_ftyp_then_xml_lbox0_after_codestream", false),

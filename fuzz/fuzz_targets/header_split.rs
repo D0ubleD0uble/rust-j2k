@@ -37,6 +37,13 @@
 //! against the oracle on the prefix fed so far, and on one feed in five a
 //! second call is checked too, which must give the same again.
 //!
+//! A change of options that `read_header_with` refuses outright on the
+//! bytes so far (a reduction past the image's resolutions, a tile it does
+//! not have) stays in force, so every later check meets the same refusal
+//! and tests nothing else. After the last feed, a fresh decoder fed the
+//! whole input at once under the options the input starts with is checked
+//! too.
+//!
 //! Random bytes seldom reach a tile over a cap under the main header, which
 //! is what the cache exists for, so seed it from
 //! `scripts/gen-header-split-seeds.py` (see `fuzz/README.md`).
@@ -192,7 +199,7 @@ fuzz_target!(|input: &[u8]| {
         options = options.with_max_quality_layers(Some(1));
     }
     // Options the decoder refuses at the start leave nothing to check.
-    let Ok(mut decoder) = checked(IncrementalDecoder::new(options)) else {
+    let Ok(mut decoder) = checked(IncrementalDecoder::new(options.clone())) else {
         return;
     };
     let mut rng = Rng(u64::from_le_bytes([
@@ -250,4 +257,15 @@ fuzz_target!(|input: &[u8]| {
             );
         }
     }
+    // A refused change of options leaves the checks after it nothing to
+    // test, so the whole input is checked once more under the options it
+    // starts with, which the decoder accepted above.
+    let mut whole = checked(IncrementalDecoder::new(options)).expect("accepted above");
+    whole.feed(data);
+    check(
+        &checked(whole.header()),
+        data,
+        whole.options(),
+        &format!("the whole {} at once", data.len()),
+    );
 });
