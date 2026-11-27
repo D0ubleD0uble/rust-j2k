@@ -395,8 +395,8 @@ impl<'a> BeforeCodestream<'a> for Kept<'a> {
 
 /// What a [`BoxesCut`] keeps of the boxes before the codestream: the first
 /// `ihdr`, once a `jp2h` has been read. A later `jp2h` is checked against it
-/// alone ([`Jp2Header::of_ihdr`]), and any other box is kept as it is, which
-/// cannot fail.
+/// alone ([`Jp2Header::of_ihdr`]). Any other box is skipped, which cannot
+/// fail.
 #[derive(Default)]
 struct FirstIhdr(Option<header::Ihdr>);
 

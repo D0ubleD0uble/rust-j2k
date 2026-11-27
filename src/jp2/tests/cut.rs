@@ -51,8 +51,9 @@ fn top_level_boxes(bytes: &[u8]) -> (Vec<usize>, Option<usize>) {
     (starts, None)
 }
 
-/// A file whose bytes before its `jp2c` box this many or fewer has every
-/// prefix checked; a longer one, only those near a box boundary.
+/// A file checked to this many bytes or fewer (to 64 bytes past the start
+/// of its `jp2c` box, or to its end) has every prefix checked; a longer
+/// one, only those near a box boundary.
 const DENSE: usize = 4096;
 
 /// How near a box boundary, either side, a prefix of a long file is
