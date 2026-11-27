@@ -88,8 +88,14 @@ decode, whose wait is checked, and the execution ends at the first decode a
 whole bound left would not cover. So on an input whose decodes walk close to
 the bound, the target no longer runs the decoder with nothing spent
 (`zero`), the due refine's `cut.check`, the probe, the decode of the whole
-input that checks an error is final, or `finish`. Unit tests in
-`src/fuzz.rs` and `src/incremental/tests.rs` cover the probe's path.
+input that checks an error is final, or `finish`. Unit tests cover what
+the probe exercises, a decoder started with code-block work spent:
+`fuzz::tests::incremental_hooks_cut_the_code_block_bound` in `src/fuzz.rs`,
+and in `src/incremental/tests.rs` the refines cut by what is left of the
+bound (`a_refine_past_the_rest_of_the_bound_waits`,
+`a_refine_the_rest_of_the_bound_covers_decodes`) and the `BoundSpent` waits
+(`a_count_past_the_whole_bound_waits_on_bound_spent` and those beside it).
+They test the decoder, not the target's check of the probe's reason.
 
 `tile_body`'s second input byte steers a region of interest: with bit 7 set
 it writes an `RGN` marker (a maxshift of 0 to 19 from the low 5 bits, on
@@ -316,9 +322,10 @@ one-shot result, and when it kept every tile's walk it must have charged
 nothing: a single refine walks each tile once, and the first walk of a tile
 kept from its start is not charged. So a charge on a kept walk, which would
 turn a refine into a wait past the bound, fails the target. The fuzzer
-does not reach this check: one execution spends at most 2 packet bounds
-(the packet ledger), and the bound on the walks read again is
-`REPEAT_BOUNDS`, 4 of them. The unit test
+does not reach a refusal at that bound: one execution spends at most 2
+packet bounds (the packet ledger), and the bound on the walks read again is
+`REPEAT_BOUNDS`, 4 of them. The `zero` decoder's check that a kept walk was
+charged nothing still runs on each due refine. The unit test
 `fuzz::tests::incremental_target_repeat_check_holds_on_a_restarted_walk`
 covers its logic in the normal suite, on `restarted_poc_tile(4, 8, 299)`
 from `tests/support/synth.rs`, whose fifth due refine an overcharge refuses.
