@@ -59,7 +59,8 @@ pub(crate) struct Spent {
 
 /// What the decodes of an [`IncrementalDecoder`](crate::IncrementalDecoder)
 /// keep between them, so that all of them together stay within the work
-/// bounds one decode of the same bytes has. It is built from [`Spent`] for the length of one decode.
+/// bounds one decode of the same bytes has. It is built from [`Spent`] for
+/// the length of one decode.
 ///
 /// Each tile's packet walk is kept (see [`Walks`]): a decode goes on from
 /// where the last one stopped, and reads each packet once, however many
@@ -77,15 +78,15 @@ pub(crate) struct Ledger {
     blocks: Cell<u64>,
     /// The packet visits the walks of tiles not kept have spent (see
     /// [`Walks::walk`]).
-    pub(crate) repeats: Repeats,
+    repeats: Repeats,
     /// The code-block bound of this decode, once it is known.
     bound: Cell<Option<u64>>,
     /// Which work bound refused the decode, if one did.
-    pub(crate) work_refused: Cell<Option<Refusal>>,
+    work_refused: Cell<Option<Refusal>>,
     /// Whether the decode refused a tile, by the reduction or a tile cap,
     /// on a codestream whose tile-parts have not closed
     /// ([`Codestream::closed`](crate::codestream::Codestream::closed)).
-    pub(crate) held: Cell<bool>,
+    held: Cell<bool>,
     /// The bytes the decode is of, which the walks kept are held to (see
     /// [`Walks`]).
     fed: u64,
@@ -175,6 +176,28 @@ impl Ledger {
             self.fed,
             &self.repeats,
         )
+    }
+
+    /// Which work bound refused the decode, if one did.
+    pub(crate) fn work_refused(&self) -> Option<Refusal> {
+        self.work_refused.get()
+    }
+
+    /// Whether the decode refused a tile on a codestream whose tile-parts
+    /// have not closed (see [`hold`](Self::hold)).
+    pub(crate) fn held(&self) -> bool {
+        self.held.get()
+    }
+
+    /// Whether the bound on the walks of tiles not kept refused a walk of
+    /// this decode.
+    pub(crate) fn repeats_refused(&self) -> bool {
+        self.repeats.refused.get()
+    }
+
+    /// The packet bound of the decode whose walk that bound refused, or 0.
+    pub(crate) fn repeat_bound(&self) -> u64 {
+        self.repeats.bound.get()
     }
 
     /// Record that a work bound refused a decode, for `why`: the packet

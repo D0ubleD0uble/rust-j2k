@@ -589,14 +589,14 @@ impl IncrementalDecoder {
         };
         let ledger = Ledger::over(spent, fed as u64);
         let decoded = decode_metered(&self.bytes, &self.lenient, Some(&ledger));
-        let refusal = ledger.work_refused.get();
-        let held = ledger.held.get();
+        let refusal = ledger.work_refused();
+        let held = ledger.held();
         #[cfg(test)]
         {
             self.refused = refusal.is_some();
         }
-        self.refused_by_repeats = ledger.repeats.refused.get();
-        self.repeat_bound = ledger.repeats.bound.get();
+        self.refused_by_repeats = ledger.repeats_refused();
+        self.repeat_bound = ledger.repeat_bound();
         self.spent = ledger.into_spent();
         let waiting = match decoded {
             Ok(image) => {
