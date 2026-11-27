@@ -1478,25 +1478,45 @@ const UNREAD: [&[u8; 4]; 9] = [
 
 /// The types of a box of length 0 after the codestream that the decode
 /// checks there, whose contents, or whose absence past 2^32 bytes, can
-/// change the error.
-const CHECKED: [&[u8; 4]; 8] = [
-    b"jP  ", b"ftyp", b"jp2h", b"colr", b"bpcc", b"pclr", b"cmap", b"cdef",
-];
+/// change the error, each with contents that pass in a gray file where the
+/// type allows: a `jp2h` with an `ihdr`, a gray `colr`, a `bpcc` for one
+/// component, a first `pclr`, a `cdef`. The signature box, the `ftyp` and
+/// a `cmap` with no `pclr` are at fault on their type.
+fn checked_after() -> [(&'static [u8; 4], Vec<u8>); 8] {
+    [
+        (b"jP  ", vec![0x0D, 0x0A, 0x87, 0x0A]),
+        (b"ftyp", b"jp2 \0\0\0\0jp2 ".to_vec()),
+        (b"jp2h", synth::ihdr_for(&codestream(1))),
+        (b"colr", synth::colr_enum(17)),
+        (b"bpcc", vec![7]),
+        (b"pclr", PCLR.to_vec()),
+        (b"cmap", CMAP.to_vec()),
+        (b"cdef", CDEF.to_vec()),
+    ]
+}
 
-/// A fault in a tile-part header, then a box of length 0 of each type,
-/// holding 2 bytes that would be at fault in each of [`CHECKED`], fed whole
-/// and then with more bytes. After each of [`UNREAD`], `refine` gives the
-/// fault at once and `header` what `read_header_with` gives, and more bytes
-/// change neither. After each of [`CHECKED`], `header` gives the header and
-/// `refine` waits on `Held`.
+/// A fault in a tile-part header, then a box of length 0 of each type, fed
+/// whole and then with more bytes. After each of [`UNREAD`], holding 2
+/// bytes that would be at fault in a `colr`, `refine` gives the fault at
+/// once and `header` what `read_header_with` gives, and more bytes change
+/// neither. After each of [`checked_after`], `header` gives the header and
+/// `refine` waits on `Held`, though the box passes where its type allows:
+/// more bytes can bring a fault in it, as they do to a `bpcc` and a `jp2h`
+/// here.
 #[test]
 fn an_error_before_a_box_of_length_0_is_final_only_for_a_type_not_checked() {
     let lenient = DecodeOptions::default().with_strict(false);
-    let unread = UNREAD.iter().map(|kind| (kind, true));
-    for (kind, final_at_once) in unread.chain(CHECKED.iter().map(|kind| (kind, false))) {
+    let unread = UNREAD.iter().map(|kind| (*kind, vec![1, 0], true));
+    let checked = checked_after().into_iter();
+    for (kind, payload, final_at_once) in unread.chain(checked.map(|(k, p)| (k, p, false))) {
         let name = String::from_utf8_lossy(&kind[..]).into_owned();
-        let bytes = tile_part_file(&coc_fault(), &open_box(kind, &[1, 0]));
+        let bytes = tile_part_file(&coc_fault(), &open_box(kind, &payload));
         let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+        let fault = [b"bpcc", b"jp2h"].contains(&kind).then(|| {
+            let more = [&bytes[..], &synth::bx(b"colr", &[1, 0])].concat();
+            error_of(&decode_with(&more, &lenient)).expect("an error")
+        });
+        assert!(fault.is_none_or(|fault| fault != whole), "{name}: {whole}");
         let whole_header = error_of(&read_header_with(&bytes, &lenient));
         if final_at_once {
             assert!(whole.contains("COC"), "{name}: {whole}");
