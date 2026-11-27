@@ -9,7 +9,9 @@ docs are in [docs/](docs/).
 - The crate stays pure Rust. It exists so that decoding JPEG 2000 needs no C
   library, so don't add a native or C-binding dependency. The library has no
   `unsafe` code. Add some only for a measured hot path, with a written
-  justification and tests.
+  justification and tests. The crate root forbids it today, so that would
+  change it to `#![deny(unsafe_code)]` with a scoped `#[allow(unsafe_code)]`
+  and its justification, and SECURITY.md's claim would change with it.
 - The crate only decodes. An encoder is planned
   ([docs/roadmap.md](docs/roadmap.md)), and [docs/scope.md](docs/scope.md)
   shows what is supported.

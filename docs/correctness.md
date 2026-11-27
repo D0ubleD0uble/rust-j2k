@@ -417,6 +417,9 @@ skipped. When a feature lands, its row moves out of the matrix, and a row
 that stops rejecting fails the test.
 
 The library has no `unsafe`. If a measured hot path ever needs it, it must be
-justified, isolated and fuzzed. The only `unsafe` in the repository is in the
+justified, isolated and fuzzed. The crate root forbids it today
+(`#![forbid(unsafe_code)]`), so that would change it to
+`#![deny(unsafe_code)]` with a scoped `#[allow(unsafe_code)]` and its
+justification, and SECURITY.md's claim would change with it. The only `unsafe` in the repository is in the
 test binaries that count allocations
 (`tests/support/alloc.rs`).
