@@ -2344,7 +2344,8 @@ fn header_on_fixtures_whose_jp2c_box_ends_inside_the_main_header_is_a_read_from_
         crate::skip::excluded_path(dir);
     }
     let packaged = crate::skip::is_excluded_path("conformance/");
-    let (least_files, least_cases) = if packaged { (40, 100) } else { (50, 400) };
+    // 44 files and 704 cases packaged, 89 and 1418 in the repository.
+    let (least_files, least_cases) = if packaged { (40, 600) } else { (80, 1200) };
     assert!(files.len() > least_files, "{} files", files.len());
     let options = DecodeOptions::default();
     let boxes: Vec<u8> = (0..40).flat_map(|_| synth::bx(b"free", &[])).collect();
