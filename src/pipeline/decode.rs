@@ -1414,7 +1414,7 @@ pub(crate) fn check_reduction(
             let place = tile.map_or_else(String::new, |index| format!(" in tile {index}"));
             return Err(Error::invalid_options(format!(
                 "resolution reduction {reduction} leaves no resolution of component \
-                 {component}{place} (it has {resolutions})"
+                 {component} (it has {resolutions}){place}"
             )));
         }
     }
@@ -2302,8 +2302,7 @@ pub(crate) mod tests {
         assert_eq!(
             message(Some(7)),
             format!(
-                "resolution reduction 2 leaves no resolution of component {last} in tile 7 \
-                 (it has 2)"
+                "resolution reduction 2 leaves no resolution of component {last} (it has 2) in tile 7"
             )
         );
         // A component with a single resolution reads correctly too.
