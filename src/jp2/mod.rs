@@ -260,6 +260,46 @@ pub(crate) fn parse_boxes<'a>(
     bytes: &'a [u8],
     packet_work: &WorkLimit,
 ) -> std::result::Result<Jp2File<'a>, BoxFault> {
+    let (mut boxes, file_type) = read_file_type(bytes)?;
+    let mut kept = Kept::default();
+    let item = walk_to_codestream(&mut boxes, &mut kept)?;
+    let Kept { header, other, .. } = kept;
+    let Some(header) = header else {
+        return Err(no_jp2h().into());
+    };
+    color::check_bpcc(&header)?;
+    let color = color::read(&header)?;
+    let whole = boxes.last_was_whole();
+    let (codestream, rest, reads) =
+        locate_codestream(bytes, item.payload, boxes.rest(), packet_work);
+    let after = walk_after_codestream(rest);
+    // Both are ends of the file; the shorter starts later.
+    let past_box = boxes.rest();
+    let after_box = (past_box.len() < rest.len()).then(|| walk_after_codestream(past_box).boxes);
+    Ok(Jp2File {
+        file_type,
+        header,
+        color,
+        codestream,
+        other,
+        after_codestream: after.boxes,
+        after_box,
+        after_read: reads == AfterRead::Yes,
+        after_fault: after.fault,
+        after_open: after.open,
+        after_settled: match reads {
+            AfterRead::Yes => after.ended,
+            AfterRead::Never | AfterRead::Broken => true,
+            AfterRead::NotYet => false,
+        },
+        codestream_fixed: reads == AfterRead::Broken && whole,
+    })
+}
+
+/// Read the signature box and the `ftyp` box after it, for
+/// [`parse_boxes`] and [`BoxesCut::start`]. Returns the walk of the
+/// top-level boxes, just past the `ftyp`.
+fn read_file_type(bytes: &[u8]) -> std::result::Result<(Boxes<'_>, FileType), BoxFault> {
     if SIGNATURE.starts_with(bytes) && bytes.len() < SIGNATURE.len() {
         return Err(Error::incomplete("the input ends inside the JP2 signature box").into());
     }
@@ -304,10 +344,84 @@ pub(crate) fn parse_boxes<'a>(
             return Err(Error::incomplete("the input ends after the JP2 signature box").into());
         }
     };
+    Ok((boxes, file_type))
+}
 
-    let mut header: Option<Jp2Header<'_>> = None;
-    let mut other = Vec::new();
-    let mut reported = Reported::default();
+/// What [`walk_to_codestream`] keeps of the boxes before the codestream.
+/// [`parse_boxes`] keeps all it reads ([`Kept`]); a [`BoxesCut`] keeps only
+/// the first `ihdr`, which is all that decides how the boxes after it are
+/// read.
+trait BeforeCodestream<'a> {
+    /// Whether a `jp2h` box has been read.
+    fn has_jp2h(&self) -> bool;
+    /// Read a `jp2h` box: the first, or a later one merged into it.
+    fn jp2h(&mut self, payload: &'a [u8]) -> std::result::Result<(), BoxFault>;
+    /// Take any other box before the codestream.
+    fn other(&mut self, item: Jp2Box<'a>);
+}
+
+/// What [`parse_boxes`] keeps of the boxes before the codestream.
+#[derive(Default)]
+struct Kept<'a> {
+    header: Option<Jp2Header<'a>>,
+    other: Vec<Jp2Box<'a>>,
+    reported: Reported,
+}
+
+impl<'a> BeforeCodestream<'a> for Kept<'a> {
+    fn has_jp2h(&self) -> bool {
+        self.header.is_some()
+    }
+
+    fn jp2h(&mut self, payload: &'a [u8]) -> std::result::Result<(), BoxFault> {
+        let merged = match self.header.take() {
+            None => Jp2Header::parse(payload),
+            Some(first) => first.merge(payload),
+        };
+        self.header = Some(merged?);
+        Ok(())
+    }
+
+    fn other(&mut self, item: Jp2Box<'a>) {
+        let taken = self
+            .header
+            .as_mut()
+            .is_some_and(|header| header.add_misplaced(item));
+        if !taken && self.reported.keeps(item.kind) {
+            self.other.push(item);
+        }
+    }
+}
+
+/// A [`BoxesCut`] keeps the first `ihdr`: a later `jp2h` is checked
+/// against it alone ([`Jp2Header::of_ihdr`]), and any other box is kept as
+/// it is, which cannot fail.
+impl<'a> BeforeCodestream<'a> for Option<header::Ihdr> {
+    fn has_jp2h(&self) -> bool {
+        self.is_some()
+    }
+
+    fn jp2h(&mut self, payload: &'a [u8]) -> std::result::Result<(), BoxFault> {
+        let read = match *self {
+            None => Jp2Header::parse(payload),
+            Some(ihdr) => Jp2Header::of_ihdr(ihdr).merge(payload),
+        };
+        *self = Some(read?.ihdr);
+        Ok(())
+    }
+
+    fn other(&mut self, _: Jp2Box<'a>) {}
+}
+
+/// Walk the top-level boxes after the `ftyp` to the first `jp2c`, which it
+/// returns, whole or running to the end of the input. Every rule
+/// [`parse_boxes`] applies to the boxes before the codestream is here, so
+/// that a [`BoxesCut`] applies the same ones: what fails, what is
+/// [`Error::Incomplete`], and which faults are open.
+fn walk_to_codestream<'a>(
+    boxes: &mut Boxes<'a>,
+    kept: &mut impl BeforeCodestream<'a>,
+) -> std::result::Result<Jp2Box<'a>, BoxFault> {
     // Whether a box with length 0 ("to the end of the file") was read, for the
     // message when it swallowed the boxes meant to follow it, and whether it
     // was the `ftyp` or a `jp2h`, whose contents more bytes can still fault.
@@ -317,7 +431,7 @@ pub(crate) fn parse_boxes<'a>(
         let item = match item {
             // A `jp2c` cut inside its 16-byte header still needs a `jp2h`
             // before it.
-            Err(Error::Incomplete(_)) if header.is_none() && boxes.cut_kind() == Some(*b"jp2c") => {
+            Err(Error::Incomplete(_)) if !kept.has_jp2h() && boxes.cut_kind() == Some(*b"jp2c") => {
                 return Err(no_jp2h().into());
             }
             item => item?,
@@ -325,57 +439,12 @@ pub(crate) fn parse_boxes<'a>(
         open_ended = boxes.last_was_open_ended();
         open_read = open_ended && &item.kind == b"jp2h";
         match &item.kind {
-            b"jp2h" => {
-                let merged = match header {
-                    None => Jp2Header::parse(item.payload),
-                    Some(first) => first.merge(item.payload),
-                };
-                header = Some(merged.map_err(|fault| BoxFault {
-                    open: fault.open && boxes.last_was_open_ended(),
-                    ..fault
-                })?);
-            }
-            b"jp2c" => {
-                let Some(header) = header else {
-                    return Err(no_jp2h().into());
-                };
-                color::check_bpcc(&header)?;
-                let color = color::read(&header)?;
-                let whole = boxes.last_was_whole();
-                let (codestream, rest, reads) =
-                    locate_codestream(bytes, item.payload, boxes.rest(), packet_work);
-                let after = walk_after_codestream(rest);
-                // Both are ends of the file; the shorter starts later.
-                let past_box = boxes.rest();
-                let after_box =
-                    (past_box.len() < rest.len()).then(|| walk_after_codestream(past_box).boxes);
-                return Ok(Jp2File {
-                    file_type,
-                    header,
-                    color,
-                    codestream,
-                    other,
-                    after_codestream: after.boxes,
-                    after_box,
-                    after_read: reads == AfterRead::Yes,
-                    after_fault: after.fault,
-                    after_open: after.open,
-                    after_settled: match reads {
-                        AfterRead::Yes => after.ended,
-                        AfterRead::Never | AfterRead::Broken => true,
-                        AfterRead::NotYet => false,
-                    },
-                    codestream_fixed: reads == AfterRead::Broken && whole,
-                });
-            }
-            _ => {
-                let taken = header
-                    .as_mut()
-                    .is_some_and(|header| header.add_misplaced(item));
-                if !taken && reported.keeps(item.kind) {
-                    other.push(item);
-                }
-            }
+            b"jp2h" => kept.jp2h(item.payload).map_err(|fault| BoxFault {
+                open: fault.open && boxes.last_was_open_ended(),
+                ..fault
+            })?,
+            b"jp2c" => return Ok(item),
+            _ => kept.other(item),
         }
     }
     // Every box read was whole, so the input ends between boxes: more may
@@ -383,9 +452,10 @@ pub(crate) fn parse_boxes<'a>(
     if !open_ended {
         return Err(Error::incomplete("the input ends before the `jp2c` codestream box").into());
     }
-    let missing = match header {
-        None => "the file has no `jp2h` header box and no `jp2c` codestream box",
-        Some(_) => "the file has no `jp2c` codestream box",
+    let missing = if kept.has_jp2h() {
+        "the file has no `jp2c` codestream box"
+    } else {
+        "the file has no `jp2h` header box and no `jp2c` codestream box"
     };
     Err(BoxFault {
         error: Error::file_format(format!(
@@ -406,6 +476,9 @@ fn no_jp2h() -> Error {
 /// whole, and the first `ihdr`, once a `jp2h` is read. Only the input
 /// ending there is kept: a walk that meets anything else stops, and
 /// `parse_boxes` reads the file from the start.
+///
+/// Both walks are the same code ([`read_file_type`] and
+/// [`walk_to_codestream`]), so they apply the same rules.
 pub(crate) struct BoxesCut {
     /// Where the next box starts.
     pos: usize,
@@ -418,22 +491,9 @@ impl BoxesCut {
     /// [`Error::Incomplete`] there, of no box of length 0: the input ends
     /// before the `jp2c` box, and every box before it is whole and passes.
     pub(crate) fn start(bytes: &[u8]) -> Option<Self> {
-        if !bytes.starts_with(&SIGNATURE) {
-            return None;
-        }
-        let mut boxes = Boxes::top_level(bytes, SIGNATURE.len());
-        match boxes.next() {
-            Some(Ok(ftyp))
-                if &ftyp.kind == b"ftyp"
-                    && !boxes.last_was_open_ended()
-                    && check_file_type(&ftyp).is_ok() => {}
-            _ => return None,
-        }
-        let mut cut = BoxesCut {
-            pos: boxes.pos(),
-            ihdr: None,
-        };
-        cut.resume(bytes).is_some().then_some(cut)
+        let (boxes, _) = read_file_type(bytes).ok()?;
+        let mut cut = BoxesCut { pos: 0, ihdr: None };
+        cut.walk(boxes).is_some().then_some(cut)
     }
 
     /// Go on with the walk over `bytes`, which extend those it had. If
@@ -442,45 +502,24 @@ impl BoxesCut {
     /// where it may give anything else: a `jp2c` box, a box of length 0 or
     /// a fault. The walk is then stale.
     ///
-    /// It reads the boxes as `parse_boxes` does from `pos` on: each whole
-    /// box once, a `jp2h` checked as `parse_boxes` reads it, which depends
-    /// on the boxes before it only through whether there was a `jp2h`.
+    /// It reads each whole box once: the boxes before `pos` bear on those
+    /// after only through the first `ihdr`.
     pub(crate) fn resume(&mut self, bytes: &[u8]) -> Option<Error> {
-        let mut boxes = Boxes::top_level(bytes, self.pos);
-        let ended = loop {
-            let item = match boxes.next() {
-                None => {
-                    break Error::incomplete("the input ends before the `jp2c` codestream box");
-                }
-                Some(Err(error @ Error::Incomplete(_))) => {
-                    // `parse_boxes` refuses a `jp2c` with no `jp2h` before it
-                    // as soon as its type is in.
-                    if self.ihdr.is_none() && boxes.cut_kind() == Some(*b"jp2c") {
-                        return None;
-                    }
-                    break error;
-                }
-                Some(Err(_)) => return None,
-                Some(Ok(item)) => item,
-            };
-            if boxes.last_was_open_ended() {
-                return None;
+        self.walk(Boxes::top_level(bytes, self.pos))
+    }
+
+    /// Walk `boxes` on to the codestream, from where the walk stopped.
+    fn walk(&mut self, mut boxes: Boxes<'_>) -> Option<Error> {
+        match walk_to_codestream(&mut boxes, &mut self.ihdr) {
+            Err(BoxFault {
+                error: error @ Error::Incomplete(_),
+                open: false,
+            }) => {
+                self.pos = boxes.pos();
+                Some(error)
             }
-            match &item.kind {
-                b"jp2c" => return None,
-                b"jp2h" => {
-                    let read = match self.ihdr {
-                        None => Jp2Header::parse(item.payload),
-                        Some(ihdr) => Jp2Header::of_ihdr(ihdr).merge(item.payload),
-                    };
-                    self.ihdr = Some(read.ok()?.ihdr);
-                }
-                // Any other box is kept as it is, which cannot fail.
-                _ => {}
-            }
-        };
-        self.pos = boxes.pos();
-        Some(ended)
+            _ => None,
+        }
     }
 }
 
