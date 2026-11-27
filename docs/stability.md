@@ -41,7 +41,11 @@ A change to any of these that breaks a caller needs a new minor version.
   `Image::new` and `component`, `Component::new` and `sample`,
   `TileGrid::count` and `tile`, `Window::new`, `DecodeReport::is_complete`,
   `LimitDetail::kind`, `retry_with` and `refused_at`,
-  `LimitKind::is_adjustable`, and `RefusedAt::tile`, `amount` and `unit`.
+  `LimitKind::is_adjustable`, `RefusedAt::tile`, `amount` and `unit`,
+  `Palette::columns`, `entry_count` and `entry`,
+  `Ratio::grid_points_per_meter`, `UuidInfo::location_str`, and
+  `message` on `Error`, `ErrorDetail` and `LimitDetail`. Every other
+  public method is covered too.
 - The settings of `DecodeOptions::default()` other than the limits: full
   resolution, every quality layer, the whole image, the components as the
   file's boxes shape them, color as coded, and `strict` on.
@@ -72,6 +76,16 @@ hidden `__fuzz` feature is not covered (see "What is not covered").
   `ReportEntry` variant, and moving it to another is a breaking change. When
   a refine has more than one reason to wait, or a gap in the data has more
   than one cause, which one is reported can still change.
+- **Which variant a catch-all value keeps.** `ColorSpace::Enumerated`,
+  `ChannelType::Other` and `MappingKind::Reserved` carry values that have no
+  named variant, and a JPX file's color space, for example, reaches a caller
+  as `Enumerated(12)`. Within a minor version, a value reported under a
+  catch-all keeps that variant, unless the value was reported there by
+  mistake, meaning the crate's own docs already name a variant for it (as
+  with `Typ` 3 in a JPH file). A patch release may correct that, and the
+  CHANGELOG lists it. Otherwise, giving a value a named variant needs a
+  minor release, the same rule the `Error`, `Waiting` and `ReportEntry`
+  mappings follow. Match a value you care about by number, and keep a `_` arm.
 - **Which limit refused.** The `LimitKind` a refusal names, which kinds an
   option raises (`LimitKind::is_adjustable`), and which option that is.
 - **`retry_with`.** What `LimitDetail::retry_with` means, as its rustdoc
@@ -95,8 +109,9 @@ The samples a file decodes to, and whether it decodes or is refused, are
 covered, except for fixes, lossy rounding and the changes to the default
 limits, all described below. The crate decides each case by three rules,
 in order: follow the standard; otherwise give the error correction a user
-would expect, with OpenJPEG as the usual guide; and return an error rather
-than a wrong image ([correctness.md](correctness.md#when-the-oracle-and-the-standard-disagree)).
+would expect, with OpenJPEG 2.5.0, the version the oracles use, as the
+usual guide; and return an error rather than a wrong image
+([correctness.md](correctness.md#when-the-oracle-and-the-standard-disagree)).
 
 - A fix that brings the output, or the choice to decode or refuse, closer to
   those rules can ship in a patch release. Examples: output corrected to
@@ -135,6 +150,15 @@ they give. `Region::Whole` and a `Region::Window` that covers the whole
 image compare unequal, and so do `components` of `None` and a list of every
 component. The builders store a limit of `Raised(1)` as `Default`, so two
 options built with those compare equal.
+
+### Equality of the output types
+
+`Image`, `Component`, `Header`, `ComponentInfo`, `TileGrid` (which also
+derives `Hash`), `Jp2Metadata`, `DecodeReport` and `ReportEntry` derive
+`Eq`, as does every type they hold, the JP2 metadata types included. That is
+covered the same way. So none of them can gain a float field, and a cause
+added to a `ReportEntry` must be an `Eq` kind, not an `Error`, which has no
+`PartialEq`.
 
 ### `RefusedAt`
 
@@ -219,13 +243,13 @@ newer Rust than its minor release did.
 
 These can change in any release:
 
-- **Text.** The wording of every message: `Error::message`,
-  `ErrorDetail`, `LimitDetail::message`, the `Display` text of `Error`
-  (with the prefix it adds for the variant), `LimitDetail` and
-  `ReportEntry`, and all `Debug` output. These are diagnostics for a log,
-  not a stable format: do not parse them or compare them. Match on the
-  variant, and read a limit's data from `kind`, `retry_with` and
-  `refused_at`.
+- **Text.** The wording of every message: the text `Error::message`,
+  `ErrorDetail::message` and `LimitDetail::message` return, the `Display`
+  text of `Error` (with the prefix it adds for the variant), `ErrorDetail`,
+  `LimitDetail` and `ReportEntry`, and all `Debug` output. These are
+  diagnostics for a log, not a stable format: do not parse them or compare
+  them. Match on the variant, and read a limit's data from `kind`,
+  `retry_with` and `refused_at`.
 - **Which fault wins.** When an input has more than one fault, which one is
   reported, including its variant. The rustdoc of `Error` lists what holds
   today.
