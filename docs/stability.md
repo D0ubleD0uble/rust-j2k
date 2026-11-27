@@ -80,8 +80,10 @@ hidden `__fuzz` feature is not covered (see "What is not covered").
   `ChannelType::Other` and `MappingKind::Reserved` carry values that have no
   named variant, and a JPX file's color space, for example, reaches a caller
   as `Enumerated(12)`. Within a minor version, a value reported under a
-  catch-all keeps that variant. Giving it a named variant needs a minor
-  release, the same rule the `Error`, `Waiting` and `ReportEntry` mappings
+  catch-all keeps that variant, unless the value was reported there by
+  mistake, which a fix may correct as the decoded-output rules allow (a JPH
+  `Typ` value that should map to a named variant, for example). Giving it a
+  named variant otherwise needs a minor release, the same rule the `Error`, `Waiting` and `ReportEntry` mappings
   follow. Match a value you care about by number, and keep a `_` arm.
 - **Which limit refused.** The `LimitKind` a refusal names, which kinds an
   option raises (`LimitKind::is_adjustable`), and which option that is.
@@ -106,8 +108,9 @@ The samples a file decodes to, and whether it decodes or is refused, are
 covered, except for fixes, lossy rounding and the changes to the default
 limits, all described below. The crate decides each case by three rules,
 in order: follow the standard; otherwise give the error correction a user
-would expect, with OpenJPEG 2.5.0, the version the oracles use, as the usual guide; and return an error rather
-than a wrong image ([correctness.md](correctness.md#when-the-oracle-and-the-standard-disagree)).
+would expect, with OpenJPEG 2.5.0, the version the oracles use, as the
+usual guide; and return an error rather than a wrong image
+([correctness.md](correctness.md#when-the-oracle-and-the-standard-disagree)).
 
 - A fix that brings the output, or the choice to decode or refuse, closer to
   those rules can ship in a patch release. Examples: output corrected to
@@ -149,10 +152,11 @@ options built with those compare equal.
 
 ### Equality of the output types
 
-`Image`, `Component`, `Header`, `ComponentInfo`, `Jp2Metadata`,
-`DecodeReport` and `ReportEntry` derive `Eq`, and that is covered the same
-way. So none of them can gain a float field, and a `ReportEntry` describes
-its cause with a kind that is `Eq`, not with an `Error`, which has no
+`Image`, `Component`, `Header`, `ComponentInfo`, `TileGrid` (which also
+derives `Hash`), `Jp2Metadata`, `DecodeReport` and `ReportEntry` derive
+`Eq`, as does every type they hold, the JP2 metadata types included. That is
+covered the same way. So none of them can gain a float field, and a cause
+added to a `ReportEntry` must be an `Eq` kind, not an `Error`, which has no
 `PartialEq`.
 
 ### `RefusedAt`
@@ -238,10 +242,10 @@ newer Rust than its minor release did.
 
 These can change in any release:
 
-- **Text.** The wording of every message: the text `Error::message` and
-  `LimitDetail::message` return, `ErrorDetail`, the `Display` text of `Error`
-  (with the prefix it adds for the variant), `LimitDetail` and
-  `ReportEntry`, and all `Debug` output. These are diagnostics for a log,
+- **Text.** The wording of every message: the text `Error::message`,
+  `ErrorDetail::message` and `LimitDetail::message` return, the `Display`
+  text of `Error` (with the prefix it adds for the variant), `ErrorDetail`,
+  `LimitDetail` and `ReportEntry`, and all `Debug` output. These are diagnostics for a log,
   not a stable format: do not parse them or compare them. Match on the
   variant, and read a limit's data from `kind`, `retry_with` and
   `refused_at`.

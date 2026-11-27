@@ -500,7 +500,8 @@ pub enum ColorSpace {
     RestrictedIcc(Vec<u8>),
     /// Another enumerated color space value from the first usable box,
     /// reported but not interpreted. A value reported here stays here within
-    /// a minor version, even if a later release names it.
+    /// a minor version unless it was reported by mistake; moving it to a named
+    /// variant otherwise needs a minor release.
     Enumerated(u32),
     /// The file gives no color space: no usable `colr` box. The image
     /// header's unknown-color-space flag
@@ -556,7 +557,8 @@ pub enum ChannelType {
     /// The type is not specified (`Typ` 65535).
     Unspecified,
     /// A reserved `Typ` value, reported as is. A value reported here stays
-    /// here within a minor version, even if a later release names it.
+    /// here within a minor version unless it was reported by mistake; moving it
+    /// to a named variant otherwise needs a minor release.
     Other(u16),
 }
 
