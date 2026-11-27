@@ -400,19 +400,22 @@ what it does not.
 
 ## Decisions
 
-Settled on 2026-11-17.
+Settled on 2026-11-17, except where marked proposed.
 
 1. **The API is `encode` and `encode_with`.** `encode(&Image)` and
    `encode_with(&Image, &EncodeOptions)` mirror `decode` and `decode_with`.
    `EncodeOptions` is a `#[non_exhaustive]` struct with `with_*` setters, like
    `DecodeOptions`. The output is `Result<Vec<u8>>`: a raw codestream, or a
-   JP2 file under `with_format(Format::Jp2)`. Input the encoder cannot
-   encode is a new `Error::InvalidImage`, such as a sample outside its
-   declared depth, and bad options are `Error::InvalidOptions`. There is no
-   `Encoder` builder until threads (#301) give it state, and no `io::Write`
-   output, since rate control, TLM and `Psot` need lengths first. A borrowed
-   input view comes with #303. `Image::jp2` and `Image::report` are ignored:
-   the boxes come from the options, and a report describes a decode. The
+   JP2 file under `with_format(Format::Jp2)`. Input the encoder cannot encode
+   is a new `Error::InvalidImage`, such as a sample outside its declared
+   depth, and bad options are `Error::InvalidOptions`. There is no `Encoder`
+   builder until threads (#301) give it state, and no `io::Write` output,
+   since rate control, TLM and `Psot` need lengths first.
+   `Error::InvalidOptions` is documented as decode-only (`src/error.rs`, the
+   variant and the error table), so that rustdoc is widened when
+   `EncodeOptions` reuses it. A borrowed input view comes with #303.
+   `Image::jp2` and `Image::report` are ignored: the boxes come from the
+   options, and a report describes a decode. The `encode` rustdoc says so. The
    origin comes from #254, on the grid of `width` and `height`, so component
    sizes and DWT parity come out right. A palette-expanded image can hold
    samples outside its declared depth (`src/image.rs`), so it is
@@ -438,15 +441,17 @@ Settled on 2026-11-17.
    code-block styles, markers and tile-parts. Each has its own step and
    oracle below. POC and ROI have the weakest external oracles, and [Oracle
    limits](#oracle-limits) says what a cross-decode can and cannot prove.
-5. **The encoder sits behind an `encode` cargo feature, on by default.** A
-   decode-only user (fieldglass, or wasm) sets `default-features = false`
-   and compiles none of it. The feature (`encode = []`, in `default`) is
-   declared before P5.0. Every encode test, bench and `src/fuzz.rs` entry is
-   gated on it; `Error::InvalidImage` is not, so the error enum is the same
-   in both builds. CI gains `cargo test` and `cargo clippy --all-targets`
-   with `--no-default-features`. Code only the encoder calls lives in
-   `src/encode/` or behind the feature, so a decode-only build has no dead
-   code. The `Cargo.toml` and CI edits are the maintainer's.
+5. **The encoder sits behind an `encode` cargo feature.** Whether it is on by
+   default is proposed, to be confirmed in 0.7: the #515 answer of 2026-11-26
+   does not decide the encoder default. If it is on by default, a decode-only
+   user (fieldglass, or wasm) sets `default-features = false` and compiles
+   none of it. The feature (`encode = []`, in `default` if that is confirmed)
+   is declared before P5.0. Every encode test, bench and `src/fuzz.rs` entry
+   is gated on it; `Error::InvalidImage` is not, so the error enum is the same
+   in both builds. CI builds and tests with and without the `encode` feature.
+   Code only the encoder calls lives in `src/encode/` or behind the feature,
+   so a decode-only build has no dead code. The `Cargo.toml` and CI edits are
+   the maintainer's.
 6. **The reference tools are OpenJPEG, Grok and jpylyzer.** OpenJPEG 2.5.0 is
    the gate. Grok (20.4.25, built for performance.md) is a second decoder in a
    release round. `grk_compress -U` is the field-level oracle for the
@@ -539,12 +544,13 @@ Before P5.0: the `encode` feature declared. Before P5.7: #254 (the origin on Ima
 That is 28 steps: P5.0, P5.0b and P5.1 to P5.26. The diagram's right-hand
 columns are schematic; the dependencies are the ones the lanes below list.
 
-P5.0b opens every decoder seam in one PR, so no two encoder steps edit the
-same decoder file. The stage pieces then land in parallel on disjoint files
-(P5.1 to P5.4 and P5.6), each against its decoder inverse and an external
-oracle, as Phase 2 built the decoder. P5.7 is the first file out and fixes
-the API shape early. Rate control (P5.9) follows a fixed-quantization 9/7
-encode (P5.8), so that a rate bug cannot hide behind a transform bug.
+P5.0b opens every decoder seam in one PR, except where a row below names a
+decoder file, so no two encoder steps edit the same decoder file. The stage
+pieces then land in parallel on disjoint files (P5.1 to P5.4 and P5.6), each
+against its decoder inverse and an external oracle, as Phase 2 built the
+decoder. P5.7 is the first file out and fixes the API shape early. Rate
+control (P5.9) follows a fixed-quantization 9/7 encode (P5.8), so that a rate
+bug cannot hide behind a transform bug.
 
 After P5.7 the work splits into six lanes that can run side by side:
 
@@ -579,19 +585,19 @@ that adds a marker appends its function to `markers.rs` and one call to
 | P5.4 | `src/encode/mq.rs` | uses `QE_TABLE` (already `pub`) and the H.2 vectors, opened in P5.0b |
 | P5.5 | `src/encode/passes.rs` | uses `src/tier1/ebcot/context.rs`, split out in P5.0b |
 | P5.6 | `src/encode/tagtree.rs`, `src/encode/packet.rs` | uses `resolution_geoms` and `for_each_packet` (already re-exported), and `band_rects` and `next_segment` (opened in P5.0b) |
-| P5.7 | `src/encode/mod.rs`, `options.rs`, `codestream.rs`, `markers.rs`; `src/lib.rs` re-exports | `src/codestream/markers.rs`: shared structs; `src/pipeline.rs`: module doc |
+| P5.7 | `src/encode/mod.rs`, `options.rs`, `codestream.rs`, `markers.rs`; `src/lib.rs` re-exports | `src/codestream/markers.rs`: shared structs; `src/pipeline.rs`: module doc; `src/error.rs`: the new `Error::InvalidImage` variant and the widened `InvalidOptions` rustdoc |
 | P5.8 | `src/encode/mod.rs` (9/7 branch) | none |
 | P5.9 | `src/encode/rate.rs` | none |
 | P5.10 | `src/encode/tile.rs` | uses the geometry re-exports |
 | P5.11 | `src/encode/packet.rs` | none |
 | P5.12 | `src/encode/passes.rs`, `src/encode/mq.rs` | uses the segment and pass-mode helpers of P5.0b |
 | P5.13 | `src/encode/markers.rs`, `codestream.rs` | none |
-| P5.14 | `src/encode/jp2.rs`, with its own box-type constants | none: the decoder has no box-type constants and `jp2::boxes` is private |
+| P5.14 | `src/encode/jp2.rs`, with its own box-type constants | none for box types: the decoder has none and `jp2::boxes` is private. Open choice: the options take the public box types (`ImageHeader`, `ColorSpecification`, `Resolution`, `XmlBox`, `UuidBox` and the rest), which needs a constructor on each in `src/jp2/metadata.rs`, new API on frozen types, or the options' own box types, which needs none |
 | P5.15 | `src/encode/options.rs` (per-component and per-tile), `markers.rs`, `tile.rs` | none |
 | P5.16 | `src/encode/poc.rs`, `packet.rs`, `markers.rs` | uses `check_poc_coverage`, re-exported in P5.0b |
 | P5.17 | `src/encode/roi.rs`, `passes.rs`, `markers.rs` | uses `undo_maxshift` (`pub(crate)`) and `top_coded_plane` (`pub`) as they are |
 | P5.18 | `src/encode/packed.rs`, `codestream.rs` | none |
-| P5.19 | `src/encode/jp2.rs`, `options.rs` | none: uses the public `Palette` type |
+| P5.19 | `src/encode/jp2.rs`, `options.rs` | `src/jp2/palette.rs`: a validating `Palette::new` (NE 1..=1024, NPC 1..=255, column depths) and a `PaletteColumn::new`, new API on frozen types (`Palette` has private fields and is `#[non_exhaustive]`; `PaletteColumn` is `#[non_exhaustive]`, so a caller cannot build one) |
 | P5.20 | `src/encode/profile/mod.rs`, `profile/rules.rs`, `profile/check.rs`, `options.rs` | `src/codestream/mod.rs`: keep `Rsiz` and each tile-part's marker list in the parsed header, `pub(crate)` |
 | P5.21 | `src/encode/profile/cinema.rs` | none |
 | P5.22 | `src/encode/profile/cinema.rs` | none |
@@ -636,7 +642,7 @@ did.
 
 **Gate:** the parity snapshot holds OpenJPEG's figures for every case; every
 case reports *not yet encoded*; the PR states the sweep's case count; `cargo
-test` is green with and without default features.
+test` is green with and without the `encode` feature.
 
 ### P5.0b — Open the decoder seams
 
@@ -658,7 +664,8 @@ reachable and free of decode-only assumptions, in one behavior-preserving PR.
 - `src/tier1/ebcot/mq.rs`: move the H.2 vectors out of the private test
   module into a `#[cfg(test)] pub(crate)` item.
 - `src/error.rs`: `Inconsistent` reads "internal bug (please report it)", not
-  "decoder bug", since encoder paths can reach it.
+  "decoder bug", since encoder paths can reach it. Its rustdoc ("A decoder
+  invariant was violated") needs the same widening.
 - `src/tier2/mod.rs`: a `Meter::unlimited()` constructor behind the `encode`
   feature, for walks over the encoder's own geometry.
 
@@ -666,7 +673,7 @@ reachable and free of decode-only assumptions, in one behavior-preserving PR.
 the HT and Part 1 rows of performance.md, since `passes.rs` and the context
 lookups are the hot path.
 
-**Gate:** every test passes with and without default features, clippy is
+**Gate:** every test passes with and without the `encode` feature, clippy is
 clean in both builds, and no benchmark row moves by more than its noise.
 
 ### P5.1 — Forward DWT (`src/encode/dwt.rs`)
@@ -1086,9 +1093,10 @@ is `InvalidOptions`.
 **Goal:** a JP2 file whose codestream holds palette indexes, with the palette
 in `pclr` and the mapping in `cmap`.
 
-**Work:** the options take the public `Palette` type and say which component
-holds the indexes. An index outside the palette is `InvalidImage`. Palette
-columns up to the depths the decoder reads.
+**Work:** the options take a `Palette` built by the new `Palette::new` and
+say which component holds the indexes. An index outside the palette is
+`InvalidImage`. `Palette::new` accepts column depths the decoder applies:
+those that fit `i32`, signed up to 32 bits and unsigned up to 31.
 
 **Oracle:** `opj_decompress` applies the palette (OpenJPEG writes none but
 reads them): its output equals the input with the palette applied;
