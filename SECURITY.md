@@ -27,7 +27,8 @@ with `Unlimited` and memory runs out.
 
 ## Supported versions
 
-Fixes land in the latest `0.x` release.
+Fixes land in the latest `0.x` release. A security fix may lower a default
+limit in a patch release, and the CHANGELOG lists it.
 
 | Version | Supported |
 | --- | --- |
@@ -38,11 +39,12 @@ Fixes land in the latest `0.x` release.
 
 rust-j2k is a decoder: it reads binary input it did not produce, and that
 input may be hostile. With the default limits, the public functions (`decode`,
-`decode_with`, `read_header` and `read_header_with`) return either a result or
-a typed `Error` for any input. They never panic, read out of bounds or hang,
-and they allocate at most what the limits allow: about 6.4 GiB at peak
-for an input of up to 64 MiB, and about 102 bytes per byte of input past
-that. If the machine can't supply that, the process aborts, as any Rust program does; that
+`decode_with`, `read_header` and `read_header_with`) and the
+`IncrementalDecoder` methods (`new`, `feed`, `refine`, `header`, `finish` and
+the setters) return either a result or a typed `Error` for any input. They
+never panic, read out of bounds or hang, and they allocate at most what the
+limits allow. For the one-shot functions that is about 6.4 GiB at peak for an
+input of up to 64 MiB, and about 102 bytes per byte of input past that. If the machine can't supply that, the process aborts, as any Rust program does; that
 is not a bug. If a panic, an out-of-bounds read, a hang or a larger allocation
 from any other input happens, report it as above.
 

@@ -72,6 +72,16 @@ fields without a breaking change, so match on it with a `_` arm or `..`.
   measure of the file, and `None` when no option raises the limit or the
   refusal shows no factor. `DecodeOptions::raised_for` applies it.
 
+### The security promise
+
+[SECURITY.md](../SECURITY.md#what-counts-as-a-vulnerability) promises that,
+at the default limits, the public functions and the `IncrementalDecoder`
+methods return a result or a typed `Error` for any input: they never panic,
+read out of bounds or hang, and allocate at most what the limits allow.
+This promise is part of the covered API. An input that breaks it is a bug,
+fixed as a security fix, and dropping or narrowing the promise needs a
+new minor version.
+
 ### Decoded output
 
 The samples a file decodes to, and whether it decodes or is refused, are
@@ -213,7 +223,7 @@ variants and what they mean are stable. A value changes by direction:
 - Lowering one, so that some files are refused, needs a minor release,
   except as a security fix. A security fix that lowers a value can ship in
   a patch release, and the CHANGELOG lists it (see
-  [SECURITY.md](../SECURITY.md)).
+  [SECURITY.md](../SECURITY.md#supported-versions)).
 
 The values today:
 
