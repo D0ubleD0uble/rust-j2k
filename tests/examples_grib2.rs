@@ -115,7 +115,8 @@ fn the_grib2_example_prints_the_values_eccodes_reads() {
 fn the_grib2_example_notes_a_rounded_r() {
     let input = fixture("jpeg2000_regular_latlon.j2k");
     let os = std::ffi::OsStr::new;
-    let run = run_grib2(&[input.as_os_str(), os("270.467"), os("-10"), os("0")]);
+    let args = [input.as_os_str(), os("270.467"), os("-10"), os("0")];
+    let run = run_grib2(&args);
     assert!(run.status.success(), "{run:?}");
     let err = String::from_utf8_lossy(&run.stderr);
     assert!(err.contains("R is not a 32-bit float"), "{err}");
