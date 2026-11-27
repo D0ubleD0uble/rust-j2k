@@ -30,14 +30,21 @@ fn the_icc_convert_tool_builds_and_is_formatted() {
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("icc_convert_target");
 
     let out = cargo()
-        .args(["check", "--offline", "--quiet", "--manifest-path"])
+        .args([
+            "check",
+            "--offline",
+            "--locked",
+            "--quiet",
+            "--manifest-path",
+        ])
         .arg(&manifest)
         .env("CARGO_TARGET_DIR", &target)
         .output()
         .expect("run cargo check");
     assert!(
         out.status.success(),
-        "scripts/icc_convert does not build:\n{}",
+        "scripts/icc_convert does not build (after a version bump, edit the rust-j2k \
+version in scripts/icc_convert/Cargo.lock by hand, as RELEASING.md step 2 says):\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 
