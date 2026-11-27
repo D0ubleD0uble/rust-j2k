@@ -31,6 +31,10 @@ use std::process::ExitCode;
 use rust_j2k::{DecodeOptions, Error, IncrementalDecoder};
 use rust_j2k::{Refined, Waiting, decode};
 
+#[macro_use]
+#[path = "common/say.rs"]
+mod say;
+
 /// Say why a refine gave no image.
 fn describe(why: &Waiting) -> String {
     match why {
@@ -72,12 +76,14 @@ fn run(args: &[OsString]) -> Result<(), String> {
         if !header_shown {
             let header = decoder.header().map_err(at)?;
             let Some(header) = header else {
-                println!("{fed} bytes: no header yet");
+                say!("{fed} bytes: no header yet");
                 continue;
             };
-            println!(
+            say!(
                 "{fed} bytes: header is in, {} x {}, {} quality layers",
-                header.width, header.height, header.quality_layers
+                header.width,
+                header.height,
+                header.quality_layers
             );
             header_shown = true;
         }
@@ -88,22 +94,23 @@ fn run(args: &[OsString]) -> Result<(), String> {
                 } else {
                     "partial"
                 };
-                println!(
+                say!(
                     "{fed} bytes: refined, {} x {}, {state}",
-                    image.width, image.height
+                    image.width,
+                    image.height
                 );
             }
             Refined::Waiting(why) => {
-                println!("{fed} bytes: {}", describe(&why));
+                say!("{fed} bytes: {}", describe(&why));
             }
-            _ => println!("{fed} bytes: a result this example does not show"),
+            _ => say!("{fed} bytes: a result this example does not show"),
         }
     }
     let image = decoder.finish().map_err(at)?;
-    println!("finished: {} x {}", image.width, image.height);
+    say!("finished: {} x {}", image.width, image.height);
     let whole = decode(&bytes).map_err(at)?;
     let same = image.components == whole.components;
-    println!("same samples as decode on the whole file: {same}");
+    say!("same samples as decode on the whole file: {same}");
     Ok(())
 }
 

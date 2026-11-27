@@ -10,30 +10,21 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 use rust_j2k::{DecodeOptions, Region, Window, decode_with, read_header};
 
 #[path = "../examples/common/pnm.rs"]
 mod pnm;
 
+#[path = "support/run_example.rs"]
+mod run_example;
+use run_example::run_example;
+
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
-}
-
-/// Run an example through `cargo run`; the nested build reuses the library
-/// the tests built (`--profile test`, as in `tests/examples_pnm.rs`).
-fn run_example(example: &str, args: &[&OsStr]) -> Output {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    Command::new(cargo)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args(["run", "--quiet", "--offline", "--profile", "test"])
-        .args(["--example", example, "--"])
-        .args(args)
-        .output()
-        .unwrap()
 }
 
 fn out_path(name: &str) -> PathBuf {

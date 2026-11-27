@@ -20,16 +20,23 @@ use std::process::ExitCode;
 
 use rust_j2k::{ColorSpace, Header, Jp2Metadata, Ratio, Res, read_header};
 
+#[macro_use]
+#[path = "common/say.rs"]
+mod say;
+
 fn print_header(header: &Header) {
-    println!("size: {} x {}", header.width, header.height);
+    say!("size: {} x {}", header.width, header.height);
     let area = header.image_area;
-    println!(
+    say!(
         "image area: x {}..{}, y {}..{}",
-        area.x0, area.x1, area.y0, area.y1
+        area.x0,
+        area.x1,
+        area.y0,
+        area.y1
     );
-    println!("components: {}", header.components.len());
+    say!("components: {}", header.components.len());
     for (i, c) in header.components.iter().enumerate() {
-        println!(
+        say!(
             "  {i}: {}x{}, {}-bit {}, subsampling {}x{}",
             c.width,
             c.height,
@@ -40,7 +47,7 @@ fn print_header(header: &Header) {
         );
     }
     let t = &header.tiles;
-    println!(
+    say!(
         "tiles: {} x {} = {}, each {} x {}, grid starts at ({}, {})",
         t.columns,
         t.rows,
@@ -50,12 +57,12 @@ fn print_header(header: &Header) {
         t.x_offset,
         t.y_offset
     );
-    println!(
+    say!(
         "resolution levels: at least {} (the largest reduction is {})",
         u16::from(header.max_reduction) + 1,
         header.max_reduction
     );
-    println!("quality layers: {}", header.quality_layers);
+    say!("quality layers: {}", header.quality_layers);
 }
 
 fn fourcc(code: [u8; 4]) -> String {
@@ -79,34 +86,34 @@ fn describe(res: Option<Res>) -> String {
 }
 
 fn show_count<T>(what: &str, boxes: &[T]) {
-    println!("  {what}: {}", boxes.len());
+    say!("  {what}: {}", boxes.len());
 }
 
 fn print_jp2(jp2: &Jp2Metadata) {
-    println!("JP2 metadata:");
+    say!("JP2 metadata:");
     match &jp2.color {
         ColorSpace::RestrictedIcc(profile) => {
-            println!(
+            say!(
                 "  color space: restricted ICC profile, {} bytes",
                 profile.len()
             );
         }
-        other => println!("  color space: {other:?}"),
+        other => say!("  color space: {other:?}"),
     }
-    println!("  channels:");
+    say!("  channels:");
     for (i, c) in jp2.channels.iter().enumerate() {
-        println!("    {i}: {:?}, {:?}", c.kind, c.association);
+        say!("    {i}: {:?}, {:?}", c.kind, c.association);
     }
-    println!("  palette applied: {}", jp2.palette_applied);
+    say!("  palette applied: {}", jp2.palette_applied);
     if let Some(palette) = &jp2.palette {
-        println!(
+        say!(
             "  palette: {} entries, {} columns",
             palette.entry_count(),
             palette.columns().len()
         );
     }
-    println!("  capture resolution: {}", describe(jp2.resolution.capture));
-    println!("  display resolution: {}", describe(jp2.resolution.display));
+    say!("  capture resolution: {}", describe(jp2.resolution.capture));
+    say!("  display resolution: {}", describe(jp2.resolution.display));
     show_count("xml boxes", &jp2.xml);
     show_count("UUID boxes", &jp2.uuid);
     show_count("intellectual property boxes", &jp2.ipr);
@@ -114,7 +121,7 @@ fn print_jp2(jp2: &Jp2Metadata) {
     let ft = &jp2.file_type;
     let codes = ft.compatibility.iter().map(|b| fourcc(*b));
     let compatible: Vec<_> = codes.collect();
-    println!(
+    say!(
         "  file type: brand {}, minor version {}, compatible with [{}]",
         fourcc(ft.brand),
         ft.minor_version,
@@ -133,7 +140,7 @@ fn run(args: &[OsString]) -> Result<(), String> {
     print_header(&header);
     match &header.jp2 {
         Some(jp2) => print_jp2(jp2),
-        None => println!("JP2 metadata: none (a raw codestream)"),
+        None => say!("JP2 metadata: none (a raw codestream)"),
     }
     Ok(())
 }

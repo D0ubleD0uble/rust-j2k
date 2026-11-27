@@ -21,6 +21,10 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[macro_use]
+#[path = "common/say.rs"]
+mod say;
+
 #[path = "common/pnm.rs"]
 mod pnm;
 
@@ -36,7 +40,7 @@ fn run(args: &[OsString]) -> Result<(), String> {
     let out_name = output.display();
     std::fs::write(&output, pnm).map_err(|e| format!("{out_name}: {e}"))?;
     let n = image.components.len();
-    println!(
+    say!(
         "wrote {}: {}x{}, {n} {}",
         output.display(),
         image.width,

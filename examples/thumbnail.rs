@@ -34,6 +34,10 @@ use std::str::FromStr;
 
 use rust_j2k::{DecodeOptions, Region, Window, decode_with};
 
+#[macro_use]
+#[path = "common/say.rs"]
+mod say;
+
 #[path = "common/pnm.rs"]
 mod pnm;
 
@@ -76,7 +80,7 @@ fn run(args: &[OsString]) -> Result<(), String> {
     let pnm = pnm::encode(&image).map_err(|e| format!("{name}: {e}"))?;
     let out_name = output.display();
     std::fs::write(&output, pnm).map_err(|e| format!("{out_name}: {e}"))?;
-    println!(
+    say!(
         "wrote {}: {}x{} after dropping {levels} resolution {}",
         output.display(),
         image.width,

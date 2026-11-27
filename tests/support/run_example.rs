@@ -1,8 +1,8 @@
 //! Run an example through `cargo run`, with a deadline.
 //!
-//! `tests/examples_untrusted.rs` and `tests/examples_grib2.rs` include this
-//! file with `#[path]`. Cargo gives a test no path to an example, so the
-//! nested build compiles the example itself; `--profile test` reuses the
+//! The tests of the examples include this file with `#[path]`. Cargo
+//! gives a test no path to an example, so the nested build compiles the
+//! example itself; `--profile test` reuses the
 //! library the tests already built. The run follows `CARGO_TARGET_DIR` from
 //! the environment, but not a `--target-dir` flag given to the outer
 //! `cargo test`. A run past [`DEADLINE`], such as an example caught in a
@@ -11,6 +11,9 @@
 //! The runs in one test binary take turns. Two `cargo run`s at once can
 //! race: one can replace the example binary while the other starts it, and
 //! the start then fails with "No such file or directory".
+
+// Each test binary uses some of these functions.
+#![allow(dead_code)]
 
 use std::ffi::OsStr;
 use std::io::Read;
@@ -27,6 +30,16 @@ static TURN: Mutex<()> = Mutex::new(());
 
 /// Run `example` with `args` and collect what it prints.
 pub fn run_example(example: &str, args: &[&OsStr]) -> Output {
+    run(example, args, false)
+}
+
+/// Run `example` with its stdout closed at once, as `example | head -n 1`
+/// does after the first line. `Output::stdout` is empty.
+pub fn run_example_closed_stdout(example: &str, args: &[&OsStr]) -> Output {
+    run(example, args, true)
+}
+
+fn run(example: &str, args: &[&OsStr], close_stdout: bool) -> Output {
     // A test that failed while holding it leaves it poisoned; the next run
     // is still safe.
     let _turn = TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -41,6 +54,11 @@ pub fn run_example(example: &str, args: &[&OsStr]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    if close_stdout {
+        // The nested build takes longer than this, so the read end is gone
+        // before the example prints.
+        drop(child.stdout.take());
+    }
     // Read both pipes while the child runs, so a full pipe can't stall it.
     let drain = |mut pipe: Box<dyn Read + Send>| {
         thread::spawn(move || {
@@ -49,7 +67,7 @@ pub fn run_example(example: &str, args: &[&OsStr]) -> Output {
             bytes
         })
     };
-    let stdout = drain(Box::new(child.stdout.take().unwrap()));
+    let stdout = child.stdout.take().map(|pipe| drain(Box::new(pipe)));
     let stderr = drain(Box::new(child.stderr.take().unwrap()));
     let start = Instant::now();
     let status = loop {
@@ -65,7 +83,7 @@ pub fn run_example(example: &str, args: &[&OsStr]) -> Output {
     };
     Output {
         status,
-        stdout: stdout.join().unwrap(),
+        stdout: stdout.map_or_else(Vec::new, |t| t.join().unwrap()),
         stderr: stderr.join().unwrap(),
     }
 }

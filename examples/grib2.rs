@@ -37,6 +37,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 
+#[macro_use]
+#[path = "common/say.rs"]
+mod say;
+
 /// How many values to print from the start of the grid.
 const FIRST: usize = 8;
 
@@ -108,12 +112,12 @@ fn run(args: &[OsString]) -> Result<(), String> {
 
     let min = values.iter().copied().fold(f64::INFINITY, f64::min);
     let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    println!("grid: {} x {}", grid.width, grid.height);
-    println!("min: {min}");
-    println!("max: {max}");
+    say!("grid: {} x {}", grid.width, grid.height);
+    say!("min: {min}");
+    say!("max: {max}");
     let first = values.iter().take(FIRST).map(f64::to_string);
     let first: Vec<String> = first.collect();
-    println!("first values: {}", first.join(" "));
+    say!("first values: {}", first.join(" "));
     Ok(())
 }
 

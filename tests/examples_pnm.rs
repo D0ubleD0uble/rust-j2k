@@ -13,9 +13,11 @@ mod support;
 #[path = "../examples/common/pnm.rs"]
 mod pnm;
 
-use std::path::{Path, PathBuf};
 #[cfg(not(target_family = "wasm"))]
-use std::process::Command;
+#[path = "support/run_example.rs"]
+mod run_example;
+
+use std::path::{Path, PathBuf};
 
 use support::Expected;
 
@@ -151,24 +153,11 @@ fn the_writer_clamps_values_outside_the_declared_depth() {
     assert_eq!(&encoded[encoded.len() - 3..], [255, 0, 7]);
 }
 
-/// Run the `decode` example through `cargo run`, since Cargo gives a test no
-/// path to an example. The nested build compiles the example binary itself
-/// (about 0.2 s), because a run of one test target or `--all-targets` may not
-/// build it. `--profile test` reuses the library the tests already built, so
-/// only the example is compiled and then launched. The run follows
-/// `CARGO_TARGET_DIR` from the environment, but not a
-/// `--target-dir` flag given to the outer `cargo test`.
+/// Run the `decode` example (see `tests/support/run_example.rs`).
 #[cfg(not(target_family = "wasm"))]
 fn run_decode(input: &Path, output: &Path) -> std::process::Output {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    Command::new(cargo)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args(["run", "--quiet", "--offline", "--profile", "test"])
-        .args(["--example", "decode", "--"])
-        .arg(input)
-        .arg(output)
-        .output()
-        .unwrap()
+    let args = [input.as_os_str(), output.as_os_str()];
+    run_example::run_example("decode", &args)
 }
 
 #[cfg(not(target_family = "wasm"))]

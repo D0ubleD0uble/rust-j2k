@@ -60,6 +60,10 @@ use std::process::ExitCode;
 use rust_j2k::decode_with;
 use rust_j2k::{DecodeOptions, DecodeReport, Error, LimitDetail, Raise};
 
+#[macro_use]
+#[path = "common/say.rs"]
+mod say;
+
 #[path = "common/capped.rs"]
 mod capped;
 
@@ -70,14 +74,14 @@ const MAX_FACTOR: u32 = 4;
 const PARTIAL: u8 = 2;
 
 fn print_limit(limit: &LimitDetail) {
-    println!("refused by a limit: {limit}");
-    println!("  kind: {:?}", limit.kind());
+    say!("refused by a limit: {limit}");
+    say!("  kind: {:?}", limit.kind());
     match limit.retry_with() {
-        Some(raise) => println!("  retry with: {raise:?}"),
-        None => println!("  retry with: no option raises it"),
+        Some(raise) => say!("  retry with: {raise:?}"),
+        None => say!("  retry with: no option raises it"),
     }
     if let Some(at) = limit.refused_at() {
-        println!(
+        say!(
             "  refused at: tile {}, which needs {} ({:?})",
             at.tile(),
             at.amount(),
@@ -87,13 +91,13 @@ fn print_limit(limit: &LimitDetail) {
 }
 
 fn print_report(report: &DecodeReport) {
-    println!("complete: {}", report.is_complete());
+    say!("complete: {}", report.is_complete());
     match report.complete_reduction {
-        Some(r) => println!("complete at reduction: {r}"),
-        None => println!("complete at reduction: none"),
+        Some(r) => say!("complete at reduction: {r}"),
+        None => say!("complete at reduction: none"),
     }
     for line in capped::capped(&report.entries) {
-        println!("  {line}");
+        say!("  {line}");
     }
 }
 
@@ -160,13 +164,13 @@ fn run(args: &[OsString]) -> Result<bool, String> {
                 let Some(next) = options.raised_for(&limit) else {
                     return Err(format!("{name}: no option raises this limit"));
                 };
-                println!("retrying once with the limit raised");
+                say!("retrying once with the limit raised");
                 options = next;
                 raised = true;
             }
             Error::Codestream(detail) if options.strict() => {
-                println!("refused as damaged or cut short: {detail}");
-                println!("decoding again with strict off");
+                say!("refused as damaged or cut short: {detail}");
+                say!("decoding again with strict off");
                 options = options.with_strict(false);
             }
             other => return Err(format!("{name}: {other}")),
@@ -174,7 +178,7 @@ fn run(args: &[OsString]) -> Result<bool, String> {
     };
 
     let n = image.components.len();
-    println!(
+    say!(
         "decoded {name}: {}x{}, {n} {}",
         image.width,
         image.height,
