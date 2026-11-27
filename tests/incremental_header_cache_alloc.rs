@@ -19,8 +19,8 @@
 //! whose indexes are one byte, keeps 19.6 bytes for each byte. The tables that
 //! hold the overrides grow by doubling: at 16384, a power of two, they have no
 //! spare room, and at 129 nearly half is spare. It is also measured on 65000
-//! `PPM` segments of one record each, and on the most a main header can keep
-//! at once: the last shape on 16381 components, a `CRG`, a `POC` of 32
+//! `PPM` segments of one record each, and on about the most a main header can
+//! keep at once: the last shape on 16381 components, a `CRG`, a `POC` of 32
 //! volumes and 16385 `PPM` segments, 13.07 MB. Each header is cut inside a
 //! `COM` after its segments, so all of them are read.
 //!
@@ -175,13 +175,13 @@ fn cut_ppm_header() -> Vec<u8> {
     bytes
 }
 
-/// The most the cut main header can keep at once: 16381 components, each
+/// About the most the cut main header can keep at once: 16381 components, each
 /// with a `COC` of precincts, a 97-step `QCC` and an `RGN`, then a `CRG`, a
 /// `POC` of 32 volumes, and 16385 `PPM` segments, cut inside a `COM`. The
 /// tables grow by doubling, so one `PPM` segment past 16384 doubles the
 /// `PPM` table (393 KB more), at the cost of 3 components (2 KB). That
-/// leaves 65534 of the 65536 segments a main header may have; the 2 left
-/// over add nothing.
+/// leaves 65534 of the 65536 segments a main header may have. Dropping the
+/// `POC` for a 16382nd component holds 266 bytes more.
 fn cut_joint_header() -> Vec<u8> {
     let components = 16381u16;
     let (_, overrides) = component_shapes().pop().expect("the last shape");
@@ -314,8 +314,8 @@ fn header_holds_what_the_files_tiles_need() {
         (16 * 65_000..=32 * 65_000).contains(&ppm),
         "{ppm} bytes held"
     );
-    // The most the cut main header can keep at once: about 13 MB (13.07 MB
-    // measured).
+    // About the most the cut main header can keep at once, 13.07 MB
+    // measured: the "about 13 MB" the docs give.
     assert!(
         (13_000_000..=13_150_000).contains(&joint),
         "{joint} bytes held"

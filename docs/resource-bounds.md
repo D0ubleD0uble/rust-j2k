@@ -697,9 +697,9 @@ by doubling (24.0 at 1024 segments, 48.0 at 1025); the rest (`POC`, of 32
 volumes at most, `CRG`, the `TLM` count) is small. The total is about 13 MB at
 most: those three segments on each of 16381 components, a `CRG`, a `POC` of 32
 volumes and 16385 `PPM` segments keep 13.07 MB
-(`tests/incremental_header_cache_alloc.rs`). That is the most under the 65536
-segments a main header may have: the `PPM` segment past 16384 doubles their
-table (393 KB) and costs 3 components (about 2 KB).
+(`tests/incremental_header_cache_alloc.rs`). That is within a few hundred bytes
+of the most under the 65536 segments a main header may have: the `PPM` segment
+past 16384 doubles their table (393 KB) and costs 3 components (about 2 KB).
 The header of a tile-part not yet fed in full, or of a last tile-part whose
 `Psot` is 0, is read again on each call. What it keeps, about 140 bytes for each
 tile counted under its own header and a byte for each other tile, is held until
