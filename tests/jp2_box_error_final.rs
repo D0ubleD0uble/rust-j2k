@@ -44,6 +44,8 @@
 
 #[path = "support/inconsistent.rs"]
 mod inconsistent;
+#[path = "support/pieces.rs"]
+mod pieces;
 #[path = "support/replaceable.rs"]
 mod replaceable;
 #[path = "support/skip.rs"]
@@ -1401,12 +1403,23 @@ fn an_srgb_refusal_more_bytes_lift_waits_for_a_box_after_the_codestream() {
 /// `jp2h` of length 0 before the codestream with a child of length 4: both
 /// faults are final. A harness that stood in for more than the box of
 /// length 0 after the codestream would pass a decoder that held them.
+///
+/// It finds one for each of [`held_after_shapes`] too, whose faults
+/// `header` holds: a harness that stood in for less, such as one that
+/// skipped a `jp2h` of length 0 there, would fail a decoder that is right.
 #[test]
 fn header_split_finds_a_suffix_only_where_one_changes_the_error() {
+    for (name, bytes, options, _) in held_after_shapes() {
+        let lenient = options.clone().with_strict(false);
+        assert!(read_header_with(&bytes, &lenient).is_err(), "{name}: read");
+        assert!(replaceable::replaceable(&bytes, &options), "{name}");
+    }
     for (name, expected) in [
         ("header_split_ftyp_lbox0_after_codestream", true),
         ("header_split_ftyp_then_xml_lbox0_after_codestream", false),
         ("header_split_jp2h_lbox0_child_of_length_4", false),
+        ("header_split_ftyp_then_xml_lbox0_fixture_prefix", false),
+        ("header_split_ftyp_cut_after_refused_reduction", false),
     ] {
         let seed = synth::read_file(synth::fixtures(&format!("incremental/{name}.seed")));
         // All-zero option bytes but the piece sizes' seed: the defaults.
@@ -1422,4 +1435,41 @@ fn header_split_finds_a_suffix_only_where_one_changes_the_error() {
             "{name}"
         );
     }
+}
+
+/// The two `header_split` seeds of #726 pin what their piece streams do in
+/// the target, whose stream ([`pieces::Pieces`]) this includes, so a
+/// change to it does not silently stop them testing what they were made
+/// for. `header_split_ftyp_then_xml_lbox0_fixture_prefix` changes the
+/// reduction to 2, which its one resolution refuses, at its last feed (199
+/// of 199), and not before. `header_split_ftyp_cut_after_refused_reduction`
+/// changes it to 2 at 97 bytes, before the main header is whole, changes
+/// nothing after, and later ends a feed inside the `ftyp` after the
+/// codestream, which takes bytes 167 to 186 of the file: at 168 to 186.
+#[test]
+fn the_header_split_seeds_of_726_keep_their_piece_streams() {
+    let feeds = |name: &str| {
+        let seed = synth::read_file(synth::fixtures(&format!("incremental/{name}.seed")));
+        pieces::Pieces::new(&seed, seed.len() - 12).collect::<Vec<_>>()
+    };
+    let changes = |feeds: &[pieces::Feed]| {
+        feeds
+            .iter()
+            .filter_map(|feed| feed.change.map(|change| (feed.to, change)))
+            .collect::<Vec<_>>()
+    };
+    let reduction = pieces::Change::Reduction;
+
+    let last = feeds("header_split_ftyp_then_xml_lbox0_fixture_prefix");
+    assert_eq!(last.last().map(|feed| feed.to), Some(199));
+    assert_eq!(changes(&last).last(), Some(&(199, reduction(2))));
+    assert!(
+        changes(&last)
+            .iter()
+            .all(|&(to, change)| !matches!(change, pieces::Change::Reduction(_)) || to == 199)
+    );
+
+    let early = feeds("header_split_ftyp_cut_after_refused_reduction");
+    assert_eq!(changes(&early), [(97, reduction(2))]);
+    assert!(early.iter().any(|feed| (168..187).contains(&feed.to)));
 }

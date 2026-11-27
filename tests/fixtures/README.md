@@ -742,9 +742,42 @@ same pieces). They are synthetic, so they have no license restriction.
   has length 4. With that child's fault taken as open (`Jp2Header::read`),
   `header` gives `None` and the target fails on it.
 
+`incremental/header_split_ftyp_then_xml_lbox0_fixture_prefix.seed` (211
+bytes, SHA-256
+`69db250dba4c0fb75888291ff2490ad20a74628eee1d7e12fdcb09041e99d757`) is the
+`ftyp` then `xml ` seed above behind the fixtures' control prefix
+`00 00 00 00 00 00 01 02 00 00 00 00` instead (#726), written by a one-off
+script. At the last feed, that piece stream changes the reduction to 2,
+which the file's one resolution refuses, so the check of the whole file
+meets that refusal and nothing else. With `after::check` marking every box
+open while the last has length 0, the target fails on it through the
+checks under the options it starts with (the shadow at the last feed, and
+the whole input). It is synthetic, so it has no license restriction.
+
+`incremental/header_split_ftyp_cut_after_refused_reduction.seed` (334
+bytes, SHA-256
+`ddc3b465df87174c092f2099c84eb1dd771e7c10dc57cd90a8b1413372d71c9c`) is the
+same gray file with a whole `ftyp` after the codestream, then a whole `xml `
+of 135 bytes in place of the one of length 0, behind control bytes
+`00 00 00 00 00 00 36 00 00 00 00 00` (#726). A one-off script built it and
+searched the piece streams for this one: it changes the reduction to 2 at
+97 bytes, which the file's one resolution refuses, changes nothing after,
+and ends a feed at 181, inside the `ftyp`. With the fault of a box after
+the codestream that the input ends inside taken as final
+(`after::check`), `header` gives there an error the whole file does not
+give. The decoder's checks meet the refused reduction, and the whole file
+does not hold the cut box, so the seed fails only through the target's
+shadow decoder under the starting options. The older `ftyp` then `xml `
+seeds fail under that change too, in the decoder's own checks. It is
+synthetic, so it has no license restriction.
+
 `tests/jp2_box_error_final.rs` also checks the target's `replaceable`
-(`tests/support/replaceable.rs`) on the three seeds: it finds a suffix that
-changes the error of the first, and none for these two.
+(`tests/support/replaceable.rs`) on the #722 seed and the four seeds of
+final faults: it finds a suffix that changes the error of the first, and
+none for the other four. It finds one for each file of `held_after_shapes`
+too. `the_header_split_seeds_of_726_keep_their_piece_streams` checks that
+the two #726 seeds still change the reduction where they were made to,
+through the target's own piece stream (`tests/support/pieces.rs`).
 
 ### Retry ladder fixtures
 
