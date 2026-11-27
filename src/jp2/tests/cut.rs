@@ -57,7 +57,7 @@ fn check(name: &str, bytes: &[u8]) -> usize {
 
 /// Every `.jp2` file under `tests/fixtures/`.
 fn fixtures() -> Vec<(String, Vec<u8>)> {
-    let mut dirs = vec![std::path::PathBuf::from("tests/fixtures")];
+    let mut dirs = vec![synth::fixtures("")];
     let mut files = Vec::new();
     while let Some(dir) = dirs.pop() {
         for entry in std::fs::read_dir(&dir).expect("fixture directory") {

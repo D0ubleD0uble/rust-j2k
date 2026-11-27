@@ -417,7 +417,9 @@ impl<'a> BeforeCodestream<'a> for Option<header::Ihdr> {
 /// returns, whole or running to the end of the input. Every rule
 /// [`parse_boxes`] applies to the boxes before the codestream is here, so
 /// that a [`BoxesCut`] applies the same ones: what fails, what is
-/// [`Error::Incomplete`], and which faults are open.
+/// [`Error::Incomplete`], and which faults are open. The one left to the
+/// caller is the refusal of a whole `jp2c` with no `jp2h` before it, as a
+/// `BoxesCut` stops at any `jp2c`.
 fn walk_to_codestream<'a>(
     boxes: &mut Boxes<'a>,
     kept: &mut impl BeforeCodestream<'a>,
