@@ -90,8 +90,8 @@ decode's peak plus the packet walks it keeps, at most twice the image's
 samples plus twice the walk of the largest tile walked so far (a change of
 region or reduction keeps that walk), plus up to twice the bytes fed (their
 `Vec` may hold twice their length in capacity) and a table of 24 bytes per
-tile index up to the highest seen, about 1.5 MiB for 65535 tiles
-(see "Work and memory" in [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
+tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see "Work
+and memory" in [`docs/incremental-decoding.md`](docs/incremental-decoding.md)).
 
 For input from a source you trust, `DecodeOptions` can raise these limits
 (`Raised`, on a `SampleLimit` or `WorkLimit`) or remove them (`Unlimited`). A
@@ -128,8 +128,8 @@ figure is in [Figures for a decode service](docs/resource-bounds.md#figures-for-
    with 9-byte `xml ` boxes holds up to about 12 bytes for each byte of them
    while the boxes are read (about 9 unless a `jp2c` box longer than its
    codestream makes the boxes after it walked twice), and up to about 6.5
-   through the decode and after it, measured. A box before the codestream that is neither read nor
-   reported holds nothing (see "JP2 box records" in
+   through the decode and after it, measured. A box before the codestream
+   that is neither read nor reported holds nothing (see "JP2 box records" in
    [`docs/resource-bounds.md`](docs/resource-bounds.md)).
 2. **Set a fixed sample ceiling.** Set `DecodeOptions::sample_limit` to
    `SampleLimit::AtMost(n)`. The decode then holds at most `n` samples, `4·n`

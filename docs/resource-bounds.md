@@ -245,13 +245,13 @@ counted are the bytes in memory, not on the wire, and padding compresses well:
 accepts, measured after any decompression. Past 64 MiB the worst-case peak is
 about 102 times that size, plus up to about 6.5 bytes for each byte of JP2
 metadata boxes, and, for an `IncrementalDecoder`, one decode's peak plus the
-packet walks it keeps and the bytes fed (see below). A one-tile 1 x 2^30 image needs 128 MiB of input to fit
-the default. Measured: with 128 MiB of zeros after `EOC` (134,283,241 bytes) it
-decodes at the defaults (`strict` on) in 23.5 s with a peak RSS of 8.30 GiB, and
-at 134,065,513 bytes it is refused, naming `Raised(2)`. Time grows with the
-padding too. The work bounds count only tile data, but the inverse DWT and the
-output scale with the sample limit, which padding raises: about 175 ns per byte
-of padding, measured.
+packet walks it keeps and the bytes fed (see below). A one-tile 1 x 2^30
+image needs 128 MiB of input to fit the default. Measured: with 128 MiB of zeros
+after `EOC` (134,283,241 bytes) it decodes at the defaults (`strict` on) in 23.5
+s with a peak RSS of 8.30 GiB, and at 134,065,513 bytes it is refused, naming
+`Raised(2)`. Time grows with the padding too. The work bounds count only tile
+data, but the inverse DWT and the output scale with the sample limit, which
+padding raises: about 175 ns per byte of padding, measured.
 
 ### A fixed ceiling
 

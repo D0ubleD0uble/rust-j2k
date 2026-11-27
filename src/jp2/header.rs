@@ -127,9 +127,9 @@ impl Ihdr {
 const READ: [[u8; 4]; 6] = [*b"bpcc", *b"colr", *b"pclr", *b"cmap", *b"cdef", *b"res "];
 
 /// The JP2 Header box's contents: `ihdr` parsed, every other child it reads
-/// kept in one list in the order OpenJPEG reads them. Repeats are kept too, so the code
-/// that reads a box can apply its own rule (the first `colr` wins; a second
-/// `pclr` is an error).
+/// kept in one list in the order OpenJPEG reads them. Repeats are kept too, so
+/// the code that reads a box can apply its own rule (the first `colr` wins; a
+/// second `pclr` is an error).
 ///
 /// The order matters because OpenJPEG runs a box's handler as it meets the
 /// box, and a handler can depend on the ones before it (`bpcc` is checked

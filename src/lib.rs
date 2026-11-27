@@ -329,12 +329,12 @@ mod readme_examples {}
 ///   sample limit][sample-limit]). A tile's code-block segment records can
 ///   add up to about 65 bytes per byte of input, and JP2 metadata boxes up to
 ///   about 6.5 bytes for each byte of them. The limit also sets the
-///   code-blocks and precincts one tile may hold: one for each 512 and each 2048 samples it
-///   allows, and at least 2^20 and 2^18. This is for the one-shot functions; an
-///   [`IncrementalDecoder`] keeps per-tile state and can hold one decode's
-///   peak plus the packet walks it keeps, at most twice the image's samples
-///   plus twice the walk of the largest tile walked so far, plus up to twice
-///   the bytes fed and a table of 24 bytes per tile index up
+///   code-blocks and precincts one tile may hold: one for each 512 and each
+///   2048 samples it allows, and at least 2^20 and 2^18. This is for the
+///   one-shot functions; an [`IncrementalDecoder`] keeps per-tile state and can
+///   hold one decode's peak plus the packet walks it keeps, at most twice the
+///   image's samples plus twice the walk of the largest tile walked so far,
+///   plus up to twice the bytes fed and a table of 24 bytes per tile index up
 ///   to the highest seen (about 1.5 MiB for 65535 tiles).
 /// - Reading the packet headers of every tile may take
 ///   at most 2^24 steps, or 32 per byte of tile data when that is more. A

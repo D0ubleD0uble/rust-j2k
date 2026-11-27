@@ -64,33 +64,30 @@ use crate::{
 ///
 /// Between calls the decoder keeps the bytes fed and the tiles' packet
 /// walks. The walks kept hold at most twice the image's samples plus twice
-/// the walk of the largest tile walked so far. They also hold at most the larger of 1 MiB and 32 bytes
-/// per byte fed, so a short file that declares a large image holds little
-/// between calls: a file of 1228 bytes that declares a 16384 x 16384 image
-/// holds no walk. A tile whose walk would pass either bound is walked from
-/// the start by each refine instead, until more bytes make room for it.
-/// Those walks, and a walk started again when a later tile-part changes
-/// a tile's order of packets, spend at most five times the packet bound of
-/// one decode of the bytes fed over all the refines together: once they
-/// pass four, a refine that would walk such a tile again returns
-/// [`Waiting::RepeatLimit`], and `finish` decodes the file.
-/// On top of these bounds the decoder keeps a table of 24 bytes for each
-/// tile index up to the highest it has seen, which comes to about 1.5 MiB
-/// for the 65535 tiles a file can have (up to twice that in capacity as
-/// the table grows). What [`header`](Self::header) keeps between its calls
-/// comes to about 140 bytes for each tile counted under its own header and
-/// a byte for each other tile, plus a key of the main header, its length and
-/// a hash. Each refine also holds what [`decode_with`] holds for the same
-/// bytes, so the decoder holds at most one decode's peak plus the walks kept
-/// (twice the image's samples plus twice the walk of the largest tile walked
-/// so far; a change of the region or the reduction keeps that walk), plus up
-/// to twice the bytes fed, as their `Vec` may hold twice their length in
-/// capacity. After the options
-/// change,
-/// these bounds hold from the first refine that decodes under the new
-/// options. A refine refused before that, partway through the tiles, can
-/// leave the walks of later tiles above the new room, but not above the
-/// larger of 1 MiB and 32 bytes per byte fed.
+/// the walk of the largest tile walked so far. They also hold at most the
+/// larger of 1 MiB and 32 bytes per byte fed, so a short file that declares a
+/// large image holds little between calls: a file of 1228 bytes that declares a
+/// 16384 x 16384 image holds no walk. A tile whose walk would pass either bound
+/// is walked from the start by each refine instead, until more bytes make room
+/// for it. Those walks, and a walk started again when a later tile-part changes
+/// a tile's order of packets, spend at most five times the packet bound of one
+/// decode of the bytes fed over all the refines together: once they pass four,
+/// a refine that would walk such a tile again returns [`Waiting::RepeatLimit`],
+/// and `finish` decodes the file. On top of these bounds the decoder keeps a
+/// table of 24 bytes for each tile index up to the highest it has seen, which
+/// comes to about 1.5 MiB for the 65535 tiles a file can have (up to twice that
+/// in capacity as the table grows). What [`header`](Self::header) keeps between
+/// its calls comes to about 140 bytes for each tile counted under its own
+/// header and a byte for each other tile, plus a key of the main header, its
+/// length and a hash. Each refine also holds what [`decode_with`] holds for the
+/// same bytes, so the decoder holds at most one decode's peak plus the walks
+/// kept (twice the image's samples plus twice the walk of the largest tile
+/// walked so far; a change of the region or the reduction keeps that walk),
+/// plus up to twice the bytes fed, as their `Vec` may hold twice their length
+/// in capacity. After the options change, these bounds hold from the first
+/// refine that decodes under the new options. A refine refused before that,
+/// partway through the tiles, can leave the walks of later tiles above the new
+/// room, but not above the larger of 1 MiB and 32 bytes per byte fed.
 ///
 /// The reduction, the layer cap and the region can change between refines,
 /// with [`set_resolution_reduction`](Self::set_resolution_reduction),

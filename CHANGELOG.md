@@ -298,10 +298,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to about 6.5 bytes for each byte of metadata boxes through the decode, and
   the walk up to about 12 while the boxes are read (about 9 unless a `jp2c`
   box longer than its codestream makes the boxes after it walked twice), as
-  a payload of a few bytes takes a whole heap block. They also state the `IncrementalDecoder`
-  bound as one decode's peak plus the packet walks it keeps (at most twice
-  the image's samples plus twice the walk of the largest tile walked so
-  far), plus up to twice the bytes fed (#678).
+  a payload of a few bytes takes a whole heap block. They also state the
+  `IncrementalDecoder` bound as one decode's peak plus the packet walks it keeps
+  (at most twice the image's samples plus twice the walk of the largest tile
+  walked so far), plus up to twice the bytes fed (#678).
 - The published crate's own tests pass. A test that reads a fixture the
   package leaves out (the conformance corpus, the GDAL JP2 files, the OpenJPH
   files and the benchmark inputs) now skips, and says so, in the

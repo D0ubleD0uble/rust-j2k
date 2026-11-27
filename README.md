@@ -240,8 +240,8 @@ program. Those figures cover the one-shot decode functions;
 `IncrementalDecoder` keeps per-tile state and can hold one decode's peak plus
 the packet walks it keeps, at most twice the image's samples plus twice the walk
 of the largest tile walked so far, plus up to twice the bytes fed and a table of
-24 bytes per tile index up to the highest seen, about 1.5 MiB for 65535 tiles (see
-[`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)).
+24 bytes per tile index up to the highest seen, about 1.5 MiB for 65535 tiles
+(see [`docs/incremental-decoding.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/incremental-decoding.md)).
 
 `Error::Unsupported` usually means the file is valid JPEG 2000 that uses
 something from [What it doesn't do](#what-it-doesnt-do). `Error::Limit` means
