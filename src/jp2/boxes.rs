@@ -144,8 +144,9 @@ impl<'a> Boxes<'a> {
     /// Whether the input ended inside the `XLBox` field of the box
     /// [`cut_kind`](Self::cut_kind) names while it can still be below 16: its
     /// length, which can still be at fault, is not in yet. Never for a
-    /// top-level `jp2c`, whose `XLBox` below 16 runs it to the end of the
-    /// file rather than faults it.
+    /// top-level `jp2c`, whose length neither faults nor cuts the box at
+    /// any value: an `LBox` of 0 or 2 to 7 and an `XLBox` below 16 run it
+    /// to the end of the file, and a longer length is clamped to the input.
     pub(crate) fn cut_in_length(&self) -> bool {
         self.cut_in_length
     }

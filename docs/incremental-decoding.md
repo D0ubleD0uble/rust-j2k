@@ -204,10 +204,11 @@ wait the same way:
   codestream is too short on a prefix and whole on the file, and a `jp2h`
   or `ftyp` of length 0 before the codestream can be at fault on a prefix
   and whole on a longer one, where the file has no `jp2c`, or whole on a
-  prefix and at fault on a longer one. A box after the signature cut inside
-  its `XLBox` is judged on its type ("the `ftyp` box must follow the
-  signature"), and the `XLBox` still to come can be at fault, which comes
-  first.
+  prefix and at fault on a longer one. A box other than a `jp2c` after the
+  signature, cut inside its `XLBox`, is judged on its type ("the `ftyp` box
+  must follow the signature"), and the `XLBox` still to come can be at
+  fault, which comes first. A `jp2c` there is refused on its type at once,
+  as its length is never at fault.
 - A refusal of the sRGB step. `decode_with` checks the boxes after the
   codestream before it plans that step, so a box at fault there, still to
   come, replaces it. That holds for a refusal more bytes lift too: `header`
