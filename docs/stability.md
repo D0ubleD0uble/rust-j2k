@@ -92,11 +92,11 @@ new minor version.
 ### Decoded output
 
 The samples a file decodes to, and whether it decodes or is refused, are
-covered, except for fixes and for the changes to the default limits
-described below. The crate decides each case by three rules, in
-order: follow the standard; otherwise give the error correction a user would
-expect, with OpenJPEG as the usual guide; and return an error rather than a
-wrong image ([correctness.md](correctness.md#when-the-oracle-and-the-standard-disagree)).
+covered, except for fixes, lossy rounding and the changes to the default
+limits, all described below. The crate decides each case by three rules,
+in order: follow the standard; otherwise give the error correction a user
+would expect, with OpenJPEG as the usual guide; and return an error rather
+than a wrong image ([correctness.md](correctness.md#when-the-oracle-and-the-standard-disagree)).
 
 - A fix that brings the output, or the choice to decode or refuse, closer to
   those rules can ship in a patch release. Examples: output corrected to
@@ -105,7 +105,14 @@ wrong image ([correctness.md](correctness.md#when-the-oracle-and-the-standard-di
   as OpenJPEG decodes it. The CHANGELOG lists each one.
 - Any other change to the output needs a minor release, such as a new
   default for color handling, or, where the standard leaves room, a choice
-  that follows neither the standard nor OpenJPEG.
+  that follows neither the standard nor OpenJPEG. The one exception is
+  lossy rounding, below.
+
+Lossless (5/3) output is covered to the bit. Lossy (9/7) output can change
+in a patch release if it stays within the compliance class 1 error bounds
+of ISO/IEC 15444-4 that the tests check
+([How close a decode must be](correctness.md#how-close-a-decode-must-be)).
+Reordering floating-point steps to make a decode faster is one example.
 
 [openjpeg-departures.md](openjpeg-departures.md) records each place the
 output differs from OpenJPEG on purpose, and the rule behind it. Changing
