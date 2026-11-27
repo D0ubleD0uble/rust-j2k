@@ -10,14 +10,19 @@
 //! header would be 100 MB, six times the input.
 //!
 //! While the bytes fed end inside the main header, a call keeps what the
-//! segments read so far set, so the next goes on from there. That is
-//! measured on main headers of 16384 components, each with segments that
-//! override its coding: a `QCC` of one, two or 97 steps, a `COC`, an `RGN`,
-//! or a `COC` of precincts, a 97-step `QCC` and an `RGN`. A one-step `QCC`
-//! keeps the most for each of its bytes, about 12; the last shape keeps the
-//! most a component can, 12.2 MB in all. It is also measured on 65000 `PPM`
-//! segments of one record each. Each header is cut inside a `COM` after its
-//! segments, so all of them are read.
+//! segments read so far set, so the next goes on from there. That is measured
+//! on main headers of 16384 components, each with segments that override its
+//! coding: a `QCC` of one, two or 97 steps, a `COC`, an `RGN`, or a `COC` of
+//! precincts, a 97-step `QCC` and an `RGN`. Of these shapes, a one-step `QCC`
+//! keeps the most for each of its bytes, about 12; the last keeps the most a
+//! component can, 12.2 MB in all. A one-step `QCC` on each of 129 components,
+//! whose indexes are one byte, keeps 19.6 bytes for each byte. The tables that
+//! hold the overrides grow by doubling: at 16384, a power of two, they have no
+//! spare room, and at 129 nearly half is spare. It is also measured on 65000
+//! `PPM` segments of one record each, and on about the most a main header can
+//! keep at once: the last shape on 16381 components, a `CRG`, a `POC` of 32
+//! volumes and 16385 `PPM` segments, 13.07 MB. Each header is cut inside a
+//! `COM` after its segments, so all of them are read.
 //!
 //! The bytes are counted with a counting global allocator, so this file
 //! holds a single test: a second one running in parallel would count into
@@ -72,11 +77,13 @@ fn big_tile_file() -> Vec<u8> {
     bytes
 }
 
-/// A main header of 16384 components, each with the segments `overrides`
-/// gives for it, then a `COM` the input ends inside. With the bytes of the
-/// segments `overrides` gave.
-fn cut_component_header(overrides: impl Fn(u16) -> Vec<Vec<u8>>) -> (Vec<u8>, usize) {
-    let components = 16384u16;
+/// A main header of `components` components, each with the segments
+/// `overrides` gives for it, then a `COM` the input ends inside. With the
+/// bytes of the segments `overrides` gave.
+fn cut_component_header(
+    components: u16,
+    overrides: impl Fn(u16) -> Vec<Vec<u8>>,
+) -> (Vec<u8>, usize) {
     let siz = synth::siz_body(
         [64, 64, 0, 0, 64, 64, 0, 0],
         &vec![[7, 1, 1]; usize::from(components)],
@@ -168,6 +175,34 @@ fn cut_ppm_header() -> Vec<u8> {
     bytes
 }
 
+/// About the most the cut main header can keep at once: 16381 components, each
+/// with a `COC` of precincts, a 97-step `QCC` and an `RGN`, then a `CRG`, a
+/// `POC` of 32 volumes, and 16385 `PPM` segments, cut inside a `COM`. The
+/// tables grow by doubling, so one `PPM` segment past 16384 doubles the
+/// `PPM` table (393 KB more), at the cost of 3 components (2 KB). That
+/// leaves 65534 of the 65536 segments a main header may have. Dropping the
+/// `POC` for a 16382nd component holds 266 bytes more.
+fn cut_joint_header() -> Vec<u8> {
+    let components = 16381u16;
+    let (_, overrides) = component_shapes().pop().expect("the last shape");
+    let (mut bytes, _) = cut_component_header(components, overrides);
+    // Drop the cut `COM`.
+    let com = bytes.len() - 6;
+    assert_eq!(bytes[com..com + 2], [0xFF, 0x64]);
+    bytes.truncate(com);
+    let crg: Vec<u8> = (0..components).flat_map(|_| [0, 0, 0, 0]).collect();
+    bytes.extend(synth::seg(0xFF63, &crg));
+    // `RSpoc`, `CSpoc`, `LYEpoc`, `REpoc`, `CEpoc` and `Ppoc`, 32 times.
+    let volume = [&[0, 0, 0, 0, 1, 1][..], &components.to_be_bytes(), &[0]].concat();
+    bytes.extend(synth::seg(0xFF5F, &volume.repeat(32)));
+    for index in 0..16385u32 {
+        bytes.extend(synth::seg(0xFF60, &[index as u8, 0, 0, 0, 0]));
+    }
+    bytes.extend(synth::seg(0xFF64, &[0, 1, b'x', b'x']));
+    bytes.truncate(bytes.len() - 2);
+    bytes
+}
+
 /// The heap `decoder` holds after a call of `header()` that finds the main
 /// header cut short, over what it held before.
 fn held_while_cut(decoder: &IncrementalDecoder) -> usize {
@@ -234,15 +269,23 @@ fn header_holds_what_the_files_tiles_need() {
     };
     let mut cut = Vec::new();
     for (name, overrides) in component_shapes() {
-        let (bytes, segments) = cut_component_header(overrides);
+        let (bytes, segments) = cut_component_header(16384, overrides);
         cut.push((name, bytes.len(), segments, held_for(&bytes)));
     }
+    // A one-step `QCC` on each of 129 components, with a one-byte index.
+    let (bytes, narrow_segments) = cut_component_header(129, |c| {
+        vec![synth::seg(0xFF5D, &[c as u8, 1 << 5, 8 << 3])]
+    });
+    let narrow = held_for(&bytes);
     let ppm = held_for(&cut_ppm_header());
+    let joint = held_for(&cut_joint_header());
 
     // Printed after the measures: the captured output is heap too.
     println!(
         "size {size}; held {none:?} (PPM file), {counts:?} (big tile), \
-         (name, header bytes, segment bytes, held) {cut:?}, {ppm} (65000 PPM)"
+         (name, header bytes, segment bytes, held) {cut:?}, \
+         {narrow} for {narrow_segments} (129 one-step QCC), {ppm} (65000 PPM), \
+         {joint} (16381 components and 16385 PPM)"
     );
     assert_eq!(none, [0; 3]);
     for held in counts {
@@ -250,9 +293,8 @@ fn header_holds_what_the_files_tiles_need() {
     }
     // Up to about 12 bytes for each byte of these segments, whose component
     // indexes are two bytes, at least 2 for what is kept to count at all, and
-    // about 24 bytes a `PPM` segment. The 13x bound covers only these
-    // 16384-component shapes: with a one-byte index (at most 256 components)
-    // a one-step `QCC` keeps about 14, the figure the docs give.
+    // 24 to 48 bytes a `PPM` segment. The 13x bound covers only these
+    // 16384-component shapes, whose tables have no spare capacity.
     for (name, _, segments, held) in cut {
         assert!(
             (2 * segments..=13 * segments).contains(&held),
@@ -261,8 +303,21 @@ fn header_holds_what_the_files_tiles_need() {
         // The most a component can hold, 16384 times: about 12 MB.
         assert!(held <= 13_000_000, "{name}: {held} bytes held");
     }
+    // With a one-byte index and the tables' spare capacity, a one-step `QCC`
+    // keeps about 20 bytes for each byte, the figure the docs give (19.6
+    // measured; 17.0 at 257 components and 16.8 at 4097).
+    assert!(
+        (2 * narrow_segments..=20 * narrow_segments).contains(&narrow),
+        "{narrow} bytes held for {narrow_segments}"
+    );
     assert!(
         (16 * 65_000..=32 * 65_000).contains(&ppm),
         "{ppm} bytes held"
+    );
+    // About the most the cut main header can keep at once, 13.07 MB
+    // measured: the "about 13 MB" the docs give.
+    assert!(
+        (13_000_000..=13_150_000).contains(&joint),
+        "{joint} bytes held"
     );
 }
