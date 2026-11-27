@@ -20,10 +20,9 @@
 //! hold the overrides grow by doubling: at 16384, a power of two, they have no
 //! spare room, and at 129 nearly half is spare. It is also measured on 65000
 //! `PPM` segments of one record each, and on the most a main header can keep
-//! at once: the last shape on 16383 components, a `CRG`, a `POC` of 32
-//! volumes and `PPM` segments up to the 65536 segments a main header may have,
-//! 12.7 MB. Each header is cut inside a `COM` after its segments, so all of
-//! them are read.
+//! at once: the last shape on 16381 components, a `CRG`, a `POC` of 32
+//! volumes and 16385 `PPM` segments, 13.07 MB. Each header is cut inside a
+//! `COM` after its segments, so all of them are read.
 //!
 //! The bytes are counted with a counting global allocator, so this file
 //! holds a single test: a second one running in parallel would count into
@@ -176,13 +175,15 @@ fn cut_ppm_header() -> Vec<u8> {
     bytes
 }
 
-/// The most the cut main header can keep at once: 16383 components, each
+/// The most the cut main header can keep at once: 16381 components, each
 /// with a `COC` of precincts, a 97-step `QCC` and an `RGN`, then a `CRG`, a
-/// `POC` of 32 volumes, and `PPM` segments up to the 65536 segments a main
-/// header may have, cut inside a `COM`. 16383, as a `CRG` of 16384
-/// components does not fit in one segment.
+/// `POC` of 32 volumes, and 16385 `PPM` segments, cut inside a `COM`. The
+/// tables grow by doubling, so one `PPM` segment past 16384 doubles theirs
+/// (393 KB more), at the cost of 3 components (2 KB). That leaves 65534 of
+/// the 65536 segments a main header may have; the 2 left over add nothing.
+/// A `CRG` of 16384 components does not fit in one segment.
 fn cut_joint_header() -> Vec<u8> {
-    let components = 16383u16;
+    let components = 16381u16;
     let (_, overrides) = component_shapes().pop().expect("the last shape");
     let (mut bytes, _) = cut_component_header(components, overrides);
     // Drop the cut `COM`.
@@ -194,9 +195,7 @@ fn cut_joint_header() -> Vec<u8> {
     // `RSpoc`, `CSpoc`, `LYEpoc`, `REpoc`, `CEpoc` and `Ppoc`, 32 times.
     let volume = [&[0, 0, 0, 0, 1, 1][..], &components.to_be_bytes(), &[0]].concat();
     bytes.extend(synth::seg(0xFF5F, &volume.repeat(32)));
-    // SIZ, COD, QCD, three a component, CRG, POC and the COM.
-    let ppm = (1 << 16) - (3 + 3 * usize::from(components) + 3);
-    for index in 0..ppm {
+    for index in 0..16385u32 {
         bytes.extend(synth::seg(0xFF60, &[index as u8, 0, 0, 0, 0]));
     }
     bytes.extend(synth::seg(0xFF64, &[0, 1, b'x', b'x']));
@@ -286,7 +285,7 @@ fn header_holds_what_the_files_tiles_need() {
         "size {size}; held {none:?} (PPM file), {counts:?} (big tile), \
          (name, header bytes, segment bytes, held) {cut:?}, \
          {narrow} for {narrow_segments} (129 one-step QCC), {ppm} (65000 PPM), \
-         {joint} (the most at once)"
+         {joint} (16381 components and 16385 PPM)"
     );
     assert_eq!(none, [0; 3]);
     for held in counts {
@@ -294,7 +293,7 @@ fn header_holds_what_the_files_tiles_need() {
     }
     // Up to about 12 bytes for each byte of these segments, whose component
     // indexes are two bytes, at least 2 for what is kept to count at all, and
-    // about 24 bytes a `PPM` segment. The 13x bound covers only these
+    // 24 to 48 bytes a `PPM` segment. The 13x bound covers only these
     // 16384-component shapes, whose tables have no spare capacity.
     for (name, _, segments, held) in cut {
         assert!(
@@ -315,10 +314,10 @@ fn header_holds_what_the_files_tiles_need() {
         (16 * 65_000..=32 * 65_000).contains(&ppm),
         "{ppm} bytes held"
     );
-    // The most the cut main header can keep at once: about 13 MB (12.7 MB
+    // The most the cut main header can keep at once: about 13 MB (13.07 MB
     // measured).
     assert!(
-        (12_000_000..=12_800_000).contains(&joint),
+        (13_000_000..=13_150_000).contains(&joint),
         "{joint} bytes held"
     );
 }
