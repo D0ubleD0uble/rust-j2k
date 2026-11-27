@@ -393,20 +393,24 @@ impl<'a> BeforeCodestream<'a> for Kept<'a> {
     }
 }
 
-/// A [`BoxesCut`] keeps the first `ihdr`: a later `jp2h` is checked
-/// against it alone ([`Jp2Header::of_ihdr`]), and any other box is kept as
-/// it is, which cannot fail.
-impl<'a> BeforeCodestream<'a> for Option<header::Ihdr> {
+/// What a [`BoxesCut`] keeps of the boxes before the codestream: the first
+/// `ihdr`, once a `jp2h` has been read. A later `jp2h` is checked against it
+/// alone ([`Jp2Header::of_ihdr`]), and any other box is kept as it is, which
+/// cannot fail.
+#[derive(Default)]
+struct FirstIhdr(Option<header::Ihdr>);
+
+impl<'a> BeforeCodestream<'a> for FirstIhdr {
     fn has_jp2h(&self) -> bool {
-        self.is_some()
+        self.0.is_some()
     }
 
     fn jp2h(&mut self, payload: &'a [u8]) -> std::result::Result<(), BoxFault> {
-        let read = match *self {
+        let read = match self.0 {
             None => Jp2Header::parse(payload),
             Some(ihdr) => Jp2Header::of_ihdr(ihdr).merge(payload),
         };
-        *self = Some(read?.ihdr);
+        self.0 = Some(read?.ihdr);
         Ok(())
     }
 
@@ -414,12 +418,13 @@ impl<'a> BeforeCodestream<'a> for Option<header::Ihdr> {
 }
 
 /// Walk the top-level boxes after the `ftyp` to the first `jp2c`, which it
-/// returns, whole or running to the end of the input. Every rule
-/// [`parse_boxes`] applies to the boxes before the codestream is here, so
-/// that a [`BoxesCut`] applies the same ones: what fails, what is
-/// [`Error::Incomplete`], and which faults are open. The one left to the
-/// caller is the refusal of a whole `jp2c` with no `jp2h` before it, as a
-/// `BoxesCut` stops at any `jp2c`.
+/// returns, whole or running to the end of the input. With
+/// [`read_file_type`] before it, it holds every rule [`parse_boxes`] applies
+/// before a `jp2c` is found, so that a [`BoxesCut`] applies the same ones:
+/// what fails, what is [`Error::Incomplete`], and which faults are open. The
+/// ones left to `parse_boxes` run only once a `jp2c` is found, where a
+/// `BoxesCut` stops: the refusal of a `jp2c` with no `jp2h`, and the `bpcc`
+/// and color checks.
 fn walk_to_codestream<'a>(
     boxes: &mut Boxes<'a>,
     kept: &mut impl BeforeCodestream<'a>,
@@ -485,7 +490,7 @@ pub(crate) struct BoxesCut {
     /// Where the next box starts.
     pos: usize,
     /// The first `ihdr`, once a `jp2h` has been read.
-    ihdr: Option<header::Ihdr>,
+    ihdr: FirstIhdr,
 }
 
 impl BoxesCut {
@@ -494,7 +499,10 @@ impl BoxesCut {
     /// before the `jp2c` box, and every box before it is whole and passes.
     pub(crate) fn start(bytes: &[u8]) -> Option<Self> {
         let (boxes, _) = read_file_type(bytes).ok()?;
-        let mut cut = BoxesCut { pos: 0, ihdr: None };
+        let mut cut = BoxesCut {
+            pos: 0,
+            ihdr: FirstIhdr::default(),
+        };
         cut.walk(boxes).is_some().then_some(cut)
     }
 
