@@ -7,18 +7,29 @@
 //! the environment, but not a `--target-dir` flag given to the outer
 //! `cargo test`. A run past [`DEADLINE`], such as an example caught in a
 //! loop, is killed and fails the test instead of hanging it.
+//!
+//! The runs in one test binary take turns. Two `cargo run`s at once can
+//! race: one can replace the example binary while the other starts it, and
+//! the start then fails with "No such file or directory".
 
 use std::ffi::OsStr;
 use std::io::Read;
 use std::process::{Command, Output, Stdio};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
 /// How long one run may take, the nested build included.
 pub const DEADLINE: Duration = Duration::from_secs(300);
 
+/// Held for each run, so the runs take turns.
+static TURN: Mutex<()> = Mutex::new(());
+
 /// Run `example` with `args` and collect what it prints.
 pub fn run_example(example: &str, args: &[&OsStr]) -> Output {
+    // A test that failed while holding it leaves it poisoned; the next run
+    // is still safe.
+    let _turn = TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut child = Command::new(cargo)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
