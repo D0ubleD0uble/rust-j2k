@@ -70,7 +70,10 @@ fn run(example: &str, args: &[&OsStr], out: bool, err: bool) -> Output {
             .output()
             .unwrap();
         let message = String::from_utf8_lossy(&build.stderr);
-        assert!(build.status.success(), "building {example}: {message}");
+        // A warning counts too: `cargo run` repeats it on its stderr, which
+        // the run below may not have.
+        let clean = build.status.success() && message.is_empty();
+        assert!(clean, "building {example}: {message}");
     }
     let mut child = Command::new(cargo)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
