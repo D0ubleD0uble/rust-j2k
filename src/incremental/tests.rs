@@ -2117,7 +2117,7 @@ fn header_on_a_jp2c_with_no_jp2h_cut_in_its_extended_length_is_an_error() {
 }
 
 /// A `jp2c` box that ends inside its own main header, between two marker
-/// segments, then 200 boxes of 8 bytes fed one at a time. The bytes after
+/// segments, then 200 boxes of 8 bytes, fed a box at a time. The bytes after
 /// the box do not go on with a marker segment, so the kept parse of the
 /// main header is dropped, and each call reads the boxes and the main
 /// header from the start. This pins the cost as it is; an issue tracks

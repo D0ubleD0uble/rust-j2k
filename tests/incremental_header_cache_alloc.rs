@@ -18,7 +18,7 @@
 //! component can, 12.2 MB in all. A one-step `QCC` on each of 129 components,
 //! whose indexes are one byte, keeps 19.6 bytes for each byte. The tables that
 //! hold the overrides grow by doubling: at 16384, a power of two, they have no
-//! room spare, and at 129 they have nearly half. It is also measured on 65000
+//! spare room, and at 129 nearly half is spare. It is also measured on 65000
 //! `PPM` segments of one record each. Each header is cut inside a `COM` after
 //! its segments, so all of them are read.
 //!

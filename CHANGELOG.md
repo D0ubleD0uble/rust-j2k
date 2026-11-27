@@ -296,8 +296,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   last whole marker segment of the main header, so the calls read a large
   `PPM` main header, or many boxes before the `jp2c`, about once in all. A
   256 KiB `PPM` main header fed 256 bytes at a time was walked 506 times
-  over and is now walked once. Each call still reads from the start after a
-  box of length 0 before the codestream, or where the `jp2c` box ends
+  over and is now walked once. Each call still reads from the start when a
+  box of length 0 comes before the codestream, or when the `jp2c` box ends
   inside its own main header and the bytes after it do not parse as more
   of that header. The headers and errors it returns are unchanged. Once
   the main header is whole, each call still parses it. While it is cut
