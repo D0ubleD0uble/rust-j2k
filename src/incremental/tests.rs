@@ -2116,6 +2116,54 @@ fn header_on_a_jp2c_with_no_jp2h_cut_in_its_extended_length_is_an_error() {
     }
 }
 
+/// A `jp2c` box where the `ftyp` belongs, just after the signature, cut
+/// inside its 8-byte extended length: once its type is in, each call gives
+/// the "`ftyp` must follow the signature" error a read from the start
+/// gives. A codestream box's length is never at fault, so no byte still to
+/// come replaces that error (#718).
+#[test]
+fn header_on_a_jp2c_in_the_ftyp_position_cut_in_its_extended_length_is_an_error() {
+    use crate::synth;
+    let mut bytes = synth::JP2_SIGNATURE.to_vec();
+    bytes.extend([0, 0, 0, 1]);
+    bytes.extend(b"jp2c");
+    bytes.extend([0, 0, 0, 0, 0, 0]);
+    let fresh = fresh_header(&bytes, &DecodeOptions::default());
+    assert!(
+        fresh.starts_with("Err(FileFormat(") && fresh.contains("must follow the signature"),
+        "{fresh}"
+    );
+    for piece in [1, 4] {
+        header_matches_after_each_feed("a cut XLBox", &bytes, piece);
+    }
+}
+
+/// Another box where the `ftyp` belongs, cut inside an extended length
+/// that is all zeros so far: its length can still be below 16, a fault a
+/// read from the start meets before the type, so `header` waits. Once a
+/// byte of it is not zero, the length is at least 16, and the type's error
+/// is final.
+#[test]
+fn header_on_another_box_in_the_ftyp_position_cut_in_its_extended_length() {
+    use crate::synth;
+    let mut bytes = synth::JP2_SIGNATURE.to_vec();
+    bytes.extend([0, 0, 0, 1]);
+    bytes.extend(b"jp2h");
+    bytes.extend([0, 0, 0, 0, 0, 0]);
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+    decoder.feed(&bytes);
+    assert_eq!(format!("{:?}", decoder.header()), "Ok(None)");
+    let whole = [&bytes[..], &[0, 5]].concat();
+    let fresh = fresh_header(&whole, &DecodeOptions::default());
+    assert!(fresh.contains("`XLBox` 5"), "{fresh}");
+    decoder.feed(&[1]);
+    let fresh = fresh_header(decoder.bytes(), &DecodeOptions::default());
+    assert!(fresh.contains("must follow the signature"), "{fresh}");
+    for _ in 0..2 {
+        assert_eq!(format!("{:?}", decoder.header()), fresh);
+    }
+}
+
 /// A `jp2c` box that ends inside its own main header, between two marker
 /// segments, then 200 boxes of 8 bytes, fed a box at a time. The bytes after
 /// the box do not go on with a marker segment, so the kept parse of the

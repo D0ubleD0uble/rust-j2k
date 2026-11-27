@@ -619,6 +619,8 @@ python3 scripts/gen-header-split-seeds.py fuzz/corpus/header_split
 for f in tests/fixtures/*.j2k tests/fixtures/header/*.j2k tests/fixtures/header/*.jp2 tests/fixtures/*.jp2; do
   { printf '\0\0\0\0\0\0\1\2\0\0\0\0'; cat "$f"; } > "fuzz/corpus/header_split/fx_$(basename "$f")"
 done
+# Inputs it found, with their control bytes (tests/fixtures/README.md).
+cp tests/fixtures/incremental/header_split_*.seed fuzz/corpus/header_split/
 cargo +nightly fuzz run header_split -- -dict=fuzz/j2k.dict -max_len=65536 -max_total_time=60 -rss_limit_mb=4096 -timeout=30
 
 # Deeper periodic run over the widened surface; expected to find nothing.

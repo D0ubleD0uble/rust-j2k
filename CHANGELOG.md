@@ -476,6 +476,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `decode_with`, `read_header_with` and `finish` are unchanged. The wait
   for tile errors, `Waiting::Held`, carries these errors of the boxes too
   (#642, #645).
+- `IncrementalDecoder` no longer waits on a `jp2c` box after the signature,
+  where the `ftyp` belongs, that the input ends inside its `XLBox`. While
+  the `XLBox` was all 0 so far, `header` gave `None` and `refine` waited,
+  where `read_header_with` refuses the file ("the `ftyp` box must follow
+  the signature"). A `jp2c`'s `XLBox` is never at fault, so that error is
+  final. A box of another type there still waits while its `XLBox` can be
+  below 16, which a read of the whole box refuses first (#718).
 - A tile-part header is read no further than its `Psot`, where the
   tile-part ends inside the input. With `strict` off, input cut inside a
   header that runs past its `Psot` was refused as "truncated marker
