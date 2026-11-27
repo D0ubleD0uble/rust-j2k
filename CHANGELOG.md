@@ -143,6 +143,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The library now forbids `unsafe` code at compile time (#685).
 - `cargo test` on the unpacked package now runs the part of each mixed fixture
   test that uses the files the package ships, and skips only the entries it
   leaves out. A test that reads only left-out files still skips whole.
