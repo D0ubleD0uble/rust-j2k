@@ -57,7 +57,7 @@ fields without a breaking change, so match on it with a `_` arm or `..`.
 The decoder needs no Cargo feature. It is in every build, including one
 with `default-features = false`. A feature added later only adds API:
 turning a feature on never removes or changes the decoder's API. The
-hidden `__fuzz` feature is not part of this (see "What is not covered").
+hidden `__fuzz` feature is not covered (see "What is not covered").
 
 ### What the types mean
 
@@ -252,8 +252,9 @@ The values today:
 
 The memory and time figures in the rustdoc, [SECURITY.md](../SECURITY.md)
 and [resource-bounds.md](resource-bounds.md) follow from these values, so
-they can change with them. Among them: the tile-part records take under 1
-KiB for each tile, at most about 52 times the input plus 128 KiB.
+they can change with them. Among them: the tile-part records take under
+1 KiB for each tile, and in all at most about 52 times the input plus
+128 KiB.
 
 ## 32-bit targets
 

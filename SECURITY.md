@@ -44,9 +44,10 @@ input may be hostile. With the default limits, the public functions (`decode`,
 the setters) return either a result or a typed `Error` for any input. They
 never panic, read out of bounds or hang, and they allocate at most what the
 limits allow. For the one-shot functions that is about 6.4 GiB at peak for an
-input of up to 64 MiB, and about 102 bytes per byte of input past that. If the machine can't supply that, the process aborts, as any Rust program does; that
-is not a bug. If a panic, an out-of-bounds read, a hang or a larger allocation
-from any other input happens, report it as above.
+input of up to 64 MiB, and about 102 bytes per byte of input past that. If
+the machine can't supply that, the process aborts, as any Rust program does;
+that is not a bug. If a panic, an out-of-bounds read, a hang or a larger
+allocation from any other input happens, report it as above.
 
 By default the decoded image may hold 2^29 samples (2 GiB as `i32`), or 8
 samples per byte of input when that is more, so the limit grows past 64 MiB of
