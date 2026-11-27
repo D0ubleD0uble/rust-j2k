@@ -69,7 +69,7 @@ cargo deny check
 ```
 
 CI (`.github/workflows/ci.yml`) runs these, plus `cargo test --doc`, a `cargo
-check` on the minimum Rust version, the package hygiene check ([layer
+check` on the minimum Rust version, the package hygiene check and packaged tests ([layer
 7](#7-package-contents)), the fuzz smoke ([layer 3](#3-fuzzing)), `cargo test`
 on macOS aarch64, and on `wasm32-wasip1` the library tests (`--lib`) and the
 `jp2_icc`, `sample_limit` and `limit_32bit` test binaries.
@@ -300,10 +300,14 @@ conformance corpus, the GDAL JP2 files, the OpenJPH files and the benchmark
 inputs) and everything used only to work on the repository, such as
 `.claude/`, `.github/` and `scripts/`. For example, the 0.5.0 check found
 `.claude/`, `.github/` and `scripts/` in the package (#429). The
-`package-hygiene` CI job checks only one rule: the license-restricted
-conformance corpus (`tests/fixtures/conformance/`) never ships.
+`package-hygiene` CI job checks that the license-restricted conformance
+corpus (`tests/fixtures/conformance/`) never ships, and runs the crate's own
+tests from the unpacked package.
 
-Then run the crate's own tests from the unpacked package:
+That job runs them on every PR: it packages the crate, unpacks the `.crate`
+into a fresh directory with its own `CARGO_TARGET_DIR`, runs `cargo test` there
+and prints the skip-line count. For a release, run them by hand too, to read
+the skip count against the last release:
 
 ```sh
 cargo package --allow-dirty
@@ -330,7 +334,7 @@ run `cargo clean -p rust-j2k` in the unpacked directory before `cargo test`.
 **Cost:** a few minutes, plus a second build of the crate and its tests.
 
 **When:** once per release, during the readiness check. The `package-hygiene`
-job checks the conformance rule on every PR.
+job checks the conformance rule and runs the packaged tests on every PR.
 
 ## 8. Differential checks
 

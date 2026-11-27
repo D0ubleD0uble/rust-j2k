@@ -97,6 +97,22 @@ jobs:
             echo "::error::conformance corpus is in the packaged crate; it is license-restricted and must stay excluded"
             exit 1
           fi
+      # Run the crate's own tests from the unpacked `.crate`, as a downstream
+      # build sees it: the package leaves out some fixtures, and a test that
+      # reads one without the skip helper (tests/support/skip.rs) fails here
+      # and passes in the repository. Unpack to a fresh directory outside the
+      # checkout with its own target dir: `cargo package` sets fixed mtimes,
+      # so a reused target dir can serve stale binaries. No rust-cache, for
+      # the same reason. See docs/release-validation.md, layer 7.
+      - name: Tests pass from the packaged crate
+        shell: bash
+        run: |
+          cargo package --no-verify
+          mkdir "$RUNNER_TEMP/pkg"
+          tar -xzf target/package/rust-j2k-*.crate -C "$RUNNER_TEMP/pkg" --strip-components=1
+          cd "$RUNNER_TEMP/pkg"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/pkg-target" cargo test 2>&1 | tee "$RUNNER_TEMP/pkg-test.log"
+          echo "skip lines: $(grep -o 'left out of the published package' "$RUNNER_TEMP/pkg-test.log" | wc -l)"
 
   fuzz-smoke:
     name: fuzz smoke
