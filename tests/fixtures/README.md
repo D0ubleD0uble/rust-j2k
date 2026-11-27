@@ -606,6 +606,22 @@ decodes is refused at the packet work bound, so the target's packet ledger
 one-shot decode: about 2 to 6 s to replay under ASan, where it took 17 to
 31 s before the ledger. Replay it with the command above.
 
+`incremental/layers_65535_pass_packet_bound.seed` (4096 bytes, SHA-256
+`ad31787565b1076f14e1bc0e7f7b88818893828d73827e9ffb1d725e25866934`) is a
+unit an `incremental_decode` fuzz run saved as slow (#695; found while
+working #692, from the CI smoke's seeding, `-max_len=4096`, after 79 s). It
+is a 32 x 32 codestream of 20 8-bit components in 32 x 32 code-blocks, one
+tile of two tile-parts with a `POC` in each, and 65 535 layers, almost all
+of it zero bytes. Each of its decodes walks about 0.8 of the packet work
+bound and passes it, so the target's packet ledger, which charges each
+decode the visits it spent, ends the execution after the first due refine
+and its one-shot decode: 5 to 10 s to replay under ASan, where it took 32 to
+36 s when the ledger charged only refusals. `tests/fuzz_seed_outcomes.rs`
+pins its header and the share of the bound a decode of it walks. It starts
+with `SOC`, so the target reads it with all-zero control bytes, and its
+extension keeps it out of the sweeps of the fixtures. It is fuzzer output,
+so it has no license restriction. Replay it with the command above.
+
 `incremental/t1bomb_row_128_8.seed` (331 bytes, SHA-256
 `8ee10b73fa03f98398a482e04bd39b8d706388f625a301012ab8b539aa5f7482`) is a
 seed of the `incremental_decode` fuzz target for a count past the whole

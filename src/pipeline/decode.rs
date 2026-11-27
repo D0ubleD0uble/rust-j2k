@@ -1640,6 +1640,9 @@ fn decode_codestream(
     // so that what they all spend is what one walk spends (see
     // [`incremental::Ledger`]).
     let meter = tier2::Meter::new(packet_bound).under(cap);
+    // What the walks spend, for the fuzz targets' packet ledger.
+    #[cfg(any(test, feature = "__fuzz"))]
+    let _counted = crate::fuzz::CountVisits(&meter);
     // The code-block bound that `Default` sets and a refusal's factor is
     // worked out from. Under the fuzz targets' cap it is the cap, whatever
     // the tiles' data, and no limit, `Unlimited` included, sets more than

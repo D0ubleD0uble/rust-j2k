@@ -67,25 +67,32 @@ reaches the draws a mutation of it picks, not its own.
 
 The work cap below prices code-block work only, and every decode may also
 walk packets up to the packet work bound: 2^24 visits for a fuzz input, about
-1 to 3 s under ASan. A geometry of many code-blocks with empty packets
+1 to 4 s under ASan. A geometry of many code-blocks with empty packets
 reaches that bound in a few hundred bytes
-(`tests/fixtures/incremental/at_most_work_bound_waits.seed`). So `decode` and
-`incremental_decode` keep a packet ledger (`budget::PacketBounds` in
-`common/budget.rs`): once a decode of the input is refused at the packet
-bound, it is charged the factor it ran at, and a later decode runs only if
-its factor fits in what is left. `decode` allows 5 bounds: the first decode
-refused there, then the decode with `strict` off at up to `Raised(4)`. When
-the plain decode is the one refused, the strict decode is not run, as it
+(`tests/fixtures/incremental/at_most_work_bound_waits.seed`), and one of many
+layers walks most of it and passes
+(`tests/fixtures/incremental/layers_65535_pass_packet_bound.seed`). So
+`decode` and `incremental_decode` keep a packet ledger (`budget::PacketBounds`
+in `common/budget.rs`). Each decode is charged the packet visits it spent,
+which `rust_j2k::fuzz::packet_visits` reports: about the whole bound for a
+decode refused there. A decode runs only if its factor, the most bounds it
+can spend, fits in what is left. An input whose decodes walk little runs
+every decode.
+
+`decode` allows 5 bounds: the plain decode, then the decode with `strict`
+off at up to `Raised(4)`, which runs only if its factor is left. When the
+plain decode is refused at the bound, the strict decode is not run, as it
 walks the same packets, and the plain decode's refusal takes its place in
-the check. `incremental_decode` allows 2: the first due refine and one-shot
-decode refused there, whose wait is checked, and the execution ends at the
-next decode. So on such an input the target no longer runs the decoder with
-nothing spent (`zero`), the due refine's `cut.check`, the probe, the decode
-of the whole input that checks an error is final, or `finish`. Unit tests in
-`src/fuzz.rs` and `src/incremental/tests.rs` cover the probe's path. A
-decode that passes the bound says nothing of what it spent, so it is not
-charged: an input whose every decode walks just under the bound still runs
-each one.
+the check. `incremental_decode` allows 2: a due refine and its one-shot
+decode, whose wait is checked, and the execution ends at the first decode a
+whole bound left would not cover. So on an input whose decodes walk close to
+the bound, the target no longer runs the decoder with nothing spent
+(`zero`), the due refine's `cut.check`, the probe, the decode of the whole
+input that checks an error is final, or `finish`. Unit tests in
+`src/fuzz.rs` and `src/incremental/tests.rs` cover the probe's path. An
+input longer than the CI smoke's `-max_len=4096` gets 20 bounds instead
+(`LARGE_PACKET_BOUNDS`), so that its refines can reach the bound on the
+walks read again (below).
 
 `tile_body`'s second input byte steers a region of interest: with bit 7 set
 it writes an `RGN` marker (a maxshift of 0 to 19 from the low 5 bits, on
@@ -299,8 +306,8 @@ are checked against a decode of their own (`MAX_CHECKED_TRIES`: a due one, or
 one that gives an image or an error) are compared with the one-shot oracle;
 the later ones only refine, and an error they give is still held to stick.
 Every refine that is not due is still checked for its `MoreBytes`. An input
-whose decodes reach the packet work bound ends sooner, at the packet ledger's
-limit (above, under `decode`).
+whose decodes walk close to the packet work bound ends sooner, at the packet
+ledger's limit (above, under `decode`).
 
 A due refine may also wait (`Waiting::RepeatLimit`) when the bound on the
 walks of tiles not kept, which all the refines spend together, refuses it
@@ -312,7 +319,9 @@ one-shot result, and when it kept every tile's walk it must have charged
 nothing: a single refine walks each tile once, and the first walk of a tile
 kept from its start is not charged. So a charge on a kept walk, which would
 turn a refine into a wait past the bound, fails the target. The inputs
-that reach that bound are larger than `-max_len=4096`: the smallest known is
+that reach that bound are larger than `-max_len=4096` (the packet ledger
+gives an input of that size 2 bounds, too few to reach it): the smallest
+known is
 `restarted_poc_tile(4, 8, 299)` from `tests/support/synth.rs`, 16 KB, whose
 fifth due refine an overcharge refuses. The unit test
 `fuzz::tests::incremental_target_repeat_check_holds_on_a_restarted_walk` runs
@@ -507,9 +516,9 @@ cp tests/fixtures/conformance/codestreams/*.j2k fuzz/corpus/decode/
 # decodes do, block passes and samples reconstructed, at 2^28 divided by how
 # many decodes' worth one execution can run, so an input past it is refused
 # with `Error::Limit` before the work is done. `decode` and
-# `incremental_decode` also stop decoding an input whose decodes the packet
-# work bound refuses (`budget::PacketBounds`). That keeps each target under
-# the 4 GiB and the 30 s timeout CI gives.
+# `incremental_decode` also stop decoding an input once its decodes have
+# walked the packets they may (`budget::PacketBounds`). That keeps each
+# target under the 4 GiB and the 30 s timeout CI gives.
 cargo +nightly fuzz run decode -- -dict=fuzz/j2k.dict -max_total_time=300 -rss_limit_mb=4096
 
 # The same with strict off, against the strict decode. Seeded as the CI smoke
@@ -567,7 +576,7 @@ find tests/fixtures/incremental -type f -size -4097c -exec cp {} fuzz/corpus/inc
 cargo +nightly fuzz run incremental_decode -- -dict=fuzz/j2k.dict -max_len=4096 -max_total_time=300 -rss_limit_mb=4096
 
 # The incremental target on an input that reaches the bound on the walks read
-# again (16 KB), written by a unit test. One run takes about 30 s.
+# again (16 KB), written by a unit test. One run takes 30 to 70 s under ASan.
 RUST_J2K_INCREMENTAL_SEED_DIR=fuzz/corpus/incremental_decode_large \
   cargo test --lib fuzz::tests::incremental_target_repeat_check_holds_on_a_restarted_walk
 cargo +nightly fuzz run incremental_decode fuzz/corpus/incremental_decode_large -- \
@@ -657,6 +666,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-23 | `header_split`, after review: a tile-cap refusal more bytes lift held where the codestream is fixed, and allowed by the target | the README's seeding (128 inputs), `j2k.dict` | 61 s, 11 298 runs (`-malloc_limit_mb=1024`); `nice -n 19`, one job; the 1-minute load was 10.7 | no failure |
 | 2026-11-27 | `decode` and `incremental_decode` with the new draws: sRGB on a window or tile, a raised packet work limit, and sRGB or `raw_channels` on the incremental decoder | `decode`: the 68 `tests/fixtures` codestreams and JP2 files, then the five `jp2_sycc_*.jp2` files alone; `incremental_decode`: `tests/fixtures/incremental/` and the JP2 fixtures behind six zero bytes (34 seeds), `j2k.dict`, `-max_len=4096` | 40 to 60 s each; `nice -n 19`, one job at a time | no failure. Each new draw reached under a temporary counter: raised packet limits on thousands of runs, the sYCC window and tile refusal (`sRGB output from sub-sampled sYCC chroma on an area smaller than the image`) within 60 s on the sYCC seeds, and all three outputs in `incremental_decode`. One `incremental_decode` input of 604 bytes (control byte `a0`) takes 16 to 20 s under ASan with or without the new draws |
 | 2026-11-27 | `decode` and `incremental_decode` with the packet ledger (`budget::PacketBounds`) | `decode`: the 68 `tests/fixtures` codestreams and JP2 files; `incremental_decode`: `tests/fixtures/incremental/`, the JP2 fixtures behind six zero bytes and `restarted_poc_tile(4, 8, 299)` (35 seeds), `-max_len=4096`; `j2k.dict` | 61 and 79 s; 18 938 and 1 190 runs; `nice -n 19`, one job at a time; the 1-minute load was 12 to 15 | no failure. Replayed under a temporary counter of every decode's result and every wait's reason, the seeds give the same on `main` and with the ledger, except the two that reach the packet bound: `at_most_work_bound_waits.seed` still checks its first due refine's `WorkLimit` wait against the one-shot refusal, then ends (27 to 31 s before, 5 to 6 s after, CPU under ASan), and a `decode` input of that shape 8 times taller drawing `Raised(4)` skips the strict decode and the part (17 to 21 s before, 14 to 17 s after). The `incremental_decode` run saved a slow unit the ledger does not reach: a 4096-byte codestream of 20 components and 65 535 layers whose decodes pass the packet bound, 0.24 s each in release, which takes 32 to 34 s under ASan on `main` and with the ledger alike |
+| 2026-11-27 | `decode` and `incremental_decode` with the packet ledger charging every decode the visits it spent (`rust_j2k::fuzz::packet_visits`, #695) | `decode`: the README's seeding (86 seeds); `incremental_decode`: the CI smoke's seeding with `layers_65535_pass_packet_bound.seed` (124 seeds), `-max_len=4096`; `j2k.dict` | 61 and 65 s; 30 672 and 1 428 runs; `nice -n 19`, one job at a time; the 1-minute load was 4 to 9 | no failure. Replayed under a temporary print of every `checked()` result, the seeds give the same on `main` and with the ledger (`decode`: 87 inputs; `incremental_decode`: 147, `restarted_poc_tile(4, 8, 299)` among them), except the two whose decodes pass the bound close to it: the many-layer seed (35 to 44 s before, 5 to 10 s after, CPU under ASan at load 16 to 24) and `at_most_work_bound_waits.seed` with `Ysiz` at 15/16 (20 to 28 s before, 3 to 7 s after) now stop after the first due refine and its one-shot decode |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

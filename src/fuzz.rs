@@ -363,6 +363,40 @@ pub fn incremental_code_block_work(decoder: &crate::IncrementalDecoder) -> (u64,
 /// the refines of an incremental decoder before their bound refuses one.
 pub const REPEAT_BOUNDS: u64 = crate::tier2::resume::REPEAT_BOUNDS;
 
+/// The default packet work bound of a decode whose tiles hold under 2^19
+/// bytes, in the visits [`packet_visits`] counts: one bound of a fuzz
+/// target's packet ledger.
+pub const PACKET_BOUND: u64 = crate::tier2::DECODE_VISITS_MIN;
+
+std::thread_local! {
+    static PACKET_VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The packet visits the decodes and refines on this thread have been
+/// charged since the last call, which starts the count again.
+///
+/// A decode (`decode_with`, and an incremental decoder's refine or
+/// `finish`) adds the visits its packet work bound was charged: for a
+/// decode refused at that bound, about the whole bound. A refine is charged
+/// what a decode of the same bytes on its own spends, though it goes on from
+/// the walks earlier refines kept, so the count is never short of the work
+/// it did. A fuzz target reads it between decodes to price them in packet
+/// bounds ([`PACKET_BOUND`]).
+pub fn packet_visits() -> u64 {
+    PACKET_VISITS.with(|count| count.replace(0))
+}
+
+/// Adds what `meter` was charged to [`packet_visits`] when it is dropped,
+/// however the decode that holds it ends.
+pub(crate) struct CountVisits<'m>(pub(crate) &'m crate::tier2::Meter);
+
+impl Drop for CountVisits<'_> {
+    fn drop(&mut self) {
+        let spent = self.0.spent();
+        PACKET_VISITS.with(|count| count.set(count.get().saturating_add(spent)));
+    }
+}
+
 /// What an [`IncrementalDecoder`](crate::IncrementalDecoder) has charged
 /// for the walks that read a tile from its start again: the walks of tiles
 /// not kept, the walks started or built again, and the first walk of a
@@ -644,6 +678,27 @@ mod tests {
         let work = super::incremental_repeat_work(&decoder);
         assert_eq!(work.refused, None);
         assert!(work.visits > 3 * (1 << 24), "{work:?}");
+    }
+
+    /// [`packet_visits`](super::packet_visits) gives each decode's visits
+    /// once, and a refine fed every byte is charged what a decode of the
+    /// same bytes spends.
+    #[test]
+    fn packet_visits_reports_what_each_decode_walked_once() {
+        use crate::{DecodeOptions, IncrementalDecoder, decode_with};
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/layers/lrcp.j2k");
+        let bytes = std::fs::read(path).unwrap();
+        let _ = super::packet_visits();
+        let options = DecodeOptions::default();
+        decode_with(&bytes, &options).unwrap();
+        let once = super::packet_visits();
+        assert!(once > 0);
+        assert_eq!(super::packet_visits(), 0, "read once");
+        let mut decoder = IncrementalDecoder::new(options).unwrap();
+        decoder.feed(&bytes);
+        assert!(decoder.refine().unwrap().image().is_some());
+        assert_eq!(super::packet_visits(), once);
     }
 
     /// Smoke-run every hook so the fuzz surface builds and stays panic-free in

@@ -19,11 +19,12 @@
 //! window or tile decode for sRGB, which a sub-sampled sYCC image refuses
 //! there. The hash changes with any byte, so `tmin` of a crash can flip these.
 //!
-//! An input whose decodes are refused at the packet work bound is held to 5
-//! packet bounds (`budget::PacketBounds`): the first decode refused there,
-//! and the one with `strict` off at its factor. Where the plain decode is
-//! the one refused, the strict decode is not run, and the part runs only
-//! where a bound is left.
+//! The decodes of one input are held to 5 packet bounds between them
+//! (`budget::PacketBounds`), each charged the packet visits it spent. The
+//! plain and the strict decode spend at most one each; the one with
+//! `strict` off runs only if its factor fits in what is left, and the part
+//! only if a bound is. Where the plain decode is refused at the packet
+//! bound, the strict decode is not run.
 
 use libfuzzer_sys::fuzz_target;
 
@@ -46,9 +47,9 @@ fuzz_target!(|data: &[u8]| {
     // In code-block bounds: the plain decode at 2, so that mid-size images
     // reach pixels, and the other three at 1 each.
     let base = budget::options(5);
-    // In packet bounds, once a decode is refused at the packet bound: that
-    // decode (the plain or the strict one) and the one with `strict` off at
-    // up to 4.
+    // In packet bounds: the plain decode, and the one with `strict` off at
+    // up to 4. A decode refused at the bound spends it, so an input the
+    // plain decode is refused for still runs `Raised(4)`.
     let mut packets = budget::PacketBounds::new(5);
     let plain = base
         .clone()
@@ -59,7 +60,6 @@ fuzz_target!(|data: &[u8]| {
         Err(error) if budget::packet_refusal(&error) => Some(error),
         _ => None,
     };
-    packets.charge(1, plain_refusal.is_some());
     let hash = fnv1a(data);
     if hash & 1 == 1 {
         let layers = 1 + ((hash >> 1) % 3) as u16;
@@ -71,14 +71,10 @@ fuzz_target!(|data: &[u8]| {
         // refused at the packet bound, the strict one fails too, at that
         // bound or earlier at the code-block bound. The plain refusal then
         // stands in for it, and the bound goes to the decode with `strict`
-        // off. Otherwise it runs, and is charged.
+        // off. Otherwise it runs: the plain decode leaves at least 4 bounds.
         let strict = match &plain_refusal {
             Some(error) => Err(error.clone()),
-            None => {
-                let strict = checked(rust_j2k::decode_with(data, &options));
-                packets.charge(1, strict.as_ref().is_err_and(budget::packet_refusal));
-                strict
-            }
+            None => checked(rust_j2k::decode_with(data, &options)),
         };
         // One input in four raises the packet work bound (2 or 4 times the
         // default) for the decode with `strict` off only, so the walks the
@@ -95,9 +91,11 @@ fuzz_target!(|data: &[u8]| {
         };
         // The same cap with `strict` off, where a block's last kept pass may
         // be cut short by the cap (#358). That bug gave a wrong image, not a
-        // panic, so the decode is checked against the strict one.
-        let refused = partial::check(data, &lenient, &strict);
-        packets.charge(factor, refused);
+        // panic, so the decode is checked against the strict one. It runs if
+        // the bounds it may spend are left.
+        if packets.allows(factor) {
+            partial::check(data, &lenient, &strict);
+        }
     }
     if hash & 2 == 2 && packets.allows(1) {
         let mut part = part(base, hash >> 8);

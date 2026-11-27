@@ -82,12 +82,15 @@
 //! are checked; the later ones only refine, and an error they give is
 //! still held to stick. That bounds the decodes of one execution, whatever
 //! the input's length, so the target stays under the fuzz cap on
-//! code-block work (`common/budget.rs`). An input whose decodes reach the
-//! packet work bound is held to 2 packet bounds (`budget::PacketBounds`):
-//! once a refine or a decode of its own is refused there, the execution
-//! ends at the next decode that a bound left would not cover, so the first
-//! due refine refused there and its one-shot decode are checked, and
-//! `finish` is not run.
+//! code-block work (`common/budget.rs`). The refines and decodes of one
+//! input are also held to 2 packet bounds between them
+//! (`budget::PacketBounds`), each charged the packet visits it spent: the
+//! execution ends at the first decode a whole bound left would not cover.
+//! So where a due refine and its one-shot decode walk close to the bound or
+//! are refused there, those two are checked and `finish` is not run. An
+//! input longer than the CI smoke's `-max_len=4096` gets
+//! [`LARGE_PACKET_BOUNDS`], so that the refines can reach the bound on the
+//! walks read again.
 
 use libfuzzer_sys::fuzz_target;
 
@@ -118,6 +121,18 @@ fn keyed<T>(result: Result<T, Error>) -> Result<T, String> {
 /// The most refines one execution checks against decodes of its own.
 /// `tests/fuzz_seed_outcomes.rs` reads this to check the work weight.
 const MAX_CHECKED_TRIES: u32 = 4;
+
+/// The longest input the CI smoke gives this target (`-max_len=4096`).
+const CI_MAX_LEN: usize = 4096;
+
+/// The packet bounds of a longer input: enough for the refines to take the
+/// walks read again past their bound (`REPEAT_BOUNDS` and one more), for
+/// the three decodes of its own each checked try runs, and for the decode
+/// of the whole input, `finish` and the decode it is checked against. The
+/// inputs that reach that bound are all longer than `CI_MAX_LEN`, and one
+/// such execution is about a minute under ASan, which only the README's
+/// run on them, with no `-timeout`, allows.
+const LARGE_PACKET_BOUNDS: u64 = REPEAT_BOUNDS + 1 + 3 * MAX_CHECKED_TRIES as u64 + 3;
 
 fuzz_target!(|input: &[u8]| {
     const JP2_SIGNATURE: [u8; 8] = [0, 0, 0, 12, b'j', b'P', b' ', b' '];
@@ -228,11 +243,16 @@ fuzz_target!(|input: &[u8]| {
         }
     }
     let changes = control[0] & 0x40 != 0;
-    // In packet bounds, once a decode is refused at the packet bound: the
-    // first refine and one-shot decode refused there, which the reason the
-    // refine waits is checked against. A decode past that ends the
-    // execution.
-    let mut packets = budget::PacketBounds::new(2);
+    // In packet bounds: a due refine and its one-shot decode at the bound,
+    // which the reason the refine waits is checked against. A decode past
+    // that ends the execution. An input the CI smoke cannot make gets more
+    // (`LARGE_PACKET_BOUNDS`).
+    let bounds = if input.len() <= CI_MAX_LEN {
+        2
+    } else {
+        LARGE_PACKET_BOUNDS
+    };
+    let mut packets = budget::PacketBounds::new(bounds);
     let mut lenient = options.clone().with_strict(false);
     let Ok(mut decoder) = checked(IncrementalDecoder::new(options.clone())) else {
         return;
@@ -263,7 +283,6 @@ fuzz_target!(|input: &[u8]| {
             return;
         }
         let refine = checked(decoder.refine());
-        packets.charge(1, refine_refused(&refine));
         let waiting = match &refine {
             Ok(Refined::Waiting(why)) => Some(why.clone()),
             _ => None,
@@ -299,7 +318,6 @@ fuzz_target!(|input: &[u8]| {
                 return;
             }
             let one_shot = checked(decode_with(&data[..fed], &lenient));
-            packets.charge(1, one_shot.as_ref().is_err_and(budget::packet_refusal));
             let shape = one_shot.as_ref().map(|_| ()).map_err(Error::clone);
             // An error on an input that has not closed may be a
             // wait.
@@ -364,7 +382,6 @@ fuzz_target!(|input: &[u8]| {
                 let mut zero = checked(IncrementalDecoder::new(options.clone())).unwrap();
                 zero.feed(&data[..fed]);
                 let zero_refine = checked(zero.refine());
-                packets.charge(1, refine_refused(&zero_refine));
                 // A decoder with nothing spent can reach the error the main
                 // one stopped short of, and wait on it as `Held` on its own.
                 let zero_held = matches!(&zero_refine, Ok(Refined::Waiting(Waiting::Held { .. })));
@@ -419,7 +436,6 @@ fuzz_target!(|input: &[u8]| {
                     incremental_with_code_block_work_spent(options.clone(), spent).unwrap();
                 probe.feed(&data[..fed]);
                 let probe_refine = checked(probe.refine());
-                packets.charge(1, refine_refused(&probe_refine));
                 // The probe is the path that reaches the count past the
                 // cut, so its reason is checked too.
                 if let Ok(Refined::Waiting(why)) = &probe_refine {
@@ -480,18 +496,21 @@ fuzz_target!(|input: &[u8]| {
             return;
         }
         let whole = checked(decode_with(data, &lenient));
-        packets.charge(1, whole.as_ref().is_err_and(budget::packet_refusal));
         assert_eq!(
             keyed(whole.map(|_| ())),
             Err(error.clone()),
             "a refine failed for good"
         );
     }
-    // `finish` and the decode it is checked against.
-    if !packets.allows(2) {
+    // `finish` and the decode it is checked against, each if a bound is
+    // left for it.
+    if !packets.allows(1) {
         return;
     }
     let finished = checked(decoder.finish());
+    if !packets.allows(1) {
+        return;
+    }
     match checked(decode_with(data, &options)) {
         // A header cut short is a truncation once the input has ended.
         Err(Error::Incomplete(why)) => match finished {
@@ -503,19 +522,6 @@ fuzz_target!(|input: &[u8]| {
         expected => assert_eq!(keyed(finished), keyed(expected)),
     }
 });
-
-/// Whether `refine` is a refusal at the packet bound: the walks of one
-/// refine, or the bound on the walks read again.
-fn refine_refused(refine: &Result<Refined, Error>) -> bool {
-    match refine {
-        Ok(Refined::Waiting(
-            Waiting::WorkLimit { limit, .. } | Waiting::MissingTiles { limit, .. },
-        )) => limit.kind() == LimitKind::PacketWork,
-        Ok(Refined::Waiting(Waiting::RepeatLimit { .. })) => true,
-        Ok(_) => false,
-        Err(error) => budget::packet_refusal(error),
-    }
-}
 
 /// Where the header of the first top-level `jp2c` box of `data` ends, if
 /// `data` holds it.
