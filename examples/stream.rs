@@ -13,8 +13,8 @@
 //!    new image. A refine decodes again only when the bytes fed have doubled
 //!    since the last try, so most chunks wait.
 //! 4. `finish` decodes all of the input, as `decode` does. On a truncated
-//!    download it refuses by default, and `with_strict(false)` keeps the
-//!    partial image.
+//!    download it refuses by default. In your own code, `with_strict(false)`
+//!    makes `finish` return the partial image once the header is in.
 //!
 //! ```text
 //! cargo run --example stream -- tests/fixtures/layers/lrcp.j2k 100
@@ -42,7 +42,9 @@ fn describe(why: &Waiting) -> String {
         Waiting::WorkLimit { limit, .. } => format!("waiting, {limit}"),
         Waiting::BoundSpent { limit, .. } => format!("waiting, {limit}"),
         Waiting::MissingTiles { limit, .. } => format!("waiting, {limit}"),
-        Waiting::RepeatLimit { .. } => "waiting, a repeat bound refused".into(),
+        Waiting::RepeatLimit { .. } => {
+            "waiting, repeat-walk bound spent; decode the bytes fed now".into()
+        }
         Waiting::Held { error, .. } => format!("waiting, held: {error}"),
         _ => "waiting, for a reason this example does not show".into(),
     }
