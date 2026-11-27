@@ -826,13 +826,18 @@ fn whites_equal(white: u16, obtained: &[u16; 3]) -> bool {
 // ---------------------------------------------------------------------------
 // Optimized evaluators (cmsopt.c)
 
+/// Entries in each second-stage table: 14-bit input plus one.
+const SHAPER2_LEN: usize = 16385;
+
 /// `MatShaper8Data`.
 #[derive(Debug, Clone, PartialEq)]
 struct MatShaper {
     shaper1: Box<[[i32; 256]; 3]>,
     mat: [[i32; 3]; 3],
     off: [i32; 3],
-    shaper2: Box<[[u16; 16385]; 3]>,
+    /// Three tables of `SHAPER2_LEN` entries, one flat heap slice so that no
+    /// 98 KB array is ever built on the stack.
+    shaper2: Box<[u16]>,
 }
 
 impl MatShaper {
@@ -850,8 +855,8 @@ impl MatShaper {
                 };
             }
         }
-        let mut shaper2 = Box::new([[0u16; 16385]; 3]);
-        for (table, curve) in shaper2.iter_mut().zip(curve2) {
+        let mut shaper2 = vec![0u16; 3 * SHAPER2_LEN].into_boxed_slice();
+        for (table, curve) in shaper2.chunks_exact_mut(SHAPER2_LEN).zip(curve2) {
             // `FillSecondShaper` for 8-bit output.
             for (i, slot) in table.iter_mut().enumerate() {
                 let r = (i as f64 / 16384.0) as f32;
@@ -883,7 +888,7 @@ impl MatShaper {
                 .wrapping_add(0x2000)
                 >> 14;
             let i = l.clamp(0, 16384) as usize;
-            *o = self.shaper2[k][i];
+            *o = self.shaper2[k * SHAPER2_LEN + i];
         }
         out
     }
