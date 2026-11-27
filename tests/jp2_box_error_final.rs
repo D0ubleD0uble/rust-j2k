@@ -42,6 +42,10 @@
 //! the later [`final_shapes`] and the `header_split` inputs
 //! ([`the_header_split_inputs_are_final_once_the_fault_is_in`]).
 
+#[path = "support/inconsistent.rs"]
+mod inconsistent;
+#[path = "support/replaceable.rs"]
+mod replaceable;
 #[path = "support/skip.rs"]
 mod skip;
 #[path = "support/synth.rs"]
@@ -614,7 +618,11 @@ fn a_box_of_length_0_after_the_codestream_past_2_32_bytes_is_skipped() {
 ///   codestream: settled by the `Psot` of 0 of its last tile-part, by the
 ///   header of a `jp2c` the walk there stops at, or by the fourth byte of
 ///   an `XLBox` of 2^32 there. Each has a `colr` too short after it, which
-///   would be a fault if it were read.
+///   would be a fault if it were read;
+/// - a whole `ftyp` after the codestream, then an `xml ` of length 0:
+///   settled by the `ftyp`'s last byte. The box of length 0 after it can
+///   still grow, but the `ftyp` before it is whole and refused for its type
+///   alone, so its fault is final.
 fn final_shapes() -> Vec<FinalShape> {
     let short_colr = synth::bx(b"colr", &[1, 0]);
     let default = DecodeOptions::default;
@@ -729,6 +737,12 @@ fn final_shapes() -> Vec<FinalShape> {
             ),
             default(),
             4 + short_colr.len(),
+        ),
+        (
+            "a whole ftyp after the codestream, then an xml of length 0",
+            gray_file(&[synth::ftyp_jp2(), open_box(b"xml ", b"<a/>")].concat()),
+            default(),
+            12,
         ),
     ]
 }
@@ -913,12 +927,13 @@ final_at_once! {
     a_chain_broken_in_a_cut_jp2c_is_final: 9,
     a_tile_part_fault_before_a_second_jp2c_is_final: 10,
     a_tile_part_fault_before_an_xlbox_of_2_32_is_final: 11,
+    a_whole_ftyp_before_a_box_of_length_0_after_the_codestream_is_final: 12,
 }
 
 /// The checks of [`final_at_once!`] on shape `index` of [`final_shapes`].
 fn check_final(index: usize) {
     let shapes = final_shapes();
-    assert_eq!(shapes.len(), 12, "a shape with no test");
+    assert_eq!(shapes.len(), 13, "a shape with no test");
     let (name, bytes, options, after) = shapes.into_iter().nth(index).expect("a shape");
     let settled = bytes.len() - after;
     let lenient = options.clone().with_strict(false);
@@ -1376,4 +1391,35 @@ fn an_srgb_refusal_more_bytes_lift_waits_for_a_box_after_the_codestream() {
         error_of(&read_header_with(&settled, &lenient)),
         Some(refused)
     );
+}
+
+/// The `header_split` target's [`replaceable::replaceable`] on its
+/// committed inputs. It finds a suffix that changes the error of the #722
+/// input, an `ftyp` of length 0 after the codestream, through the 2^32
+/// bytes past which OpenJPEG skips that box. It finds none for a whole
+/// `ftyp` after the codestream followed by an `xml ` of length 0, nor for a
+/// `jp2h` of length 0 before the codestream with a child of length 4: both
+/// faults are final. A harness that stood in for more than the box of
+/// length 0 after the codestream would pass a decoder that held them.
+#[test]
+fn header_split_finds_a_suffix_only_where_one_changes_the_error() {
+    for (name, expected) in [
+        ("header_split_ftyp_lbox0_after_codestream", true),
+        ("header_split_ftyp_then_xml_lbox0_after_codestream", false),
+        ("header_split_jp2h_lbox0_child_of_length_4", false),
+    ] {
+        let seed = synth::read_file(synth::fixtures(&format!("incremental/{name}.seed")));
+        // All-zero option bytes but the piece sizes' seed: the defaults.
+        assert_eq!(&seed[..6], &[0; 6], "{name}");
+        let bytes = &seed[12..];
+        assert!(
+            read_header_with(bytes, &DecodeOptions::default()).is_err(),
+            "{name}: read"
+        );
+        assert_eq!(
+            replaceable::replaceable(bytes, &DecodeOptions::default()),
+            expected,
+            "{name}"
+        );
+    }
 }
