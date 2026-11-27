@@ -58,27 +58,17 @@ use libfuzzer_sys::fuzz_target;
 mod held;
 #[path = "../../tests/support/inconsistent.rs"]
 mod inconsistent;
+#[path = "../../tests/support/pieces.rs"]
+mod pieces;
 #[path = "../../tests/support/replaceable.rs"]
 mod replaceable;
+use pieces::{Change, Feed, Pieces};
 use replaceable::replaceable;
 use inconsistent::checked;
 use rust_j2k::{
     read_header_with, ColorOutput, DecodeOptions, Error, Header, IncrementalDecoder, LimitKind,
     Raise, Region, SampleLimit, Window,
 };
-
-/// splitmix64: the same stream on every platform, from a seed in the input.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-}
 
 /// A region from two input bytes, and `salt` (the bytes fed or the file's
 /// length) for the small window. The windows are laid out for tiles 1040
@@ -256,34 +246,26 @@ fuzz_target!(|input: &[u8]| {
     let Ok(mut decoder) = checked(IncrementalDecoder::new(options.clone())) else {
         return;
     };
-    let mut rng = Rng(u64::from_le_bytes([
-        c[6], c[7], c[8], c[9], c[10], c[11], 0, 0,
-    ]));
-    // About 24 feeds on average, so the oracle's reads from the start cost
-    // about that many passes over the input.
-    let most = (data.len() / 24).max(1);
     let mut fed = 0;
     // A decoder under the starting options, started the first time the
     // oracle refuses the decoder's options but not those.
     let mut shadow: Option<IncrementalDecoder> = None;
-    while fed < data.len() {
-        let piece = 1 + (rng.next() as usize) % (2 * most);
-        let to = (fed + piece).min(data.len());
+    // About 24 feeds on average, so the oracle's reads from the start cost
+    // about that many passes over the input.
+    for Feed { to, change, again } in Pieces::new(c, data.len()) {
         decoder.feed(&data[fed..to]);
         fed = to;
-        let r = rng.next();
-        if r % 8 == 0 {
-            let arg = (r >> 8) as u8;
-            // A change that is refused leaves the options as they were, and
-            // the oracle reads them back from the decoder.
-            let _ = match (r >> 16) % 3 {
-                0 => checked(decoder.set_region(region((r >> 24) as u8, arg, fed))),
-                1 => checked(decoder.set_resolution_reduction(arg % 3)),
-                _ => checked(decoder.set_max_quality_layers(Some(1 + u16::from(arg % 3)))),
-            };
-        }
+        // A change that is refused leaves the options as they were, and
+        // the oracle reads them back from the decoder.
+        let _ = match change {
+            Some(Change::Region { code, arg }) => {
+                checked(decoder.set_region(region(code, arg, fed)))
+            }
+            Some(Change::Reduction(levels)) => checked(decoder.set_resolution_reduction(levels)),
+            Some(Change::Layers(layers)) => checked(decoder.set_max_quality_layers(Some(layers))),
+            None => Ok(()),
+        };
         let at = format!("at {fed} of {}", data.len());
-        let again = r % 5 == 0;
         let want = check_call(&decoder, data, fed, again, &at);
         match &mut shadow {
             Some(shadow) => {

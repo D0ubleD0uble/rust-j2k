@@ -44,6 +44,8 @@
 
 #[path = "support/inconsistent.rs"]
 mod inconsistent;
+#[path = "support/pieces.rs"]
+mod pieces;
 #[path = "support/replaceable.rs"]
 mod replaceable;
 #[path = "support/skip.rs"]
@@ -1435,70 +1437,39 @@ fn header_split_finds_a_suffix_only_where_one_changes_the_error() {
     }
 }
 
-/// The `header_split` target's stream of piece sizes and changes of
-/// options (splitmix64 from control bytes 6 to 11): the end of each feed,
-/// and the change after it, if any, as (kind, argument), where kind 1 is
-/// the reduction and its argument the reduction set.
-fn header_split_feeds(seed: &[u8]) -> Vec<(usize, Option<(u64, u8)>)> {
-    let mut state =
-        u64::from_le_bytes([seed[6], seed[7], seed[8], seed[9], seed[10], seed[11], 0, 0]);
-    let mut next = || {
-        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    };
-    let len = seed.len() - 12;
-    let most = (len / 24).max(1);
-    let mut feeds = Vec::new();
-    let mut fed = 0;
-    while fed < len {
-        let piece = 1 + (next() as usize) % (2 * most);
-        fed = (fed + piece).min(len);
-        let r = next();
-        let arg = (r >> 8) as u8;
-        let change = (r % 8 == 0).then_some(match (r >> 16) % 3 {
-            1 => (1, arg % 3),
-            kind => (kind, arg),
-        });
-        feeds.push((fed, change));
-    }
-    feeds
-}
-
-/// The two `header_split` seeds of #726 pin what their piece streams do,
-/// so a change to the target's stream does not silently stop them testing
-/// what they were made for. `header_split_ftyp_then_xml_lbox0_fixture_prefix`
-/// changes the reduction to 2, which its one resolution refuses, at its last
-/// feed (199 of 199), and not before. `header_split_ftyp_cut_after_refused_reduction`
+/// The two `header_split` seeds of #726 pin what their piece streams do in
+/// the target, whose stream ([`pieces::Pieces`]) this includes, so a
+/// change to it does not silently stop them testing what they were made
+/// for. `header_split_ftyp_then_xml_lbox0_fixture_prefix` changes the
+/// reduction to 2, which its one resolution refuses, at its last feed (199
+/// of 199), and not before. `header_split_ftyp_cut_after_refused_reduction`
 /// changes it to 2 at 97 bytes, before the main header is whole, changes
 /// nothing after, and later ends a feed inside the `ftyp` after the
-/// codestream (167 to 187).
-///
-/// The target's stream is copied here, so this checks the copy: keep the
-/// two the same.
+/// codestream, which takes bytes 167 to 186 of the file: at 168 to 186.
 #[test]
 fn the_header_split_seeds_of_726_keep_their_piece_streams() {
-    let read = |name: &str| synth::read_file(synth::fixtures(&format!("incremental/{name}.seed")));
-    let changes = |feeds: &[(usize, Option<(u64, u8)>)]| {
+    let feeds = |name: &str| {
+        let seed = synth::read_file(synth::fixtures(&format!("incremental/{name}.seed")));
+        pieces::Pieces::new(&seed, seed.len() - 12).collect::<Vec<_>>()
+    };
+    let changes = |feeds: &[pieces::Feed]| {
         feeds
             .iter()
-            .filter_map(|&(fed, change)| change.map(|change| (fed, change)))
+            .filter_map(|feed| feed.change.map(|change| (feed.to, change)))
             .collect::<Vec<_>>()
     };
-    let last = read("header_split_ftyp_then_xml_lbox0_fixture_prefix");
-    let feeds = header_split_feeds(&last);
-    assert_eq!(feeds.last().map(|&(fed, _)| fed), Some(199));
-    assert_eq!(changes(&feeds).last(), Some(&(199, (1, 2))));
+    let reduction = pieces::Change::Reduction;
+
+    let last = feeds("header_split_ftyp_then_xml_lbox0_fixture_prefix");
+    assert_eq!(last.last().map(|feed| feed.to), Some(199));
+    assert_eq!(changes(&last).last(), Some(&(199, reduction(2))));
     assert!(
-        changes(&feeds)
+        changes(&last)
             .iter()
-            .all(|&(fed, (kind, _))| kind != 1 || fed == 199)
+            .all(|&(to, change)| !matches!(change, pieces::Change::Reduction(_)) || to == 199)
     );
 
-    let early = read("header_split_ftyp_cut_after_refused_reduction");
-    let feeds = header_split_feeds(&early);
-    assert_eq!(changes(&feeds), [(97, (1, 2))]);
-    assert!(feeds.iter().any(|&(fed, _)| (168..187).contains(&fed)));
+    let early = feeds("header_split_ftyp_cut_after_refused_reduction");
+    assert_eq!(changes(&early), [(97, reduction(2))]);
+    assert!(early.iter().any(|feed| (168..187).contains(&feed.to)));
 }
