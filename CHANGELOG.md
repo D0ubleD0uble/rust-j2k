@@ -78,6 +78,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Two more examples: `cargo run --example thumbnail` decodes at a reduced
   resolution or a window, and `cargo run --example stream` feeds a file to
   `IncrementalDecoder` in chunks and prints each refine.
+- The `untrusted` and `grib2` examples: `cargo run --example untrusted`
+  shows the default limits, an opt-in retry with
+  `DecodeOptions::raised_for` and a decode with `strict` off for a
+  cut-short file, and `cargo run --example grib2` scales a GRIB2 section 7
+  codestream to physical values.
 - `docs/stability.md` says what the API covers within a minor version and
   what can change: message and `Display` text, which fault is reported
   first, and the default limit values (raised in any release, lowered only

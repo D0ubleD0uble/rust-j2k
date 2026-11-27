@@ -16,6 +16,7 @@ use synth::bx;
 
 mod after;
 mod channels;
+mod cut;
 mod matrix;
 mod palette;
 mod rreq;
