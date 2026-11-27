@@ -87,9 +87,11 @@ pub(crate) fn codestream_end(bytes: &[u8]) -> End {
             Some(SOT) => break,
             Some(SOC | SOD | EOC) => return End::Broken,
             Some(code) if !is_marker(code) => return End::Broken,
-            Some(code) if !has_segment(code) => at += 2,
+            Some(code) if !has_segment(code) => at = stepped(at, at + 2, bytes),
             Some(_) => match marker(at + 2) {
-                Some(length) if length >= 2 => at += 2 + usize::from(length),
+                Some(length) if length >= 2 => {
+                    at = stepped(at, at + 2 + usize::from(length), bytes);
+                }
                 Some(_) => return End::Broken,
                 None => return End::Unknown,
             },
@@ -118,7 +120,7 @@ pub(crate) fn codestream_end(bytes: &[u8]) -> End {
         };
         match marker(end) {
             Some(EOC) => return End::At(end + 2),
-            Some(SOT) => at = end,
+            Some(SOT) => at = stepped(at, end, bytes),
             Some(_) => return End::Broken,
             // One byte in that is not `0xFF` starts no marker, whatever
             // byte follows it.
@@ -126,6 +128,19 @@ pub(crate) fn codestream_end(bytes: &[u8]) -> End {
             None => return End::Unknown,
         }
     }
+}
+
+/// A step of [`codestream_end`] from `at` to `to`, which tests count, as
+/// far as `bytes` go.
+fn stepped(at: usize, to: usize, bytes: &[u8]) -> usize {
+    #[cfg(test)]
+    super::tests::AFTER_BYTES.with(|read| {
+        let span = to.min(bytes.len()).saturating_sub(at) as u64;
+        read.set(read.get() + span);
+    });
+    #[cfg(not(test))]
+    let _ = (at, bytes);
+    to
 }
 
 /// What OpenJPEG still holds when it walks the boxes after the codestream,
