@@ -18,6 +18,12 @@
 //! packet work bound on the decode with `strict` off, and asks a JP2 file's
 //! window or tile decode for sRGB, which a sub-sampled sYCC image refuses
 //! there. The hash changes with any byte, so `tmin` of a crash can flip these.
+//!
+//! An input whose decodes are refused at the packet work bound is held to 5
+//! packet bounds (`budget::PacketBounds`): the first decode refused there,
+//! and the one with `strict` off at its factor. Where the plain decode is
+//! the one refused, the strict decode is not run, and the part runs only
+//! where a bound is left.
 
 use libfuzzer_sys::fuzz_target;
 
@@ -40,34 +46,60 @@ fuzz_target!(|data: &[u8]| {
     // In code-block bounds: the plain decode at 2, so that mid-size images
     // reach pixels, and the other three at 1 each.
     let base = budget::options(5);
+    // In packet bounds, once a decode is refused at the packet bound: that
+    // decode (the plain or the strict one) and the one with `strict` off at
+    // up to 4.
+    let mut packets = budget::PacketBounds::new(5);
     let plain = base
         .clone()
         .with_code_block_work_limit(rust_j2k::WorkLimit::Raised(2));
-    let _ = checked(rust_j2k::decode_with(data, &plain));
+    // Only the plain decode's packet refusal is kept, never its image, so
+    // no more images are held at once than the sample budget allows.
+    let plain_refusal = match checked(rust_j2k::decode_with(data, &plain)) {
+        Err(error) if budget::packet_refusal(&error) => Some(error),
+        _ => None,
+    };
+    packets.charge(1, plain_refusal.is_some());
     let hash = fnv1a(data);
     if hash & 1 == 1 {
         let layers = 1 + ((hash >> 1) % 3) as u16;
         let options = base.clone().with_max_quality_layers(Some(layers));
-        let strict = checked(rust_j2k::decode_with(data, &options));
+        // The strict decode under a layer cap walks the packets the plain
+        // decode walks: a layer cap cuts code-block work and not packet work
+        // (`a_layer_cap_cuts_block_work_and_not_packet_work` in
+        // `src/pipeline/decode.rs` holds that). So where the plain decode was
+        // refused at the packet bound, the strict one fails too, at that
+        // bound or earlier at the code-block bound. The plain refusal then
+        // stands in for it, and the bound goes to the decode with `strict`
+        // off. Otherwise it runs, and is charged.
+        let strict = match &plain_refusal {
+            Some(error) => Err(error.clone()),
+            None => {
+                let strict = checked(rust_j2k::decode_with(data, &options));
+                packets.charge(1, strict.as_ref().is_err_and(budget::packet_refusal));
+                strict
+            }
+        };
         // One input in four raises the packet work bound (2 or 4 times the
         // default) for the decode with `strict` off only, so the walks the
         // default refuses are decoded instead. A strict image must then
         // match the one with `strict` off, which a raised bound only makes
-        // likelier to decode. One decode only, as the budget prices code-block
-        // work and not packet work, which `Raised(4)` on every decode would
-        // let past the fuzz timeout.
-        let lenient = if hash & 0x60 == 0x60 {
+        // likelier to decode. One decode only: `Raised(4)` on every decode
+        // would take an input that reaches the bound past the fuzz timeout.
+        let (lenient, factor) = if hash & 0x60 == 0x60 {
             let factor = 2 + 2 * ((hash >> 7) & 1) as u32;
-            options.with_packet_work_limit(rust_j2k::WorkLimit::Raised(factor))
+            let raised = rust_j2k::WorkLimit::Raised(factor);
+            (options.with_packet_work_limit(raised), u64::from(factor))
         } else {
-            options
+            (options, 1)
         };
         // The same cap with `strict` off, where a block's last kept pass may
         // be cut short by the cap (#358). That bug gave a wrong image, not a
         // panic, so the decode is checked against the strict one.
-        partial::check(data, &lenient, &strict);
+        let refused = partial::check(data, &lenient, &strict);
+        packets.charge(factor, refused);
     }
-    if hash & 2 == 2 {
+    if hash & 2 == 2 && packets.allows(1) {
         let mut part = part(base, hash >> 8);
         // For a JP2 file, one in four of the window and tile ones asks for
         // sRGB too, which a window or a tile of a sub-sampled sYCC image
