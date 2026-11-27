@@ -394,9 +394,9 @@ impl IncrementalDecoder {
     /// on, the decoder keeps where the last call stopped, the first `ihdr`,
     /// and what the main header's segments read so far set (its `PPM` data
     /// as offsets into the bytes fed, not a copy), until a call finds the
-    /// main header whole, or an error. It is held while the main
-    /// header stays cut short, whether or not `header` is called again. It
-    /// takes up to about 20 bytes for each byte of `COC`, `QCC` and `RGN`
+    /// main header whole, or an error. It is held while the main header
+    /// stays cut short, whether or not `header` is called again. It takes
+    /// up to about 20 bytes for each byte of `COC`, `QCC` and `RGN`
     /// segments, plus under 1 KB (the highest ratio is for a one-step `QCC` on
     /// each of 129 components), and about 12 MB at most, with the largest
     /// `COC`, `QCC` and `RGN` on each of 16384 components. Each `PPM` segment

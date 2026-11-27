@@ -1,9 +1,9 @@
 //! sRGB output on a thread with a small stack.
 //!
 //! The matrix/shaper transform's 98 KB table is allocated on the heap
-//! directly, so it is never built on the stack. This test decodes every
-//! 8-bit ICC profile case that OpenJPEG converts on a thread with a 96 KiB
-//! stack, and checks it gives the same samples as on a normal thread.
+//! directly, so it is never built on the stack. This test decodes, on a
+//! thread with a 96 KiB stack, every 8-bit ICC profile case that OpenJPEG
+//! converts, and checks each gives the same samples as on a normal thread.
 //!
 //! The test catches a table built on the stack only at opt-level 0. At the
 //! test profile's opt-level 1 the compiler moves such a table to the heap,
