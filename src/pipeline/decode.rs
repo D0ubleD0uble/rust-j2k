@@ -642,9 +642,8 @@ impl Over {
 /// error for the tile-parts ([`Faults`]), and where a header cut short
 /// stopped ([`KeptCut`]). The bytes fed only grow, so what a call found in
 /// them stays so, and a call gives what a read from the start gives. That
-/// holds for every field here, and only while the bytes only grow: any
-/// future way to truncate, reset or rewrite the bytes fed must clear the
-/// whole cache. [`MainKey`] checks the main header against a hash, and
+/// holds for every field here: any future way to truncate, reset or rewrite
+/// the bytes fed must clear the whole cache. [`MainKey`] checks the main header against a hash, and
 /// [`KeptCut`] checks the prefix it was kept for in a debug build, but
 /// neither makes a cache safe to reuse over other bytes. It is kept for one
 /// codestream, main header, selection and reduction; a call that reads
@@ -690,18 +689,42 @@ pub(crate) struct KeptCut {
     /// read of more bytes gives: the boxes before the codestream, the box
     /// and its payload are all in and do not change.
     ended: Option<Error>,
-    /// A hash of the input when it was kept, to check in a debug build that
-    /// a longer input still starts with it.
+    /// A hash of a sample of the input when it was kept ([`sample_hash`]),
+    /// to check in a debug build that a no shorter input still starts with
+    /// it.
     #[cfg(debug_assertions)]
     prefix: u64,
 }
 
-/// A hash of `bytes`, for the debug check of [`KeptCut`].
+/// How many bytes [`sample_hash`] takes from each end of its input.
 #[cfg(debug_assertions)]
-fn prefix_hash(bytes: &[u8]) -> u64 {
+const SAMPLE: usize = 4096;
+
+#[cfg(test)]
+thread_local! {
+    /// The bytes [`sample_hash`] has hashed on this thread.
+    static HASHED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// A hash of the length of `bytes` and its first and last [`SAMPLE`] bytes
+/// (all of it if it is no longer than twice that), for the debug check of
+/// [`KeptCut`]. It costs the same for any length, so a call is no dearer as
+/// the input grows. It is a sample, so a probabilistic tripwire: a change
+/// between the two ends goes unseen.
+#[cfg(debug_assertions)]
+fn sample_hash(bytes: &[u8]) -> u64 {
     use std::hash::{Hash, Hasher};
+    let (head, tail) = if bytes.len() <= 2 * SAMPLE {
+        (bytes, &bytes[..0])
+    } else {
+        (&bytes[..SAMPLE], &bytes[bytes.len() - SAMPLE..])
+    };
+    #[cfg(test)]
+    HASHED.with(|hashed| hashed.set(hashed.get() + (head.len() + tail.len()) as u64));
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut hasher);
+    bytes.len().hash(&mut hasher);
+    head.hash(&mut hasher);
+    tail.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -711,20 +734,20 @@ impl KeptCut {
         self.len = bytes.len();
         #[cfg(debug_assertions)]
         {
-            self.prefix = prefix_hash(bytes);
+            self.prefix = sample_hash(bytes);
         }
     }
 
     /// Whether what is kept holds for `bytes`: they are no shorter than the
     /// input it was kept for. That is enough only because the bytes fed
-    /// only grow (see [`HeaderCache`]): a longer input extends the one it
-    /// was kept for. A debug build checks that it does, and panics
-    /// otherwise.
+    /// only grow (see [`HeaderCache`]): a no shorter input extends the one
+    /// it was kept for. A debug build checks a sample of it ([`sample_hash`])
+    /// and panics if that changed.
     fn holds_for(&self, bytes: &[u8]) -> bool {
         let holds = bytes.len() >= self.len;
         #[cfg(debug_assertions)]
         debug_assert!(
-            !holds || prefix_hash(&bytes[..self.len]) == self.prefix,
+            !holds || sample_hash(&bytes[..self.len]) == self.prefix,
             "the bytes fed changed under the kept cut: they must only grow"
         );
         holds
@@ -2708,8 +2731,76 @@ pub(crate) mod tests {
         bytes
     }
 
-    /// A cut kept for an input holds only for a longer input that starts
-    /// with it: a debug build panics on one that does not.
+    /// The debug check sees a change in the first or last 4 KiB of a long
+    /// kept input, and not one between them.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_kept_cut_sees_a_change_at_either_end_of_a_long_input() {
+        let jp2 = |fill: u8, flip: Option<usize>| {
+            let mut bytes = vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
+            bytes.extend_from_slice(&[0, 0, 0, 20, b'f', b't', b'y', b'p', b'j', b'p', b'2', b' ']);
+            bytes.extend_from_slice(&[0, 0, 0, 0, b'j', b'p', b'2', b' ']);
+            bytes.extend_from_slice(&[0, 0x10, 0, 0, b'x', b'm', b'l', b' ']);
+            bytes.resize(1 << 16, fill);
+            if let Some(at) = flip {
+                bytes[at] ^= 1;
+            }
+            bytes
+        };
+        let options = DecodeOptions::default().with_strict(false);
+        let kept_for = |bytes: &[u8]| {
+            let mut kept = HeaderCache::default();
+            let first = read_header_kept(bytes, &options, Some(&mut kept));
+            assert!(matches!(first, Err(Error::Incomplete(_))), "{first:?}");
+            assert!(kept.cut.is_some(), "the cut was not kept");
+            kept
+        };
+        let base = jp2(7, None);
+        let len = base.len();
+        // Unchanged bytes, and a change in the middle that the sample does
+        // not see, do not panic.
+        let mut kept = kept_for(&base);
+        let _ = read_header_kept(&jp2(7, Some(len / 2)), &options, Some(&mut kept));
+        let mut kept = kept_for(&base);
+        let _ = read_header_kept(&base, &options, Some(&mut kept));
+        for at in [40, 4000, len - 4000, len - 1] {
+            let result = std::panic::catch_unwind(|| {
+                let mut kept = kept_for(&base);
+                let _ = read_header_kept(&jp2(7, Some(at)), &options, Some(&mut kept));
+            });
+            assert!(result.is_err(), "a change at {at} went unseen");
+        }
+    }
+
+    /// The debug check hashes a bounded sample, so a call costs the same
+    /// however much of a large box before the codestream is in: fed in
+    /// chunks, the bytes hashed grow with the calls, not with the input.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn the_debug_check_of_a_kept_cut_hashes_a_bounded_sample() {
+        let mut bytes = vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
+        bytes.extend_from_slice(&[0, 0, 0, 20, b'f', b't', b'y', b'p', b'j', b'p', b'2', b' ']);
+        bytes.extend_from_slice(&[0, 0, 0, 0, b'j', b'p', b'2', b' ']);
+        bytes.extend_from_slice(&[0, 0x80, 0, 0, b'x', b'm', b'l', b' ']);
+        bytes.resize(8 << 20, 0);
+        let options = DecodeOptions::default().with_strict(false);
+        let mut kept = HeaderCache::default();
+        HASHED.with(|hashed| hashed.set(0));
+        let chunk = 64 << 10;
+        let calls = bytes.len() / chunk;
+        for call in 1..=calls {
+            let read = read_header_kept(&bytes[..call * chunk], &options, Some(&mut kept));
+            assert!(matches!(read, Err(Error::Incomplete(_))), "{read:?}");
+            assert!(kept.cut.is_some(), "the cut was not kept at call {call}");
+        }
+        let hashed = HASHED.with(|hashed| hashed.replace(0));
+        // Each call checks the cut it resumes and keys the one it keeps.
+        let bound = (calls as u64) * 2 * (2 * SAMPLE as u64);
+        assert!(hashed <= bound, "hashed {hashed} bytes in {calls} calls");
+    }
+
+    /// A cut kept for an input holds only for a no shorter input that
+    /// starts with it: a debug build panics on one that does not.
     #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "must only grow")]
