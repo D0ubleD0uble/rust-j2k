@@ -55,6 +55,15 @@ call hidden hooks the library exposes (`rust_j2k::fuzz`, `#[doc(hidden)]`,
 not public API, and built only with the private `__fuzz` feature, which this
 workspace turns on) to drive the EBCOT block decoder and MQ coder directly.
 
+Besides the plain decode, `decode` draws its options from a hash of the input
+(`fuzz_targets/decode.rs`): a layer cap of 1 to 3, with `strict` off too; a
+window, a tile or a component subset, at reduction 0 or 1; for one window or
+tile draw in four, `ColorOutput::Srgb` as well, which a sub-sampled sYCC image
+refuses on part of the image (seeds `jp2_sycc_*_odd.jp2` and the other sYCC
+files reach it); and, for one input in four, a packet work limit of
+`Raised(2)` or `Raised(4)` on every decode but the plain one. The hash changes
+with any byte, so a seed reaches the draws a mutation of it picks, not its own.
+
 `tile_body`'s second input byte steers a region of interest: with bit 7 set
 it writes an `RGN` marker (a maxshift of 0 to 19 from the low 5 bits, on
 component 0 only when bit 5 is set, else on every component), so the packets
@@ -213,6 +222,12 @@ bytes. The control bytes:
 | 1 | 2-4 | the tile: 0 for four of the eight values, then 1, 1, 2, 3 |
 | 1 | 5-7 | a component subset of one or two distinct indices |
 | 2-5 | | the window: `x0` and `y0` are bytes 2 and 3 mod 24, its width and height 1 + bytes 4 and 5 mod 40 |
+
+A hash of the file also draws the output, which the decoder cannot change
+once it is built: `ColorOutput::Srgb` for one input in four, else
+`raw_channels` for one in three of the rest. So the held conversion and the
+channel-box faults in `refine` are checked against the one-shot decode under
+the same options.
 
 With bit 6 of byte 0, before some refines the target calls one of the
 decoder's setters, as a hash of the file picks: `set_resolution_reduction`
@@ -561,8 +576,9 @@ seed 00 retry_ladder/tile_code_blocks.j2k
 cargo +nightly fuzz run retry_ladder -- -dict=fuzz/j2k.dict -max_total_time=60 -rss_limit_mb=4096 -timeout=30
 
 # The header_split target: 44 synthetic files with tiles over a cap (the script
-# writes the same files on every run), and the fixtures behind the control
-# prefix `00 00 00 00 00 00 01 02 00 00 00 00` (the defaults, one stream of
+# needs only Python 3 and writes the same files on every run), and the fixtures
+# behind the control prefix
+# `00 00 00 00 00 00 01 02 00 00 00 00` (the defaults, one stream of
 # piece sizes). `-max_len` must be over the largest seed, 36,832 bytes.
 mkdir -p fuzz/corpus/header_split
 python3 scripts/gen-header-split-seeds.py fuzz/corpus/header_split
@@ -609,6 +625,7 @@ cargo +nightly fuzz run tile_body -- -dict=fuzz/j2k.dict -max_total_time=1800 -r
 | 2026-11-22 | the same, after review: `held.rs` following #655 and reading a `jp2c` of `LBox` 0, `header_split`'s padding capped | `header_split`: the README's seeding (128 inputs, the script's `jp2_*_then_jp2c` among them), then the corpus that run kept; `incremental_decode`: `tests/fixtures/incremental/` (15 seeds); `j2k.dict` | `header_split` 61 s, 12 926 runs (`-malloc_limit_mb=1024`); `incremental_decode` 74 s, 1 058 runs; `nice -n 19`, one job at a time; the 1-minute load was 7 to 11 | no failure, once `header_split` allowed a held error where the input ends one byte, not `0xFF`, into where the next marker belongs (`Completion::LoneByte`; the target found it within seconds). With `Jp2Prefix::settled` always false, both `jp2_*_then_jp2c_c0` seeds and both `tile_error_lblock_jp2_then_*` seeds fail on replay |
 | 2026-11-23 | `header_split` without `Completion::LoneByte`, and with `Completion::Far` trying the input with the far box or tile-part dropped; `incremental_decode` (#657) | `header_split`: the README's seeding (128 inputs); `incremental_decode`: `tests/fixtures/incremental/` (15 seeds); `j2k.dict` | `header_split` 61 s, 15 714 runs (`-malloc_limit_mb=1024`); `incremental_decode` 74 s, 278 runs; `nice -n 19`, one job at a time; the 1-minute load was 1.4 to 1.5 | no failure. With the lone byte not taken as breaking the chain (`codestream_end` back to `End::Unknown` there), `header_split` fails on the corpus the first run kept, right after it loads |
 | 2026-11-23 | `header_split`, after review: a tile-cap refusal more bytes lift held where the codestream is fixed, and allowed by the target | the README's seeding (128 inputs), `j2k.dict` | 61 s, 11 298 runs (`-malloc_limit_mb=1024`); `nice -n 19`, one job; the 1-minute load was 10.7 | no failure |
+| 2026-11-27 | `decode` and `incremental_decode` with the new draws: sRGB on a window or tile, a raised packet work limit, and sRGB or `raw_channels` on the incremental decoder | `decode`: the 68 `tests/fixtures` codestreams and JP2 files, then the five `jp2_sycc_*.jp2` files alone; `incremental_decode`: `tests/fixtures/incremental/` and the JP2 fixtures behind six zero bytes (34 seeds), `j2k.dict`, `-max_len=4096` | 40 to 60 s each; `nice -n 19`, one job at a time | no failure. Each new draw reached under a temporary counter: raised packet limits on thousands of runs, the sYCC window and tile refusal (`sRGB output from sub-sampled sYCC chroma on an area smaller than the image`) within 60 s on the sYCC seeds, and all three outputs in `incremental_decode`. One `incremental_decode` input of 604 bytes (control byte `a0`) takes 16 to 20 s under ASan with or without the new draws |
 
 A crash is written to `fuzz/artifacts/decode/`. Reproduce and minimize it with:
 

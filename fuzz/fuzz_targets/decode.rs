@@ -42,6 +42,15 @@ fuzz_target!(|data: &[u8]| {
         .with_code_block_work_limit(rust_j2k::WorkLimit::Raised(2));
     let _ = checked(rust_j2k::decode_with(data, &plain));
     let hash = fnv1a(data);
+    // One input in four runs the decodes below under a raised packet work
+    // bound (2 or 4 times the default), so the walks the default refuses are
+    // decoded instead. The plain decode above keeps the default.
+    let base = if hash & 0x60 == 0x60 {
+        let factor = 2 + 2 * ((hash >> 7) & 1) as u32;
+        base.with_packet_work_limit(rust_j2k::WorkLimit::Raised(factor))
+    } else {
+        base
+    };
     if hash & 1 == 1 {
         let layers = 1 + ((hash >> 1) % 3) as u16;
         let options = base.clone().with_max_quality_layers(Some(layers));
@@ -52,7 +61,14 @@ fuzz_target!(|data: &[u8]| {
         partial::check(data, &options, &strict);
     }
     if hash & 2 == 2 {
-        let _ = checked(rust_j2k::decode_with(data, &part(base, hash >> 8)));
+        let mut part = part(base, hash >> 8);
+        // One in four of the window and tile ones asks for sRGB too, which a window or a tile of
+        // a sub-sampled sYCC image refuses (its chroma replication needs the
+        // whole image).
+        if hash & 0x18 == 0x18 && (hash >> 8) & 3 < 2 {
+            part = part.with_color(rust_j2k::ColorOutput::Srgb);
+        }
+        let _ = checked(rust_j2k::decode_with(data, &part));
     }
 });
 
