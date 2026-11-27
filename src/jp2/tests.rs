@@ -997,9 +997,9 @@ fn truncations_and_header_corruptions_never_panic() {
     }
 }
 
-/// The walk keeps what the later header code reads: the `jp2h` children as raw
-/// slices in file order, the other top-level boxes before the codestream, and
-/// the unread bytes after it.
+/// The walk keeps what the later header code reads: the `jp2h` children it
+/// reads as raw slices in file order, the other top-level boxes before the
+/// codestream that the metadata reports, and the boxes after it.
 #[test]
 fn the_walk_records_header_boxes_and_the_bytes_around_the_codestream() {
     let trailing = bx(b"xml ", b"<after/>");
@@ -1032,8 +1032,8 @@ fn the_walk_records_header_boxes_and_the_bytes_around_the_codestream() {
     assert_eq!(header.bpcc(), vec![&[7, 7, 7][..]]);
     assert_eq!(header.res(), vec![&[1, 2][..]]);
     assert!(header.pclr().is_empty() && header.cmap().is_empty() && header.cdef().is_empty());
-    assert_eq!(header.unknown().len(), 1);
-    assert_eq!(&header.unknown()[0].kind, b"zzzz");
+    // The unknown `zzzz` is skipped without a record.
+    assert_eq!(header.children.len(), 4);
     assert_eq!(parsed.codestream, CODESTREAM);
     assert_eq!(parsed.other.len(), 1);
     assert_eq!(parsed.other[0].payload, b"<before/>");
