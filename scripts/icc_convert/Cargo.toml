@@ -1,0 +1,13 @@
+# Test tool for `scripts/check-icc-exhaustive.py`. Kept in its own detached
+# workspace (the empty `[workspace]` table below), as `fuzz/` is, so it is not
+# part of the library's package or build.
+[package]
+name = "icc_convert"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[dependencies]
+rust-j2k = { path = "../.." }
+
+[workspace]

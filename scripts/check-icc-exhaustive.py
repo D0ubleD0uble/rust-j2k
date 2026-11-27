@@ -19,7 +19,7 @@ The profiles are every case in `tests/fixtures/icc/profiles.json` and in
 rendering intent and white point patched, as `tests/jp2_icc.rs` does). The
 pixels go through the decoder as a lossless codestream made with
 `opj_compress`, wrapped in a JP2 file holding the profile, by
-`examples/icc_convert.rs`. For each case it prints the number of pixels where
+`scripts/icc_convert/`. For each case it prints the number of pixels where
 the two differ. The bar is 0 on every case.
 
 The input format follows OpenJPEG's `color_apply_icc_profile` (color.c): a
@@ -68,7 +68,8 @@ from oracle_tools import require_lcms, require_openjpeg
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures"
-EXAMPLE = ROOT / "target" / "release" / "examples" / "icc_convert"
+MANIFEST = ROOT / "scripts" / "icc_convert" / "Cargo.toml"
+TOOL: Path  # the built icc_convert binary, set by main()
 
 # lcms2.h: COLORSPACE_SH | CHANNELS_SH | BYTES_SH
 TYPE_RGB_8 = 0x40019
@@ -121,6 +122,22 @@ class Lcms:
                 lib.cmsDeleteTransform(xform)
         finally:
             lib.cmsCloseProfile(handle)
+
+
+def build_tool() -> Path:
+    """Build `scripts/icc_convert` and return the path cargo gave its binary."""
+    build = run("cargo", "build", "--release", "--manifest-path", MANIFEST,
+                "--message-format=json", cwd=ROOT)
+    if build.returncode != 0:
+        sys.exit(build.stderr)
+    path = None
+    for line in build.stdout.splitlines():
+        message = json.loads(line)
+        if message.get("reason") == "compiler-artifact" and message.get("executable"):
+            path = Path(message["executable"])
+    if path is None:
+        sys.exit("cargo did not report the icc_convert binary")
+    return path
 
 
 def run(*args: object, **kw) -> subprocess.CompletedProcess:
@@ -264,7 +281,7 @@ def differing(a: bytes, b: bytes, stride: int) -> tuple[int, list[int]]:
 
 def port_convert(kind: Kind, profile_path: Path, out_path: Path):
     """(status, channels, bytes): status is "ok", "declined" or "error"."""
-    result = run(EXAMPLE, kind.codestream, profile_path, out_path)
+    result = run(TOOL, kind.codestream, profile_path, out_path)
     if result.returncode == 3:
         return "declined", 0, result.stderr.strip()
     if result.returncode != 0:
@@ -374,9 +391,8 @@ def main() -> None:
     opj = require_openjpeg("opj_compress")
     lcms = Lcms()
     print(f"LittleCMS {require_lcms(lcms.version)} (encoded {lcms.version}) and OpenJPEG {opj}")
-    build = run("cargo", "build", "--release", "--example", "icc_convert", cwd=ROOT)
-    if build.returncode != 0:
-        sys.exit(build.stderr)
+    global TOOL
+    TOOL = build_tool()
 
     with tempfile.TemporaryDirectory() as scratch:
         work = Path(args.work) if args.work else Path(scratch)

@@ -7,7 +7,7 @@
 //! as one byte for 8-bit samples or two little-endian bytes for 16-bit ones.
 //!
 //! ```text
-//! cargo run --release --example icc_convert -- <codestream> <profile> <out>
+//! cargo run --release --manifest-path scripts/icc_convert/Cargo.toml -- <codestream> <profile> <out>
 //! ```
 //!
 //! On success it prints `channels=<n> depth=<bits>` to stdout. Exit status 3
