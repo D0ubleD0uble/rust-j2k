@@ -419,7 +419,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 ///
 /// The read covers a JP2 file's boxes and the codestream's main header, up to
 /// the first tile-part (`SOT` marker), and stops there. So a file whose tile
-/// data is cut short or missing still has a readable header. The one
+/// data is cut short or missing still has a readable header. An
 /// exception is a tile over a cap on its code-blocks or precincts under the
 /// main header (see [Tile caps](#tile-caps)).
 ///
@@ -460,7 +460,8 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 ///   all and no further than the last tile it counts.
 /// - It reads the first tile-part header of each tile it counts, within its
 ///   `Psot` and with no tile data. It holds one tile's coding parameters at
-///   a time (but see [Faults in the tile-parts](#faults-in-the-tile-parts)).
+///   a time (but see the refusal of a tile with no tile-part, under
+///   [Faults in the tile-parts](#faults-in-the-tile-parts)).
 /// - A tile-part `COD` or `COC` that brings the tile within the caps admits
 ///   it. So does [`strict`](DecodeOptions::strict) off when the tile has no
 ///   tile-part, since the decode then leaves it out.
@@ -476,6 +477,17 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 ///   does not rule out a tile-part header taking it over the caps, and
 /// - under a reduction, each tile with a `COD` or `COC` whatever its size, as
 ///   one can give fewer levels than the reduction takes.
+///
+/// The decode can also refuse the file before it gets to the tile the read
+/// refuses, for what only decoding finds. It then names another
+/// tile, kind or factor, or another error:
+///
+/// - a fault or a work bound in the packets or code-blocks of a lower tile
+///   (with `strict` on, data that ends early or runs on past the last
+///   packet), or
+/// - with `strict` off, the charge of a step for each tile-component of the
+///   tiles read that have no tile-part, past the
+///   [`packet_work_limit`](DecodeOptions::packet_work_limit).
 ///
 /// ## Faults in the tile-parts
 ///
@@ -509,17 +521,6 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// under the tiles' own. The tiles past it are left to the decode too. For
 /// all of these the read can return a header for a file the decode refuses.
 ///
-/// The decode can also refuse the file before it gets to the tile the read
-/// refused or counted, for what only decoding finds. It then names another
-/// tile, kind or factor, or another error:
-///
-/// - a fault or a work bound in the packets or code-blocks of a lower tile
-///   (with `strict` on, data that ends early or runs on past the last
-///   packet), or
-/// - with `strict` off, the charge of a step for each tile-component of the
-///   tiles read that have no tile-part, past the
-///   [`packet_work_limit`](DecodeOptions::packet_work_limit).
-///
 /// ## Cost of the tile read
 ///
 /// The time is one walk of the tile-parts at most, plus the budget:
@@ -533,9 +534,11 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// top, with up to 14 bytes of heap a tile (22 on an input of 4 GiB or more).
 /// For each tile whose later tile-parts restate the coding of its first with
 /// headers that differ, it also holds that coding, up to about 13 times the
-/// bytes of those tiles' tile-parts:
+/// bytes of those tiles' tile-parts.
 ///
-/// - 240 ms and 640 KiB in release on that 235 MB file, with the tile read
+/// Measured in release:
+///
+/// - 240 ms and 640 KiB on that 235 MB file, with the tile read
 ///   left out, and
 /// - about 135 ms, as long as the decode takes to refuse it, on a 12.5 MB file
 ///   of 2048 tiles whose first tile-part headers of 143 `QCC`s each 254 later
@@ -565,6 +568,8 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 /// [`Error::InvalidOptions`] here, as OpenJPEG has it.
 ///
 /// ## Faults only decoding finds
+///
+/// The read returns a header for these. Only decoding finds them:
 ///
 /// - A fault in the tile data: a broken tile-part, a tile header that changes
 ///   a component's wavelet, or a reduction that a tile-part `COD` or `COC`
