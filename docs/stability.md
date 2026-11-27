@@ -92,7 +92,8 @@ new minor version.
 ### Decoded output
 
 The samples a file decodes to, and whether it decodes or is refused, are
-covered, except for fixes. The crate decides each case by three rules, in
+covered, except for fixes and for the changes to the default limits
+described below. The crate decides each case by three rules, in
 order: follow the standard; otherwise give the error correction a user would
 expect, with OpenJPEG as the usual guide; and return an error rather than a
 wrong image ([correctness.md](correctness.md#when-the-oracle-and-the-standard-disagree)).
@@ -103,11 +104,12 @@ wrong image ([correctness.md](correctness.md#when-the-oracle-and-the-standard-di
   that gave a wrong image now refused; a file that was refused now decoded
   as OpenJPEG decodes it. The CHANGELOG lists each one.
 - Any other change to the output needs a minor release, such as a new
-  default for color handling, or a different choice where the standard
-  leaves room.
+  default for color handling, or, where the standard leaves room, a choice
+  that follows neither the standard nor OpenJPEG.
 
 [openjpeg-departures.md](openjpeg-departures.md) records each place the
-output differs from OpenJPEG on purpose, and the rule behind it.
+output differs from OpenJPEG on purpose, and the rule behind it. Changing
+one of those entries is not a fix; it needs a minor release.
 
 ### `DecodeOptions` equality
 
