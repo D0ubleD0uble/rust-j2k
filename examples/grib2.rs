@@ -19,15 +19,15 @@
 //! binary scale factor E and the decimal scale factor D, and the physical
 //! value is Y = (R + X × 2^E) / 10^D (WMO regulation 92.9.4, note 4). Pass R
 //! with all its digits: `grib_get -F%.17g -p referenceValue` prints them,
-//! while eccodes' default format rounds it. eccodes multiplies by 10^-D
-//! instead of dividing by 10^D, so where D is not 0 a value can differ from
-//! eccodes' in its last bit.
+//! while eccodes' default format rounds it. eccodes works out 10^-D by
+//! repeated division and multiplies by it, so where D is positive a value
+//! can differ from eccodes' in its last few bits.
 //!
 //! If section 5 gives 0 bits per value (octet 20), the field is constant and
 //! section 7 may hold no codestream at all. Don't decode it then: every
-//! point has the value R. If the message has a bitmap in section 6, the
-//! values fill only the points it marks, in order; this example ignores the
-//! bitmap.
+//! point has the value R, and eccodes ignores E and D. If the message has
+//! a bitmap in section 6, the values fill only the points it marks, in
+//! order; this example ignores the bitmap.
 //!
 //! It prints the grid size, the smallest and largest value, and the first
 //! few values. The output is for reading, not parsing: its layout can change.
@@ -47,17 +47,34 @@ fn number<T: FromStr>(arg: &OsString, what: &str) -> Result<T, String> {
         .ok_or_else(|| format!("{what}: not a number: {}", arg.display()))
 }
 
+/// Parse E or D: GRIB2 stores each in 16 bits as sign and magnitude, so it
+/// is a whole number from -32767 to 32767.
+fn factor(arg: &OsString, what: &str) -> Result<i16, String> {
+    arg.to_str()
+        .and_then(|s| s.parse::<i16>().ok())
+        .filter(|&v| v != i16::MIN)
+        .ok_or_else(|| {
+            format!(
+                "{what}: not a whole number from -32767 to 32767: {}",
+                arg.display()
+            )
+        })
+}
+
 fn run(args: &[OsString]) -> Result<(), String> {
     let [input, r, e, d] = args else {
         return Err("usage: grib2 <section7.j2k> <R> <E> <D>".into());
     };
     let reference: f64 = number(r, "R")?;
-    if !reference.is_finite() {
-        return Err("R: must be finite".into());
+    // Section 5 stores R as an IEEE 32-bit float.
+    if !(reference as f32).is_finite() {
+        return Err("R: must be a finite 32-bit float".into());
     }
-    // GRIB2 stores E and D in 16 bits each, as sign and magnitude.
-    let binary: i16 = number(e, "E")?;
-    let decimal: i16 = number(d, "D")?;
+    if f64::from(reference as f32) != reference {
+        eprintln!("note: R is not a 32-bit float; pass all its digits");
+    }
+    let binary = factor(e, "E")?;
+    let decimal = factor(d, "D")?;
 
     let input = PathBuf::from(input);
     let name = input.display();
@@ -78,6 +95,12 @@ fn run(args: &[OsString]) -> Result<(), String> {
     let values: Vec<f64> = grid.samples.iter().map(|&x| scale(x)).collect();
     if values.is_empty() {
         return Err(format!("{name}: the grid holds no values"));
+    }
+    // A large E or a negative D past about -300 overflows an f64.
+    if let Some(i) = values.iter().position(|v| !v.is_finite()) {
+        return Err(format!(
+            "{name}: value {i} is not finite with this R, E and D"
+        ));
     }
 
     let min = values.iter().copied().fold(f64::INFINITY, f64::min);

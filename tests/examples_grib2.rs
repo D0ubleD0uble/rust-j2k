@@ -2,10 +2,11 @@
 //! message.
 //!
 //! `jpeg2000_regular_latlon.j2k` is section 7 of
-//! `jpeg2000_regular_latlon.grib2` (SHA-256 `1e187d57…6948`, from the
-//! sibling `fieldglass` repo; see `tests/fixtures/README.md`), without its
-//! 5-byte header (`00 00 04 11 07`: length 1041, section 7). The codestream
-//! starts at byte 194 of the message.
+//! `crates/fieldglass-grib2/tests/fixtures/jpeg2000_regular_latlon.grib2` in
+//! the sibling `fieldglass` repo (see `tests/fixtures/README.md`), without
+//! its 5-byte header (`00 00 04 11 07`: length 1041, section 7). The
+//! codestream starts at byte 194 of the message. The message's SHA-256 is
+//! `1e187d5708640f3abe963f984eeb0422eb05a5d0a12581427f3aef22df196948`.
 //!
 //! The reference values come from eccodes 2.34.1 on that message:
 //!
@@ -22,9 +23,11 @@
 
 mod support;
 
-use std::path::{Path, PathBuf};
 #[cfg(not(target_family = "wasm"))]
-use std::process::Command;
+#[path = "support/run_example.rs"]
+mod run_example;
+
+use std::path::{Path, PathBuf};
 
 use support::Expected;
 
@@ -71,19 +74,9 @@ fn the_eccodes_values_follow_from_the_oracle_samples() {
     assert_eq!(values[..8], FIRST);
 }
 
-/// Run the example through `cargo run`, as `tests/examples_pnm.rs` runs
-/// `decode`: `--profile test` reuses the library the tests built, so only
-/// the example is compiled.
 #[cfg(not(target_family = "wasm"))]
 fn run_grib2(args: &[&std::ffi::OsStr]) -> std::process::Output {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    Command::new(cargo)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args(["run", "--quiet", "--offline", "--profile", "test"])
-        .args(["--example", "grib2", "--"])
-        .args(args)
-        .output()
-        .unwrap()
+    run_example::run_example("grib2", args)
 }
 
 /// A printed line's value, or values, after its label.
@@ -111,6 +104,21 @@ fn the_grib2_example_prints_the_values_eccodes_reads() {
     assert_eq!(field(&out, "min: "), [MIN]);
     assert_eq!(field(&out, "max: "), [MAX]);
     assert_eq!(field(&out, "first values: "), FIRST);
+    // R is exactly the 32-bit float section 5 holds: no note.
+    assert!(run.stderr.is_empty(), "{run:?}");
+}
+
+/// R as eccodes' default format rounds it is not a 32-bit float: the
+/// example decodes, and notes it.
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn the_grib2_example_notes_a_rounded_r() {
+    let input = fixture("jpeg2000_regular_latlon.j2k");
+    let os = std::ffi::OsStr::new;
+    let run = run_grib2(&[input.as_os_str(), os("270.467"), os("-10"), os("0")]);
+    assert!(run.status.success(), "{run:?}");
+    let err = String::from_utf8_lossy(&run.stderr);
+    assert!(err.contains("R is not a 32-bit float"), "{err}");
 }
 
 /// D scales by a power of ten: dividing for a positive D, multiplying for a
@@ -141,10 +149,31 @@ fn the_grib2_example_refuses_bad_arguments() {
     let input = fixture("jpeg2000_regular_latlon.j2k");
     let rgb = fixture("multicomponent_lossless.j2k");
     let os = std::ffi::OsStr::new;
-    let cases: [(Vec<&std::ffi::OsStr>, &str); 4] = [
+    let range = "not a whole number from -32767 to 32767";
+    let e_range = format!("E: {range}: 40000");
+    let d_range = format!("D: {range}: -32768");
+    let cases: [(Vec<&std::ffi::OsStr>, &str); 9] = [
         (vec![input.as_os_str()], "usage: grib2"),
         (vec![input.as_os_str(), os("x"), os("0"), os("0")], "R: "),
+        (vec![input.as_os_str(), os("1e39"), os("0"), os("0")], "R: "),
+        (
+            vec![input.as_os_str(), os("1"), os("40000"), os("0")],
+            &e_range,
+        ),
+        (
+            vec![input.as_os_str(), os("1"), os("0"), os("-32768")],
+            &d_range,
+        ),
         (vec![input.as_os_str(), os("1"), os("0"), os("1e9")], "D: "),
+        // 2^E or 10^-D past an f64.
+        (
+            vec![input.as_os_str(), os("1"), os("1100"), os("0")],
+            "not finite",
+        ),
+        (
+            vec![input.as_os_str(), os("1"), os("0"), os("-400")],
+            "not finite",
+        ),
         (
             vec![rgb.as_os_str(), os("1"), os("0"), os("0")],
             "multicomponent_lossless.j2k: a GRIB2 grid has one channel",
