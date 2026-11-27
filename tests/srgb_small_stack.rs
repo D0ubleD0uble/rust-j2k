@@ -7,8 +7,8 @@
 //! on a normal one.
 
 mod support;
-use support::synth::{self, bx};
 use support::srgb;
+use support::synth::{self, bx};
 
 use rust_j2k::decode_with;
 use serde::Deserialize;
@@ -71,14 +71,22 @@ fn icc_conversion_decodes_on_a_small_stack() {
     assert!(!files.is_empty());
     let want: Vec<_> = files
         .iter()
-        .map(|b| decode_with(b, &srgb()).map(|i| i.components).map_err(|e| e.to_string()))
+        .map(|b| {
+            decode_with(b, &srgb())
+                .map(|i| i.components)
+                .map_err(|e| e.to_string())
+        })
         .collect();
     let got = std::thread::Builder::new()
         .stack_size(STACK)
         .spawn(move || {
             files
                 .iter()
-                .map(|b| decode_with(b, &srgb()).map(|i| i.components).map_err(|e| e.to_string()))
+                .map(|b| {
+                    decode_with(b, &srgb())
+                        .map(|i| i.components)
+                        .map_err(|e| e.to_string())
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap()
