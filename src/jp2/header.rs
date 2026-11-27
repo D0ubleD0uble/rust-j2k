@@ -159,6 +159,17 @@ impl<'a> Jp2Header<'a> {
         Self::read(payload, None)
     }
 
+    /// A header with `ihdr` and no other child: what a later `jp2h` is
+    /// checked against, as its checks depend only on whether an `ihdr` is
+    /// known (see [`read`](Self::read)).
+    pub(crate) fn of_ihdr(ihdr: Ihdr) -> Self {
+        Jp2Header {
+            ihdr,
+            ihdr_at: 0,
+            children: Vec::new(),
+        }
+    }
+
     /// Read a later `jp2h` box into this header. OpenJPEG merges a second
     /// `jp2h` this way: its `ihdr` is ignored and its other children are
     /// applied, so they are appended here and meet the same checks.

@@ -74,7 +74,7 @@ mod math_tests;
 #[cfg(test)]
 mod srgb_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) use after::check as check_after_codestream;
 pub use metadata::{
@@ -398,6 +398,90 @@ pub(crate) fn parse_boxes<'a>(
 /// A `jp2c` codestream box with no `jp2h` before it.
 fn no_jp2h() -> Error {
     Error::file_format("the file has no `jp2h` header box before its `jp2c` codestream box")
+}
+
+/// Where [`parse_boxes`] stopped when the input ended before the `jp2c` box,
+/// so that a walk of more of the same input goes on from there instead of
+/// from the signature: where the next box starts, after the boxes read
+/// whole, and the first `ihdr`, once a `jp2h` is read. Only the input
+/// ending there is kept: a walk that meets anything else stops, and
+/// `parse_boxes` reads the file from the start.
+pub(crate) struct BoxesCut {
+    /// Where the next box starts.
+    pos: usize,
+    /// The first `ihdr`, once a `jp2h` has been read.
+    ihdr: Option<header::Ihdr>,
+}
+
+impl BoxesCut {
+    /// Where `parse_boxes` stops on `bytes`, if it gives
+    /// [`Error::Incomplete`] there, of no box of length 0: the input ends
+    /// before the `jp2c` box, and every box before it is whole and passes.
+    pub(crate) fn start(bytes: &[u8]) -> Option<Self> {
+        if !bytes.starts_with(&SIGNATURE) {
+            return None;
+        }
+        let mut boxes = Boxes::top_level(bytes, SIGNATURE.len());
+        match boxes.next() {
+            Some(Ok(ftyp))
+                if &ftyp.kind == b"ftyp"
+                    && !boxes.last_was_open_ended()
+                    && check_file_type(&ftyp).is_ok() => {}
+            _ => return None,
+        }
+        let mut cut = BoxesCut {
+            pos: boxes.pos(),
+            ihdr: None,
+        };
+        cut.resume(bytes).is_some().then_some(cut)
+    }
+
+    /// Go on with the walk over `bytes`, which extend those it had. If
+    /// `parse_boxes` still gives [`Error::Incomplete`] before the `jp2c`
+    /// box, that error, with the walk kept at where it now stops. `None`
+    /// where it may give anything else: a `jp2c` box, a box of length 0 or
+    /// a fault. The walk is then stale.
+    ///
+    /// It reads the boxes as `parse_boxes` does from `pos` on: each whole
+    /// box once, a `jp2h` checked as `parse_boxes` reads it, which depends
+    /// on the boxes before it only through whether there was a `jp2h`.
+    pub(crate) fn resume(&mut self, bytes: &[u8]) -> Option<Error> {
+        let mut boxes = Boxes::top_level(bytes, self.pos);
+        let ended = loop {
+            let item = match boxes.next() {
+                None => {
+                    break Error::incomplete("the input ends before the `jp2c` codestream box");
+                }
+                Some(Err(error @ Error::Incomplete(_))) => {
+                    // `parse_boxes` refuses a `jp2c` with no `jp2h` before it
+                    // as soon as its type is in.
+                    if self.ihdr.is_none() && boxes.cut_kind() == Some(*b"jp2c") {
+                        return None;
+                    }
+                    break error;
+                }
+                Some(Err(_)) => return None,
+                Some(Ok(item)) => item,
+            };
+            if boxes.last_was_open_ended() {
+                return None;
+            }
+            match &item.kind {
+                b"jp2c" => return None,
+                b"jp2h" => {
+                    let read = match self.ihdr {
+                        None => Jp2Header::parse(item.payload),
+                        Some(ihdr) => Jp2Header::of_ihdr(ihdr).merge(item.payload),
+                    };
+                    self.ihdr = Some(read.ok()?.ihdr);
+                }
+                // Any other box is kept as it is, which cannot fail.
+                _ => {}
+            }
+        };
+        self.pos = boxes.pos();
+        Some(ended)
+    }
 }
 
 /// Find the codestream that starts with the `jp2c` box's contents `payload`,

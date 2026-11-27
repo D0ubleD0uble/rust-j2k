@@ -20,6 +20,9 @@ thread_local! {
     /// The first tile-part headers the fault walk has read again, for a
     /// later tile-part that restates a coding value, on this thread.
     pub(crate) static FIRST_REREADS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The bytes of the main-header marker segments the walk has located
+    /// on this thread.
+    pub(crate) static MAIN_HEADER_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 fn be16(v: u16) -> [u8; 2] {
@@ -6060,4 +6063,386 @@ fn hidden_cod(code: u16) -> (bool, bool) {
     let parsed = parse_header(&bytes).expect("the main header parses");
     let part = first_part_at(&bytes, &parsed, offset).expect("a first tile-part");
     (part.may_set_coding(), part.header().is_err())
+}
+
+/// The walk of the whole main header, from `SOC`, as `parse_main_header`
+/// starts it: the segments located and where the walk ended.
+fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
+    if bytes.len() < 2 && marker::SOC.to_be_bytes().starts_with(bytes) {
+        return Err(Error::incomplete("cut before `SOC`"));
+    }
+    if Cursor::at(bytes, 0).u16().ok() != Some(marker::SOC) {
+        return Err(Error::codestream("does not start with the `SOC` marker"));
+    }
+    let walk = super::walk_main_header(bytes, 2, 0);
+    Ok((walk.segments, walk.end))
+}
+
+/// The offsets in `codestream` of each main-header marker segment, the
+/// first `SOT` included, as far as their lengths can be followed.
+fn segment_starts(codestream: &[u8]) -> Vec<usize> {
+    let mut starts = vec![2];
+    let mut pos = 2;
+    while let Some(&[0xFF, code, high, low]) = codestream.get(pos..pos + 4) {
+        if code == 0x90 {
+            break;
+        }
+        pos += 2 + usize::from(u16::from_be_bytes([high, low]));
+        starts.push(pos);
+    }
+    starts
+}
+
+/// A parse of each prefix of `codestream` that ends at, or just after, a
+/// marker segment's start, each going on from where the parse of the one
+/// before (every `stride`th) stopped, gives what [`parse_header`] gives on
+/// the same prefix: the same error, or the same parsed header, with the
+/// `POC`, the overrides and what `CAP` rules out carried over the cuts.
+fn check_resumed_parses(name: &str, codestream: &[u8]) {
+    let mut points: Vec<usize> = segment_starts(codestream)
+        .into_iter()
+        .flat_map(|at| [at, at + 1, at + 3])
+        .filter(|&at| at <= codestream.len())
+        .collect();
+    points.push(codestream.len());
+    check_resumed_at(name, codestream, points);
+}
+
+/// [`check_resumed_parses`] at `points` only.
+fn check_resumed_at(name: &str, codestream: &[u8], mut points: Vec<usize>) {
+    points.sort_unstable();
+    points.dedup();
+    for stride in [1, 3] {
+        let mut cut = None;
+        for &point in points.iter().step_by(stride) {
+            let prefix = &codestream[..point];
+            let fresh = parse_header(prefix);
+            let resumed = parse_header_resumed(prefix, cut.take());
+            match (&fresh, resumed) {
+                (Ok(fresh), Ok(resumed)) => {
+                    assert_eq!(fresh, &resumed, "{name} at {point}, stride {stride}");
+                }
+                (Err(fresh), Err((resumed, kept))) => {
+                    assert_eq!(
+                        format!("{fresh:?}"),
+                        format!("{resumed:?}"),
+                        "{name} at {point}, stride {stride}"
+                    );
+                    cut = kept;
+                }
+                (fresh, Err((resumed, _))) => {
+                    panic!("{name} at {point}, stride {stride}: {fresh:?}, resumed {resumed:?}")
+                }
+                (fresh, Ok(resumed)) => {
+                    panic!("{name} at {point}, stride {stride}: {fresh:?}, resumed {resumed:?}")
+                }
+            }
+        }
+    }
+}
+
+/// [`check_resumed_parses`] over every codestream under `tests/fixtures`
+/// (in a JP2 file, from its first `jp2c` box), and over main headers whose
+/// later segments depend on what the earlier ones set: a `CAP` that rules
+/// out an `RGN` after it, a `POC`, `COC`s, `QCC`s and `RGN`s that override
+/// the defaults and are restated, `TLM`, `CRG`, `PPM` and `CPF` segments,
+/// and a Part 2 marker whose refusal waits for the header to end.
+#[test]
+fn a_main_header_parse_resumed_over_cuts_is_a_parse_from_the_start() {
+    let root = format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"));
+    let mut dirs = vec![std::path::PathBuf::from(root)];
+    let mut files = Vec::new();
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e, "j2k" | "j2c" | "jp2" | "jph"))
+            {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    assert!(files.len() > 100, "{} files", files.len());
+    for path in &files {
+        let bytes = std::fs::read(path).unwrap();
+        let start = if bytes.starts_with(&[0xFF, 0x4F]) {
+            0
+        } else {
+            match bytes.windows(4).position(|kind| kind == b"jp2c") {
+                Some(at) => at + 4,
+                None => continue,
+            }
+        };
+        let codestream = &bytes[start..];
+        // The main header and its first `SOT`, or the first 4 MiB.
+        let end = segment_starts(codestream).last().map_or(0, |&at| at + 2);
+        let end = end.min(codestream.len()).min(4 << 20);
+        check_resumed_parses(&path.display().to_string(), &codestream[..end]);
+    }
+
+    let comment = || seg(marker::COM, &[0, 1, b'x']);
+    let cap = |ccap15| seg(marker::CAP, &cap15(ccap15));
+    let rgn = |component: u8| seg(marker::RGN, &rgn_body(&[component], 0, 4));
+    let three = seg(
+        marker::SIZ,
+        &siz_body(3, &[(7, 1, 1), (7, 1, 1), (7, 1, 1)]),
+    );
+    let [siz, cod, qcd] = <[Vec<u8>; 3]>::try_from(default_header()).unwrap();
+    let coc = |component: u8, levels: u8| {
+        seg(marker::COC, &coc_body(&[component], 0, levels, 2, 2, 0, 1))
+    };
+    let qcc = |component: u8| {
+        seg(
+            marker::QCC,
+            &[&[component][..], &qcd_none(1, &[9; 16])].concat(),
+        )
+    };
+    let ppm = |zppm: u8| seg(marker::PPM, &[zppm, 0, 0, 0, 0]);
+    let cases: Vec<(&str, Vec<Vec<u8>>)> = vec![
+        (
+            "a CAP ruling out a later RGN",
+            vec![
+                siz.clone(),
+                cap(0x0003),
+                comment(),
+                comment(),
+                rgn(0),
+                cod.clone(),
+                qcd.clone(),
+            ],
+        ),
+        (
+            "an RGN before a CAP ruling it out",
+            vec![
+                siz.clone(),
+                rgn(0),
+                comment(),
+                cod.clone(),
+                qcd.clone(),
+                cap(0x0003),
+            ],
+        ),
+        (
+            "a CAP allowing an RGN",
+            vec![
+                siz.clone(),
+                cap(0x1003),
+                comment(),
+                rgn(0),
+                cod.clone(),
+                qcd.clone(),
+            ],
+        ),
+        (
+            "a POC",
+            vec![
+                siz.clone(),
+                cod.clone(),
+                qcd.clone(),
+                seg(marker::POC, &poc_volumes(3)),
+                comment(),
+                comment(),
+            ],
+        ),
+        (
+            "a second POC",
+            vec![
+                siz.clone(),
+                seg(marker::POC, &poc_volumes(1)),
+                cod.clone(),
+                qcd.clone(),
+                comment(),
+                seg(marker::POC, &poc_volumes(2)),
+            ],
+        ),
+        (
+            "overrides before and after the defaults",
+            vec![
+                three.clone(),
+                coc(1, 3),
+                qcc(2),
+                rgn(1),
+                cod.clone(),
+                comment(),
+                qcd.clone(),
+                coc(2, 1),
+                qcc(0),
+                rgn(2),
+            ],
+        ),
+        (
+            "a COC restated",
+            vec![
+                three.clone(),
+                cod.clone(),
+                qcd.clone(),
+                coc(1, 3),
+                comment(),
+                coc(1, 2),
+            ],
+        ),
+        (
+            "a QCC restated",
+            vec![
+                three.clone(),
+                cod.clone(),
+                qcd.clone(),
+                qcc(1),
+                comment(),
+                qcc(1),
+            ],
+        ),
+        (
+            "an RGN restated",
+            vec![
+                three.clone(),
+                cod.clone(),
+                qcd.clone(),
+                rgn(1),
+                comment(),
+                rgn(1),
+            ],
+        ),
+        (
+            "an override of a component past Csiz",
+            vec![
+                three.clone(),
+                cod.clone(),
+                qcd.clone(),
+                comment(),
+                coc(3, 1),
+            ],
+        ),
+        (
+            "TLM, CRG and PPM segments",
+            vec![
+                siz.clone(),
+                cod.clone(),
+                seg(marker::TLM, &tlm_body(0x00, &[])),
+                qcd.clone(),
+                ppm(0),
+                seg(marker::TLM, &tlm_body(0x00, &[])),
+                ppm(1),
+                seg(marker::CRG, &crg_body(&[(0, 0)])),
+                ppm(2),
+            ],
+        ),
+        (
+            "PPM segments out of order",
+            vec![
+                siz.clone(),
+                cod.clone(),
+                qcd.clone(),
+                ppm(1),
+                comment(),
+                ppm(0),
+            ],
+        ),
+        (
+            "a duplicate CRG",
+            vec![
+                siz.clone(),
+                cod.clone(),
+                qcd.clone(),
+                seg(marker::CRG, &crg_body(&[(0, 0)])),
+                comment(),
+                seg(marker::CRG, &crg_body(&[(0, 0)])),
+            ],
+        ),
+        (
+            "a duplicate CAP",
+            vec![
+                siz.clone(),
+                cap(0x1003),
+                cod.clone(),
+                qcd.clone(),
+                comment(),
+                cap(0x1003),
+            ],
+        ),
+        (
+            "a Part 2 marker, then a fault",
+            vec![
+                siz.clone(),
+                cod.clone(),
+                qcd.clone(),
+                seg(0xFF74, &[0, 0]),
+                comment(),
+                siz.clone(),
+            ],
+        ),
+        (
+            "a Part 2 marker, then more segments",
+            vec![
+                siz.clone(),
+                cod.clone(),
+                seg(0xFF74, &[0, 0]),
+                qcd.clone(),
+                comment(),
+            ],
+        ),
+        (
+            "no QCD",
+            vec![siz.clone(), cod.clone(), comment(), comment()],
+        ),
+        (
+            "a duplicate SIZ",
+            vec![
+                siz.clone(),
+                cod.clone(),
+                qcd.clone(),
+                comment(),
+                siz.clone(),
+            ],
+        ),
+    ];
+    let with_sot = |segments: &[Vec<u8>]| {
+        let mut bytes = codestream(segments);
+        // A whole `SOT` after the header, so the parse can end.
+        bytes.extend_from_slice(&[0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        bytes
+    };
+    for (name, segments) in cases {
+        check_resumed_parses(name, &with_sot(&segments));
+    }
+
+    // `TLM` entries of `ST = 0` count the tiles over every `TLM`: two that
+    // a cut splits name two tiles of a grid of one.
+    let tlm = || seg(marker::TLM, &tlm_body(0x00, &[0, 0]));
+    let bytes = with_sot(&[
+        siz.clone(),
+        tlm(),
+        comment(),
+        tlm(),
+        cod.clone(),
+        qcd.clone(),
+    ]);
+    assert!(matches!(parse_header(&bytes), Err(Error::Marker(_))));
+    check_resumed_parses("two TLMs naming two tiles of one", &bytes);
+
+    // The cap on the main header's segments counts those before each cut:
+    // one past it, and one under it, cut at a few points through the run.
+    for (name, run, over) in [
+        ("one segment past the cap", MAX_MAIN_HEADER_SEGMENTS, true),
+        (
+            "one segment under the cap",
+            MAX_MAIN_HEADER_SEGMENTS - 4,
+            false,
+        ),
+    ] {
+        let mut segments = vec![siz.clone(), cod.clone(), qcd.clone()];
+        segments.push(be16(0xFF30).repeat(run));
+        let bytes = with_sot(&segments);
+        assert_eq!(parse_header(&bytes).is_err(), over, "{name}");
+        // The cap is reached near the end of the run, so the last cuts are
+        // around it.
+        let mut points: Vec<usize> = (1..=16).map(|part| bytes.len() * part / 17).collect();
+        points.extend(bytes.len() - 40..=bytes.len());
+        check_resumed_at(name, &bytes, points);
+    }
 }

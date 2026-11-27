@@ -663,10 +663,26 @@ it, about 10 times the input. The decode holds the same parse.
 own headers between calls, and goes on from where the last call stopped.
 Calls after each feed walk the tile-parts about once in all, and each call
 is charged the budgets as a read from the start is: after each 256 KiB fed
-of the 235 MB file above, 66 ms in all. Each call also parses the main
-header again, so the cost of a call is the main header plus the tile-parts
-fed since, up to the budgets; a main header of megabytes of `PPM` data is
-parsed on every call. The header of a tile-part not yet
+of the 235 MB file above, 66 ms in all. Once the main header is whole,
+each call also parses it again, so the cost of a call is the main header
+plus the tile-parts fed since, up to the budgets; a main header of
+megabytes of `PPM` data is parsed on every call from then on. Before that,
+while the bytes fed end inside the main header or before a JP2 file's
+`jp2c`, each call goes on from the last whole marker segment or box, so the
+calls read them about once in all (a 256 KiB `PPM` main header fed 256
+bytes at a time: 506 times over before, once now). For this it keeps
+what the main header's segments read so far set, held while the main
+header stays cut short, whether or not `header` is called again. Each
+override of a component's coding keeps its parsed form: up to about 12
+bytes for each byte of `COC`, `QCC` and `RGN` segments, the most for a
+one-step `QCC` (1.54 MB for 128 KiB of them, one for each of 16384
+components). A component holds one of each, so the most is about 12 MB: a
+`COC` of precincts, a 97-step `QCC` and an `RGN` for each of 16384
+components, 4.2 MB of segments, keep 12.2 MB. `PPM` segments keep 24 bytes
+each, 1.6 MB at most under the 65536 segments a main header may have; the
+rest (`POC`, of 32 volumes at most, `CRG`, the `TLM` count) is small
+(`tests/incremental_header_cache_alloc.rs`). The
+header of a tile-part not yet
 fed in full, or of a last tile-part whose `Psot` is 0, is read again on
 each call. What it keeps, about 140 bytes for each tile counted under its
 own header and a byte for each other tile, is held until the options

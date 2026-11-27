@@ -79,7 +79,9 @@ use crate::{
 /// in capacity as the table grows). What [`header`](Self::header) keeps between
 /// its calls comes to about 140 bytes for each tile counted under its own
 /// header and a byte for each other tile, plus a key of the main header, its
-/// length and a hash. Each refine also holds what [`decode_with`] holds for the
+/// length and a hash, and while the main header is cut short, what its
+/// segments read so far set (up to about 12 MB, and 1.6 MB of `PPM` offsets).
+/// Each refine also holds what [`decode_with`] holds for the
 /// same bytes, so the decoder holds at most one decode's peak plus the walks
 /// kept (twice the image's samples plus twice the walk of the largest tile
 /// walked so far; a change of the region or the reduction keeps that walk),
@@ -383,8 +385,31 @@ impl IncrementalDecoder {
     /// bytes can change, of length 0 or cut inside its `XLBox`, gives
     /// `Ok(None)`.
     ///
-    /// Each call parses the main header again (its `PPM` data included), so
-    /// a call costs the main header plus the tile-parts fed since. For the
+    /// While the bytes fed end before the main header is whole, a call goes
+    /// on from where the last one stopped: in a JP2 file, after the last
+    /// whole box before the codestream, and in the main header, after its
+    /// last whole marker segment. So the calls after each feed read the
+    /// boxes before the codestream and the main header about once in all,
+    /// however small the pieces. A call that finds a box of length 0 before
+    /// the codestream reads the boxes from the start, as that box runs to
+    /// the end of the bytes fed. For this the decoder keeps where the last
+    /// call stopped, the first `ihdr`, and what the main header's segments
+    /// read so far set (its `PPM` data as offsets into the bytes fed, not a
+    /// copy), until a call finds the main header whole, or an error. It is
+    /// held while the main header stays cut short, whether or not `header`
+    /// is called again: up to about 12 bytes for each byte of `COC`, `QCC`
+    /// and `RGN` segments (the most for a `QCC` of one step for each
+    /// component), and about 12 MB at most, for a `COC`, `QCC` and `RGN`
+    /// of the most fields for each of 16384 components, plus 24 bytes for
+    /// each `PPM` segment, 1.6 MB at most under the 65536 segments a main
+    /// header may have.
+    ///
+    /// Once the main header is whole, each call parses it again (its `PPM`
+    /// data included), and in a JP2 file reads the boxes before the
+    /// codestream again, so a call costs the main header plus the
+    /// tile-parts fed since. A caller who feeds a file with a large main
+    /// header in small pieces can stop calling `header` once it has a
+    /// header, or call it less often. For the
     /// tiles over a cap under it, the decoder keeps what the last call
     /// found: the walk of the tile-parts and the counts of the tiles' own
     /// headers. A call goes on from there, so the calls after each feed walk

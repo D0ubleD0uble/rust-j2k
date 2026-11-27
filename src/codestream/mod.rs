@@ -982,14 +982,37 @@ struct OverrideReader<'s> {
     rgn_free: bool,
 }
 
+/// What an [`OverrideReader`] has read, without the `SIZ` it reads under,
+/// so that a reading can stop and go on later.
+#[derive(Default)]
+struct OverrideState {
+    overrides: Overrides,
+    named: HashSet<(u16, usize)>,
+    rgn_free: bool,
+}
+
 impl<'s> OverrideReader<'s> {
     fn new(siz: &'s Siz, place: Place) -> Self {
+        Self::resume(siz, place, OverrideState::default())
+    }
+
+    /// A reader that goes on from `state`.
+    fn resume(siz: &'s Siz, place: Place, state: OverrideState) -> Self {
         OverrideReader {
             siz,
             place,
-            overrides: Overrides::default(),
-            named: HashSet::new(),
-            rgn_free: false,
+            overrides: state.overrides,
+            named: state.named,
+            rgn_free: state.rgn_free,
+        }
+    }
+
+    /// What this reader has read, for a reader to go on from.
+    fn into_state(self) -> OverrideState {
+        OverrideState {
+            overrides: self.overrides,
+            named: self.named,
+            rgn_free: self.rgn_free,
         }
     }
 
@@ -2260,11 +2283,13 @@ fn read_u16(bytes: &[u8], pos: usize) -> Option<u16> {
     Some(u16::from_be_bytes([hi, lo]))
 }
 
-/// One marker segment located by the structural walk: its code and its body
-/// (empty for the segment-less markers).
+/// One marker segment located by the structural walk: its code, its body
+/// (empty for the segment-less markers), and where that body starts in the
+/// input.
 struct Segment<'a> {
     code: u16,
     body: &'a [u8],
+    at: usize,
 }
 
 /// Upper bound on the marker segments a main header may carry.
@@ -2276,8 +2301,22 @@ struct Segment<'a> {
 /// segments, so this bound cannot reject a real codestream.
 const MAX_MAIN_HEADER_SEGMENTS: usize = 1 << 16;
 
-/// Walk the main header's marker segments from just after `SOC` to the first
-/// `SOT`, without judging any of them (A.6).
+/// What [`walk_main_header`] found.
+struct Walk<'a> {
+    /// The segments located, in codestream order.
+    segments: Vec<Segment<'a>>,
+    /// The offset of the `SOT` that ended the header, or the error that
+    /// stopped the walk before it.
+    end: Result<usize>,
+    /// Where the walk stopped: the marker it could not read whole, where the
+    /// input ends inside the header.
+    stopped: usize,
+}
+
+/// Walk the main header's marker segments from `pos`, just after `SOC` or
+/// after a segment an earlier walk located, to the first `SOT`, without
+/// judging any of them (A.6). `located` is how many segments the walk has
+/// located before `pos`.
 ///
 /// This is deliberately subset-agnostic: it establishes *where every segment
 /// is*, and leaves "can we decode this?" to the caller. Running the whole walk
@@ -2299,31 +2338,24 @@ const MAX_MAIN_HEADER_SEGMENTS: usize = 1 << 16;
 /// before it, so the caller can judge them first and a damaged segment is
 /// reported on every prefix that holds it, as in the whole file:
 ///
-/// - [`Error::Incomplete`] when the input ends after `SOC` and before the
-///   first `SOT` marker is whole. The walk reads only marker codes and
-///   lengths here, so running out of input means the input was cut short (or
-///   a length was damaged to reach past it, which looks the same);
+/// - [`Error::Incomplete`] when the input ends before the first `SOT` marker
+///   is whole. The walk reads only marker codes and lengths here, so running
+///   out of input means the input was cut short (or a length was damaged to
+///   reach past it, which looks the same);
 /// - [`Error::Codestream`] for a non-marker where a marker must be, `SOC`,
 ///   `SOD` or `EOC` before any tile-part, and more than
 ///   [`MAX_MAIN_HEADER_SEGMENTS`] segments;
 /// - [`Error::Marker`] for a length below 2.
 ///
-/// Only input that is not, or not yet, `SOC` is an error of the walk itself.
-fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
-    let mut cur = Cursor::at(bytes, 0);
-
-    // 0 bytes, or `FF` alone, may still become `SOC`.
-    if bytes.len() < 2 && marker::SOC.to_be_bytes().starts_with(bytes) {
-        return Err(Error::incomplete(
-            "the input ends before the codestream's `SOC` marker is whole",
-        ));
-    }
-    if cur.u16().ok() != Some(marker::SOC) {
-        return Err(Error::codestream("does not start with the `SOC` marker"));
-    }
-
+/// The walk reads each segment's marker and length once, so a walk on more
+/// of the same input that starts where this one stopped locates the
+/// segments this one did not, as a walk from the start would.
+fn walk_main_header(bytes: &[u8], pos: usize, located: usize) -> Walk<'_> {
+    let mut cur = Cursor::at(bytes, pos);
     let mut segments = Vec::new();
-    let sot_offset = loop {
+    let mut stopped;
+    let end = loop {
+        stopped = cur.pos;
         let Ok(code) = cur.u16() else {
             break Err(cut_short("before its first `SOT` marker"));
         };
@@ -2351,7 +2383,7 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
                 // them would grow `segments` at ~12x the input. Bound it: no
                 // conformant main header comes close, and the cap keeps a hostile
                 // input's allocation proportional to nothing but this constant.
-                if segments.len() == MAX_MAIN_HEADER_SEGMENTS {
+                if located + segments.len() == MAX_MAIN_HEADER_SEGMENTS {
                     break Err(Error::codestream(format!(
                         "main header has more than {MAX_MAIN_HEADER_SEGMENTS} marker segments"
                     )));
@@ -2370,12 +2402,23 @@ fn walk_main_header(bytes: &[u8]) -> Result<(Vec<Segment<'_>>, Result<usize>)> {
                 } else {
                     &[][..]
                 };
-                segments.push(Segment { code, body });
+                #[cfg(test)]
+                tests::MAIN_HEADER_BYTES.with(|walked| {
+                    walked.set(walked.get() + (cur.pos - stopped) as u64);
+                });
+                segments.push(Segment {
+                    code,
+                    body,
+                    at: cur.pos - body.len(),
+                });
             }
         }
     };
-
-    Ok((segments, sot_offset))
+    Walk {
+        segments,
+        end,
+        stopped,
+    }
 }
 
 /// The body of the main-header segment whose marker the walk just read, as
@@ -2396,170 +2439,299 @@ fn cut_short(place: &str) -> Error {
     Error::incomplete(format!("the input ends inside the main header, {place}"))
 }
 
+/// Where a parse of a main header stopped when the input ended inside it,
+/// so that a parse of more of the same input goes on from there instead of
+/// from `SOC` ([`parse_header_resumed`]): where the walk stopped, and what
+/// the segments before it set. It holds no copy of the input: the `PPM`
+/// data are kept as offsets into it.
+pub(crate) struct MainCut {
+    /// The bytes the parse had.
+    len: usize,
+    /// Where the walk goes on ([`Walk::stopped`]).
+    pos: usize,
+    /// The segments located before `pos`.
+    located: usize,
+    /// What the segments judged set, once there is a `SIZ`.
+    judge: Option<Box<Judge>>,
+    /// A Part 2 or unknown marker met, after which no segment is judged.
+    unsupported: Option<Error>,
+}
+
+impl MainCut {
+    /// The bytes the parse had: a later parse goes on from here only on an
+    /// input of at least as many bytes, which starts with these.
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+}
+
+/// A parsed main header, the offset of its first `SOT`, and its `PPM`
+/// chunks.
+type MainParts = (MainHeader, usize, Vec<Vec<u8>>);
+
+/// A parse of a main header that failed: the error, and where the input
+/// ends inside the header, where the parse stopped, to go on from.
+pub(crate) type Stopped = (Error, Option<Box<MainCut>>);
+
+/// What the main header's segments set as [`parse_main_header`] judges
+/// them in codestream order: its `SIZ`, and what the segments after it set.
+struct Judge {
+    siz: Siz,
+    set: Judged,
+}
+
+/// [`Judge::set`].
+#[derive(Default)]
+struct Judged {
+    overrides: OverrideState,
+    /// TLM entries met so far, which is the tile index an `ST = 0` entry
+    /// implies.
+    tlm_entries: usize,
+    poc: Vec<PocVolume>,
+    crg: Option<Vec<(u16, u16)>>,
+    /// `CAP` and `CPF`, each at most once: `Some(ccap15)` once a CAP is read.
+    cap: Option<Option<Ccap15>>,
+    cpf: Option<Cpf>,
+    /// Packed packet headers (A.7.4), collected as `Zppm` and where its
+    /// `Ippm` is in the input, and split into per-tile-part chunks after the
+    /// walk by `decode_ppm_chunks`.
+    ppm: Vec<(u8, std::ops::Range<usize>)>,
+}
+
+impl Judge {
+    /// Judge `segments`, the main header's after its `SIZ`, in codestream
+    /// order. Returns the refusal of a Part 2 or unknown marker, at which
+    /// it stops: the segments after it are not judged.
+    fn judge(&mut self, segments: &[Segment<'_>]) -> Result<Option<Error>> {
+        let mut overrides = OverrideReader::resume(
+            &self.siz,
+            Place::Main,
+            std::mem::take(&mut self.set.overrides),
+        );
+        let judged = self.set.judge(&mut overrides, segments);
+        self.set.overrides = overrides.into_state();
+        judged
+    }
+}
+
+impl Judged {
+    fn judge(
+        &mut self,
+        overrides: &mut OverrideReader<'_>,
+        segments: &[Segment<'_>],
+    ) -> Result<Option<Error>> {
+        let siz = overrides.siz;
+        for seg in segments {
+            let body = || Cursor::new(seg.body);
+            if overrides.read(seg.code, || Ok(body()))? {
+                continue;
+            }
+            match seg.code {
+                marker::SIZ => {
+                    return Err(Error::codestream("duplicate `SIZ` marker"));
+                }
+                // Comment: recognized, carries nothing the decoder needs.
+                marker::COM => {}
+
+                // Length markers (A.7): pointers into the codestream, not decode
+                // parameters — the packet and tile-part structures they describe
+                // are read from the codestream itself, so decoding is identical
+                // with them present or absent. TLM's entries are validated and
+                // dropped, since no decode step reads them and a header can hold
+                // millions; PLM's packet lengths are skipped as OpenJPEG skips
+                // them (`opj_j2k_read_plm` reads nothing past `Zplm`).
+                marker::TLM => decode_tlm(body(), siz, &mut self.tlm_entries, |_| {})?,
+                marker::PLM => decode_plm(body())?,
+
+                // Progression-order change (A.6.6): a sequence of progression volumes
+                // that replaces COD's single order for the whole codestream. Volumes
+                // accumulate across markers.
+                marker::POC => decode_poc(body(), siz, &mut self.poc)?,
+
+                // Component registration (A.9.1): sub-pixel display offsets, recorded
+                // but not applied. One CRG per codestream (main-header only).
+                marker::CRG => {
+                    if self.crg.replace(decode_crg(body(), siz)?).is_some() {
+                        return Err(Error::codestream("duplicate `CRG` marker"));
+                    }
+                }
+
+                // PLT is the tile-part-header form of PLM (A.7.3); in the main
+                // header it is a malformed codestream, not a missing feature.
+                marker::PLT => {
+                    return Err(Error::codestream(
+                        "`PLT` is a tile-part-header marker; it is not permitted in the main header",
+                    ));
+                }
+
+                // Packed packet headers in the main header (A.7.4): `Zppm` orders
+                // this marker among the header's PPM markers, and the rest is `Ippm`.
+                // Collected here and split per tile-part after the walk; a tile-part
+                // then sources its packet headers from its chunk (see `walk_tiles`).
+                marker::PPM => {
+                    let mut b = body();
+                    let zppm = b.u8()?;
+                    // The rest of the body, by where it is in the input.
+                    self.ppm.push((zppm, seg.at + 1..seg.at + seg.body.len()));
+                }
+
+                // Extended capabilities (ISO/IEC 15444-1 A.5.2) and the
+                // corresponding profile (ISO/IEC 15444-15 A.6): one of each per
+                // codestream.
+                marker::CAP => {
+                    let ccap15 = decode_cap(body())?;
+                    if self.cap.replace(ccap15).is_some() {
+                        return Err(Error::codestream("duplicate `CAP` marker"));
+                    }
+                    if ccap15.is_some_and(|c| !c.rgn()) {
+                        overrides.forbid_rgn()?;
+                    }
+                }
+                marker::CPF => {
+                    if self.cpf.replace(decode_cpf(body())?).is_some() {
+                        return Err(Error::codestream("duplicate `CPF` marker"));
+                    }
+                }
+
+                // PPT belongs in a tile-part header, and SOP and EPH in the
+                // packet data or the packed headers (Table A.2). Like PLT, in the
+                // main header they are a malformed codestream, not a missing
+                // feature.
+                marker::PPT | marker::SOP | marker::EPH => {
+                    return Err(Error::codestream(format!(
+                        "{} is not permitted in the main header",
+                        marker::describe(seg.code)
+                    )));
+                }
+
+                // A JPEG 2000 Part 2 codestream marker (ISO/IEC 15444-2). Named so
+                // the rejection says which Part 2 feature blocks the decode —
+                // multiple-component transforms, non-linearity, extra bit depths —
+                // rather than reading as a bare unknown code.
+                code if marker::PART2.contains(&code) => {
+                    return Ok(Some(Error::unsupported(format!(
+                        "{} is a JPEG 2000 Part 2 marker, outside the Part 1 subset",
+                        marker::describe(seg.code)
+                    ))));
+                }
+
+                // The reserved segment-less range is *defined* to carry nothing, so
+                // it is the one thing that can be passed over safely.
+                code if marker::RESERVED_NO_SEGMENT.contains(&code) => {}
+
+                // Any other marker this decoder does not know. The walk stepped over
+                // its segment — that is what lets the header be traversed at all —
+                // but we will not decode past it: every marker code is allocated by
+                // some part of the standard, and an unknown one may well change what
+                // the packet data means. Guessing that it is ignorable would trade
+                // a clean rejection for a silently wrong image.
+                other => {
+                    return Ok(Some(Error::unsupported(format!(
+                        "unrecognized marker {other:#06X} in the main header"
+                    ))));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
 /// Parse the main header up to (but not into) the first `SOT`.
 ///
 /// Returns the decoded [`MainHeader`] and the byte offset of that `SOT` marker,
 /// which is where tile-part walking (issue #6) begins. Stops before any
 /// entropy-coded data, so it never touches packet bytes.
 ///
-/// The header is walked in full by [`walk_main_header`] first, then each
-/// located segment is interpreted in codestream order.
-fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> {
+/// The header is walked by [`walk_main_header`] first, then each located
+/// segment is interpreted in codestream order.
+fn parse_main_header(bytes: &[u8]) -> Result<MainParts> {
+    parse_main_header_from(bytes, None).map_err(|(error, _)| error)
+}
+
+/// [`parse_main_header`], going on from `from`, where a parse of the start
+/// of the same input stopped. Where the input ends inside the header, the
+/// error comes with where this parse stopped, to go on from.
+fn parse_main_header_from(
+    bytes: &[u8],
+    from: Option<Box<MainCut>>,
+) -> std::result::Result<MainParts, Stopped> {
+    let fail = |error: Error| (error, None);
+    let (pos, located, judge, unsupported) = match from.map(|cut| *cut) {
+        Some(cut) => (cut.pos, cut.located, cut.judge, cut.unsupported),
+        None => {
+            // 0 bytes, or `FF` alone, may still become `SOC`.
+            if bytes.len() < 2 && marker::SOC.to_be_bytes().starts_with(bytes) {
+                return Err(fail(Error::incomplete(
+                    "the input ends before the codestream's `SOC` marker is whole",
+                )));
+            }
+            if Cursor::at(bytes, 0).u16().ok() != Some(marker::SOC) {
+                return Err(fail(Error::codestream(
+                    "does not start with the `SOC` marker",
+                )));
+            }
+            (2, 0, None, None)
+        }
+    };
+
     // The segments before a cut or a structural fault are judged first, in
     // codestream order, so a damaged segment before the cut is reported as
     // it would be in the whole file; `end` reports the cut or the fault only
     // once those all pass. OpenJPEG reads the header in the same order.
-    let (segments, end) = walk_main_header(bytes)?;
-
-    // SIZ shall be the first marker segment after SOC (A.6).
-    let Some(first) = segments.first() else {
-        end?;
-        return Err(Error::codestream("main header has no marker segments"));
+    let walk = walk_main_header(bytes, pos, located);
+    let located = located + walk.segments.len();
+    // Where the input ends inside the header, where to go on from.
+    let cut = |error: Error, judge: Option<Box<Judge>>, unsupported: Option<Error>| {
+        let cut = matches!(error, Error::Incomplete(_)).then(|| {
+            Box::new(MainCut {
+                len: bytes.len(),
+                pos: walk.stopped,
+                located,
+                judge,
+                unsupported,
+            })
+        });
+        (error, cut)
     };
-    if first.code != marker::SIZ {
-        return Err(Error::codestream(
-            "`SIZ` must be the first marker after `SOC`",
-        ));
-    }
-    let siz = decode_siz(Cursor::new(first.body))?;
 
-    // Judge the image before its coding parameters, so a codestream outside the
-    // subset reports the *image* feature that blocks it (an origin, a tile grid)
-    // rather than whichever coding-style bit COD happens to trip on first. Both
-    // are `Unsupported`; this is about which reason is useful to read.
-    validate_geometry(&siz)?;
-    check_sample_container(&siz)?;
+    let mut segments = walk.segments.as_slice();
+    let mut judge = match judge {
+        Some(judge) => judge,
+        None => {
+            // SIZ shall be the first marker segment after SOC (A.6).
+            let Some((first, rest)) = segments.split_first() else {
+                return Err(match walk.end {
+                    Ok(_) => fail(Error::codestream("main header has no marker segments")),
+                    Err(end) => cut(end, None, None),
+                });
+            };
+            if first.code != marker::SIZ {
+                return Err(fail(Error::codestream(
+                    "`SIZ` must be the first marker after `SOC`",
+                )));
+            }
+            let siz = decode_siz(Cursor::new(first.body)).map_err(fail)?;
 
-    let mut overrides = OverrideReader::new(&siz, Place::Main);
-    // TLM entries met so far, which is the tile index an `ST = 0` entry
-    // implies.
-    let mut tlm_entries = 0usize;
-    let mut poc: Vec<PocVolume> = Vec::new();
-    let mut crg: Option<Vec<(u16, u16)>> = None;
-    // `CAP` and `CPF`, each at most once: `Some(ccap15)` once a CAP is read.
-    let mut cap: Option<Option<Ccap15>> = None;
-    let mut cpf: Option<Cpf> = None;
-    // Packed packet headers (A.7.4), collected as `(Zppm, Ippm)` and split into
-    // per-tile-part chunks after the walk by `decode_ppm_chunks`.
-    let mut ppm: Vec<(u8, Vec<u8>)> = Vec::new();
+            // Judge the image before its coding parameters, so a codestream outside the
+            // subset reports the *image* feature that blocks it (an origin, a tile grid)
+            // rather than whichever coding-style bit COD happens to trip on first. Both
+            // are `Unsupported`; this is about which reason is useful to read.
+            validate_geometry(&siz).map_err(fail)?;
+            check_sample_container(&siz).map_err(fail)?;
+            segments = rest;
+            Box::new(Judge {
+                siz,
+                set: Judged::default(),
+            })
+        }
+    };
 
     // A marker this decoder does not read, held until the walk is known to
     // have reached `SOT`: see below.
-    let mut unsupported = None;
-
-    for seg in &segments[1..] {
-        let body = || Cursor::new(seg.body);
-        if overrides.read(seg.code, || Ok(body()))? {
-            continue;
-        }
-        match seg.code {
-            marker::SIZ => {
-                return Err(Error::codestream("duplicate `SIZ` marker"));
-            }
-            // Comment: recognized, carries nothing the decoder needs.
-            marker::COM => {}
-
-            // Length markers (A.7): pointers into the codestream, not decode
-            // parameters — the packet and tile-part structures they describe
-            // are read from the codestream itself, so decoding is identical
-            // with them present or absent. TLM's entries are validated and
-            // dropped, since no decode step reads them and a header can hold
-            // millions; PLM's packet lengths are skipped as OpenJPEG skips
-            // them (`opj_j2k_read_plm` reads nothing past `Zplm`).
-            marker::TLM => decode_tlm(body(), &siz, &mut tlm_entries, |_| {})?,
-            marker::PLM => decode_plm(body())?,
-
-            // Progression-order change (A.6.6): a sequence of progression volumes
-            // that replaces COD's single order for the whole codestream. Volumes
-            // accumulate across markers.
-            marker::POC => decode_poc(body(), &siz, &mut poc)?,
-
-            // Component registration (A.9.1): sub-pixel display offsets, recorded
-            // but not applied. One CRG per codestream (main-header only).
-            marker::CRG => {
-                if crg.replace(decode_crg(body(), &siz)?).is_some() {
-                    return Err(Error::codestream("duplicate `CRG` marker"));
-                }
-            }
-
-            // PLT is the tile-part-header form of PLM (A.7.3); in the main
-            // header it is a malformed codestream, not a missing feature.
-            marker::PLT => {
-                return Err(Error::codestream(
-                    "`PLT` is a tile-part-header marker; it is not permitted in the main header",
-                ));
-            }
-
-            // Packed packet headers in the main header (A.7.4): `Zppm` orders
-            // this marker among the header's PPM markers, and the rest is `Ippm`.
-            // Collected here and split per tile-part after the walk; a tile-part
-            // then sources its packet headers from its chunk (see `walk_tiles`).
-            marker::PPM => {
-                let mut b = body();
-                let zppm = b.u8()?;
-                let ippm = b.take(b.remaining())?;
-                ppm.push((zppm, ippm.to_vec()));
-            }
-
-            // Extended capabilities (ISO/IEC 15444-1 A.5.2) and the
-            // corresponding profile (ISO/IEC 15444-15 A.6): one of each per
-            // codestream.
-            marker::CAP => {
-                let ccap15 = decode_cap(body())?;
-                if cap.replace(ccap15).is_some() {
-                    return Err(Error::codestream("duplicate `CAP` marker"));
-                }
-                if ccap15.is_some_and(|c| !c.rgn()) {
-                    overrides.forbid_rgn()?;
-                }
-            }
-            marker::CPF => {
-                if cpf.replace(decode_cpf(body())?).is_some() {
-                    return Err(Error::codestream("duplicate `CPF` marker"));
-                }
-            }
-
-            // PPT belongs in a tile-part header, and SOP and EPH in the
-            // packet data or the packed headers (Table A.2). Like PLT, in the
-            // main header they are a malformed codestream, not a missing
-            // feature.
-            marker::PPT | marker::SOP | marker::EPH => {
-                return Err(Error::codestream(format!(
-                    "{} is not permitted in the main header",
-                    marker::describe(seg.code)
-                )));
-            }
-
-            // A JPEG 2000 Part 2 codestream marker (ISO/IEC 15444-2). Named so
-            // the rejection says which Part 2 feature blocks the decode —
-            // multiple-component transforms, non-linearity, extra bit depths —
-            // rather than reading as a bare unknown code.
-            code if marker::PART2.contains(&code) => {
-                unsupported = Some(Error::unsupported(format!(
-                    "{} is a JPEG 2000 Part 2 marker, outside the Part 1 subset",
-                    marker::describe(seg.code)
-                )));
-                break;
-            }
-
-            // The reserved segment-less range is *defined* to carry nothing, so
-            // it is the one thing that can be passed over safely.
-            code if marker::RESERVED_NO_SEGMENT.contains(&code) => {}
-
-            // Any other marker this decoder does not know. The walk stepped over
-            // its segment — that is what lets the header be traversed at all —
-            // but we will not decode past it: every marker code is allocated by
-            // some part of the standard, and an unknown one may well change what
-            // the packet data means. Guessing that it is ignorable would trade
-            // a clean rejection for a silently wrong image.
-            other => {
-                unsupported = Some(Error::unsupported(format!(
-                    "unrecognized marker {other:#06X} in the main header"
-                )));
-                break;
-            }
-        }
-    }
+    let unsupported = match unsupported {
+        Some(error) => Some(error),
+        None => judge.judge(segments).map_err(fail)?,
+    };
 
     // A Part 2 or unknown marker is refused only once the walk reaches the
     // first `SOT`. Before that the header may still be cut (and the next
@@ -2569,34 +2741,80 @@ fn parse_main_header(bytes: &[u8]) -> Result<(MainHeader, usize, Vec<Vec<u8>>)> 
     // stops at the `SOD` after it. The tile-part header calls such a code
     // lost sync the same way (`lost_sync`).
     if let Some(error) = unsupported {
-        end?;
-        return Err(error);
+        return Err(match walk.end {
+            Ok(_) => fail(error),
+            Err(end) => cut(end, Some(judge), Some(error)),
+        });
     }
 
     // Every segment the input holds is valid. What is left needs the whole
     // header: whether COD and QCD are there, the resolved components (a later
     // COC can change a component's levels, and so the subbands its
     // quantization must cover), and the PPM chunk order.
-    let sot_offset = end?;
-    let mut overrides = overrides.finish();
-    let cod =
-        (overrides.cod.take()).ok_or_else(|| Error::codestream("missing required `COD` marker"))?;
-    let qcd =
-        (overrides.qcd.take()).ok_or_else(|| Error::codestream("missing required `QCD` marker"))?;
+    let sot_offset = match walk.end {
+        Ok(offset) => offset,
+        Err(end) => return Err(cut(end, Some(judge), None)),
+    };
+    let Judge {
+        siz,
+        set:
+            Judged {
+                overrides,
+                tlm_entries: _,
+                poc,
+                crg,
+                cap,
+                cpf,
+                ppm,
+            },
+    } = *judge;
+    let mut overrides = overrides.overrides;
+    let finish = || {
+        let cod = (overrides.cod.take())
+            .ok_or_else(|| Error::codestream("missing required `COD` marker"))?;
+        let qcd = (overrides.qcd.take())
+            .ok_or_else(|| Error::codestream("missing required `QCD` marker"))?;
 
-    // Start from COD/QCD's defaults, then lay each override over its component.
-    // That is the whole of A.6.2's and A.6.5's resolution rule at the main
-    // header's level; `resolve_tile_header` continues the ladder for a tile.
-    let mut header = MainHeader::new(siz, cod, qcd);
-    header.poc = poc;
-    header.crg = crg.unwrap_or_default();
-    header.ccap15 = cap.flatten();
-    header.cpf = cpf;
-    overrides.lay_over(&mut header.components);
+        // Start from COD/QCD's defaults, then lay each override over its component.
+        // That is the whole of A.6.2's and A.6.5's resolution rule at the main
+        // header's level; `resolve_tile_header` continues the ladder for a tile.
+        let mut header = MainHeader::new(siz, cod, qcd);
+        header.poc = poc;
+        header.crg = crg.unwrap_or_default();
+        header.ccap15 = cap.flatten();
+        header.cpf = cpf;
+        overrides.lay_over(&mut header.components);
 
-    validate_resolved(&header, None)?;
-    let ppm_chunks = decode_ppm_chunks(ppm)?;
-    Ok((header, sot_offset, ppm_chunks))
+        validate_resolved(&header, None)?;
+        let ppm = ppm
+            .into_iter()
+            .map(|(zppm, at)| (zppm, bytes[at].to_vec()))
+            .collect();
+        let ppm_chunks = decode_ppm_chunks(ppm)?;
+        Ok((header, sot_offset, ppm_chunks))
+    };
+    finish().map_err(fail)
+}
+
+/// [`parse_header`], going on from `from`, where a parse of the start of
+/// the same input stopped as the input ended inside the main header: `from`
+/// must have been made from at most [`MainCut::len`] bytes of the start of
+/// `bytes`. It gives what `parse_header` gives, and where the input still
+/// ends inside the header, where this parse stopped, to go on from. Each
+/// segment is read once over the parses that go on from each other, so
+/// parses after each piece of a header that arrives in pieces read it
+/// about once in all.
+pub(crate) fn parse_header_resumed(
+    bytes: &[u8],
+    from: Option<Box<MainCut>>,
+) -> std::result::Result<ParsedHeader, Stopped> {
+    debug_assert!(from.as_ref().is_none_or(|cut| cut.len <= bytes.len()));
+    let (header, sot_offset, ppm) = parse_main_header_from(bytes, from)?;
+    Ok(ParsedHeader {
+        header,
+        sot_offset,
+        ppm,
+    })
 }
 
 /// Check the invariants that only hold once a header's per-component parameters

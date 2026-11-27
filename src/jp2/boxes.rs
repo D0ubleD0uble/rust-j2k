@@ -111,6 +111,11 @@ impl<'a> Boxes<'a> {
         }
     }
 
+    /// Where the next box starts: just after the last box read whole.
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
+    }
+
     /// The bytes after the last box read, not yet walked.
     pub(crate) fn rest(&self) -> &'a [u8] {
         self.data.get(self.pos..).unwrap_or_default()
@@ -267,6 +272,10 @@ impl<'a> Boxes<'a> {
             .pos
             .checked_add(length)
             .ok_or_else(|| Error::inconsistent("box offset overflow"))?;
+        #[cfg(test)]
+        if self.open_ended {
+            super::tests::BOX_BYTES.with(|read| read.set(read.get() + length as u64));
+        }
         self.cut_kind = None;
         Ok(Jp2Box { kind, payload })
     }
