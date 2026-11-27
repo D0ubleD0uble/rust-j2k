@@ -569,7 +569,7 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
 ///
 /// ## Faults only decoding finds
 ///
-/// The read returns a header for these. Only decoding finds them:
+/// The read can return a header for these. Only decoding finds them:
 ///
 /// - A fault in the tile data: a broken tile-part, a tile header that changes
 ///   a component's wavelet, or a reduction that a tile-part `COD` or `COC`
