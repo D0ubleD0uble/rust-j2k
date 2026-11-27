@@ -1,7 +1,8 @@
 //! Header reads: [`read_header`], which the crate root's
 //! [`read_header_with`](crate::read_header_with) wraps, and what the
 //! incremental decoder keeps between its reads of a header that is still
-//! growing ([`HeaderCache`]).
+//! growing ([`HeaderCache`]). It also holds [`read_jp2_prefix`], which the
+//! one-shot decode reads a JP2 file's header with too.
 
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;

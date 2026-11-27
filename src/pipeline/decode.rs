@@ -200,6 +200,7 @@ pub(super) fn check_raw_color(options: &DecodeOptions, components: usize) -> Res
     Ok(())
 }
 
+/// Decode a JP2 file: read it up to its tile data, decode the codestream,
 /// and apply the channel plans, then any sRGB step, to the samples.
 fn decode_jp2(bytes: &[u8], options: &DecodeOptions, ledger: Option<&Ledger>) -> Result<Image> {
     // A refine reads a stream that may still grow, and holds an error that
