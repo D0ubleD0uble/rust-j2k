@@ -57,8 +57,8 @@ If you work on the crate:
   to run it, its cost and when it runs.
 - [roadmap-phase1.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase1.md),
   [roadmap-phase2.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase2.md),
-  [roadmap-phase3.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase3.md) and
-  [roadmap-phase4.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase4.md)
+  [roadmap-phase3.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase3.md)
+  and [roadmap-phase4.md](https://github.com/D0ubleD0uble/rust-j2k/blob/main/docs/roadmap-phase4.md)
   are the plans of the finished phases, with each step tied to its module and
   the oracle that checked it. They are kept as the record of how the decoder
   was built.

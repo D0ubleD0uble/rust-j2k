@@ -437,11 +437,9 @@ longest binaries are the library's unit tests and `incremental`, each about
 100 s. The run does not execute the `#[ignore]`d tests, as on every target
 (the attributes read `"slow: about ..."`, and the one in
 `tests/tile_geometry_cap.rs` reads `"decodes 1.6 x 10^9 samples..."`). Run the
-three slow tests of `work_limit`
-(`the_large_ht_bomb_decodes_at_the_default_bound`,
-`the_issue_bomb_decodes_with_the_limit_lifted` and
-`a_ladder_over_many_tiles_that_each_reach_the_bound_takes_log_steps`) as well,
-in a release build:
+two ignored tests of `work_limit`
+(`the_large_ht_bomb_decodes_at_the_default_bound` and
+`the_issue_bomb_decodes_with_the_limit_lifted`) as well, in a release build:
 
 ```sh
 CARGO_TARGET_WASM32_WASIP1_RUNNER="wasmtime run --dir=$PWD::$PWD" \
@@ -582,5 +580,5 @@ finds real problems joins the layers above, as the malformed-input
 differential, the 32-bit run, the second HTJ2K oracle and the mutation run did.
 None is open now. The last two, a check that a `Region` decode equals the crop
 of the whole image and one that the retry ladder of `DecodeOptions::raised_for`
-ends at the right image, now run as the `window_crop` and `retry_ladder` fuzz
-targets.
+never loops and ends at the image a decode with no limits gives, now run as the
+`window_crop` and `retry_ladder` fuzz targets.

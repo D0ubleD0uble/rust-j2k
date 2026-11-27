@@ -36,7 +36,7 @@ A change to any of these that breaks a caller needs a new minor version.
   `set_region`, `options`, `bytes`, `bytes_fed`, `bytes_decoded` and
   `into_bytes`), [`Refined`] with `image`, and [`Waiting`] and its variants.
 - Their public fields, constructors and methods. The fields are on
-  `Header`, `TileGrid`, `ComponentInfo`, `Image`, `Component`,
+  `Header`, `TileGrid`, `ComponentInfo`, `Image`, `Component`, `Window`,
   `DecodeReport` and the JP2 types. The constructors and methods include
   `Image::new` and `component`, `Component::new` and `sample`,
   `TileGrid::count` and `tile`, `Window::new`, `DecodeReport::is_complete`,

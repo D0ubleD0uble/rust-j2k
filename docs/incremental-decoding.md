@@ -384,7 +384,8 @@ refused once its `jp2c` box header is in), and `bytes` borrows the bytes fed.
 - A walk let go for any of these reasons is built again on the next walk
   of its tile, and charged as a walk of a tile not kept. So changing the
   options back and forth spends the same bound as walking a tile again, and
-  cannot buy free walks (`options_changed_back_and_forth_stay_within_the_bound_on_walks_read_again`).
+  cannot buy free walks
+  (`options_changed_back_and_forth_stay_within_the_bound_on_walks_read_again`).
   The visits spent and the code-block work spent carry across a change.
 - A change does not reset the cadence: the next refine still waits for
   twice the bytes of the last try. Resetting it would give a caller who

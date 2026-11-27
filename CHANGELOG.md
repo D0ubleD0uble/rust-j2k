@@ -297,7 +297,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   over and is now walked once. The headers and errors it returns are
   unchanged. Once the main header is whole, each call still parses it.
   While it is cut short, the decoder holds what its segments read so far
-  set: up to about 13 bytes for each byte of `COC`, `QCC` and `RGN`
+  set: up to about 14 bytes for each byte of `COC`, `QCC` and `RGN`
   segments, about 12 MB at most, plus 24 bytes for each `PPM` segment,
   1.6 MB at most.
 - A JP2 file padded with boxes holds less memory while its boxes are read.

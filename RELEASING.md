@@ -9,8 +9,8 @@ environment.
 ## One-time bootstrap (first release only)
 
 crates.io has no "pending publisher" concept, so the trusted publisher cannot be
-registered until the crate already exists on crates.io. The first version must be
-published manually:
+registered until the crate already exists on crates.io. The first version must
+be published manually:
 
 1. Create a scoped API token at <https://crates.io/settings/tokens> with the
    `publish-new` and `publish-update` scopes for `rust-j2k`.
@@ -32,9 +32,10 @@ After this, every later release goes through the workflow with no token.
 
 Every release starts with a full-project review, before any version bump. The
 point is production completeness: the tag should never be the first time a
-whole-crate look happens. [docs/release-validation.md](docs/release-validation.md)
-describes every check a release runs, including the manual rounds,
-differential checks and mutation testing that are not listed here.
+whole-crate look happens.
+[docs/release-validation.md](docs/release-validation.md) describes every check a
+release runs, including the manual rounds, differential checks and mutation
+testing that are not listed here.
 
 1. **Pre-flight.** `rustup update stable` (CI uses the newest stable), clean
    tree on an up-to-date `main`, latest `main` CI run green.
@@ -62,9 +63,10 @@ differential checks and mutation testing that are not listed here.
 
 ## Cutting a release
 
-1. Update `CHANGELOG.md`: move items from `[Unreleased]` into a new dated version
-   section and refresh the compare links at the bottom. Consolidate duplicate
-   Keep-a-Changelog section headers that accumulated while features landed.
+1. Update `CHANGELOG.md`: move items from `[Unreleased]` into a new dated
+   version section and refresh the compare links at the bottom. Consolidate
+   duplicate Keep-a-Changelog section headers that accumulated while features
+   landed.
 2. Bump `version` in `Cargo.toml` to match, and the `rust-j2k` entry in both
    lockfiles. Cargo updates `Cargo.lock` on the next build, but not
    `fuzz/Cargo.lock`, which belongs to the detached fuzz workspace, so edit

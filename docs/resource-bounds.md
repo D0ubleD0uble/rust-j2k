@@ -674,7 +674,7 @@ calls read them about once in all (a 256 KiB `PPM` main header fed 256
 bytes at a time: 506 times over before, once now). For this it keeps
 what the main header's segments read so far set, held while the main
 header stays cut short, whether or not `header` is called again. Each
-override of a component's coding keeps its parsed form: up to about 13
+override of a component's coding keeps its parsed form: up to about 14
 bytes for each byte of `COC`, `QCC` and `RGN` segments. The highest ratio
 is for a one-step `QCC` in a file of at most 256 components, whose
 component index is one byte. With 16384 components the index is two
