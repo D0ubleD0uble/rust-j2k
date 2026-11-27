@@ -63,6 +63,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 The values are the image's samples. Unsigned ones run from 0 to
 2^bit_depth − 1, and signed ones are centered on 0.
 
+To try it on a file, see the
+[examples](https://github.com/D0ubleD0uble/rust-j2k/tree/main/examples):
+`decode` writes a PGM or PPM, and `info` prints a file's header.
+
 To show a `.jp2` image, decode it with
 `DecodeOptions::default().with_color(ColorOutput::Srgb)` through `decode_with`,
 then scale each value to 8 bits; the [`ColorOutput::Srgb`
