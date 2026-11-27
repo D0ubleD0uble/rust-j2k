@@ -707,6 +707,20 @@ refuses; `tests/jp2_box_error_final.rs` checks every prefix. Replay it with
 `cargo +nightly fuzz run header_split
 tests/fixtures/incremental/header_split_jp2c_after_signature_cut_xlbox.seed`.
 
+`incremental/header_split_ftyp_lbox0_after_codestream.seed` (193 bytes,
+SHA-256 `56f2e67590c7b2f6b95c1f5740d758a3fde2cf5ff4d792d7e58450cb17aea658`)
+is a seed of the `header_split` fuzz target, which found it on 2026-11-27
+in the review of #721 (#722). It is committed as found: 12 control bytes, then
+a 4 x 4 gray JP2 file whose codestream ends at its `EOC`, then an `ftyp`
+box of length 0 holding 6 bytes. It was made by the fuzzer, so it has no
+license restriction. `read_header_with` refuses it for the `ftyp`, as
+`opj_decompress` 2.5.0 does ("The ftyp box must be the second box in the
+file"), and `header` holds that fault, as OpenJPEG skips the box once 2^32
+bytes or more follow it. The target built no suffix that long and failed on
+it; `tests/jp2_box_error_final.rs` checks every prefix. Replay it with
+`cargo +nightly fuzz run header_split
+tests/fixtures/incremental/header_split_ftyp_lbox0_after_codestream.seed`.
+
 ### Retry ladder fixtures
 
 `retry_ladder/tile_precincts.j2k` (98 bytes, SHA-256
