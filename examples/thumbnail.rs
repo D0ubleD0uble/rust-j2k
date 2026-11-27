@@ -27,7 +27,7 @@
 //! uses the default limits. A file that needs more is refused, and the error
 //! says which limit; raise it with `decode_with` in your own code.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
@@ -37,12 +37,13 @@ use rust_j2k::{DecodeOptions, Region, Window, decode_with};
 #[path = "common/pnm.rs"]
 mod pnm;
 
+const WHOLE: &str = "a whole number, 0 or more";
 const USAGE: &str = "usage: thumbnail <in.jp2|in.j2k> <levels> \
                      [x0 y0 x1 y1] <out.pgm|out.ppm>";
 
 /// Read one number argument. `want` finishes "<name> must be ".
-fn number<T: FromStr>(arg: &OsString, name: &str, want: &str) -> Result<T, String> {
-    let parsed = arg.to_str().and_then(|s| s.parse().ok());
+fn number<T: FromStr>(a: &OsStr, name: &str, want: &str) -> Result<T, String> {
+    let parsed = a.to_str().and_then(|s| s.parse().ok());
     parsed.ok_or_else(|| format!("{name} must be {want}\n{USAGE}"))
 }
 
@@ -50,7 +51,7 @@ fn run(args: &[OsString]) -> Result<(), String> {
     let (input, levels, window, output) = match args {
         [input, levels, output] => (input, levels, None, output),
         [input, levels, x0, y0, x1, y1, output] => {
-            let edge = |arg, name| number::<u32>(arg, name, "a whole number, 0 or more");
+            let edge = |arg, name| number::<u32>(arg, name, WHOLE);
             let window = Window::new(
                 edge(x0, "x0")?,
                 edge(y0, "y0")?,
