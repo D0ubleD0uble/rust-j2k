@@ -143,7 +143,10 @@ impl<'a> Boxes<'a> {
 
     /// Whether the input ended inside the `XLBox` field of the box
     /// [`cut_kind`](Self::cut_kind) names while it can still be below 16: its
-    /// length, which can still be at fault, is not in yet.
+    /// length, which can still be at fault, is not in yet. Never for a
+    /// top-level `jp2c`, whose length neither faults nor cuts the box at
+    /// any value: an `LBox` of 0 or 2 to 7 and an `XLBox` below 16 run it
+    /// to the end of the file, and a longer length is clamped to the input.
     pub(crate) fn cut_in_length(&self) -> bool {
         self.cut_in_length
     }
@@ -181,15 +184,16 @@ impl<'a> Boxes<'a> {
             }
         };
         self.cut_kind = Some(kind);
+        // The top-level codestream box, whose length OpenJPEG does not use.
+        let codestream = self.open_ended && &kind == b"jp2c";
         // An `XLBox` below 16 is a fault, which bytes still to come can make
-        // only while those in are all 0.
+        // only while those in are all 0. A codestream box's never is.
         self.cut_in_length = lbox == 1
+            && !codestream
             && rest.len() < 16
             && rest.get(8..).is_some_and(|xl| xl.iter().all(|&b| b == 0));
         let name = type_name(kind);
         self.last_open_ended = lbox == 0;
-        // The top-level codestream box, whose length OpenJPEG does not use.
-        let codestream = self.open_ended && &kind == b"jp2c";
 
         // The box's total length (header included) and its header length. A
         // codestream box too short for its own header runs to the end of the

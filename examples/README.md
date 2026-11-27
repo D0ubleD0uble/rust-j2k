@@ -60,5 +60,8 @@ cargo run --example grib2 -- \
     tests/fixtures/jpeg2000_regular_latlon.j2k 270.466796875 -10 0
 ```
 
-`common/pnm.rs` is the PGM and PPM writer the examples share. It is not an
-example.
+`common/pnm.rs` is the PGM and PPM writer the examples share, and
+`common/say.rs` holds `say!` and `say_err!`, which print without panicking
+when the output is piped to a command that exits early, such as `head`.
+Neither is an example. An example you copy needs the `common/` files it
+includes.

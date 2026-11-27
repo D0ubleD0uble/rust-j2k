@@ -311,6 +311,14 @@ fn fault_files() -> Vec<(&'static str, Vec<u8>)> {
             "a jp2h before the ftyp",
             file(&[jp2h.clone(), ftyp.clone(), jp2c.clone()]),
         ),
+        (
+            "a jp2c with a 64-bit length before the ftyp",
+            file(&[xl_jp2c.clone(), ftyp.clone(), jp2h.clone()]),
+        ),
+        (
+            "a jp2h with a 64-bit length before the ftyp",
+            file(&[xl_box(b"jp2h", &jp2h[8..]), ftyp.clone(), jp2c.clone()]),
+        ),
     ]
 }
 
@@ -320,5 +328,59 @@ fn a_resumed_box_walk_matches_a_read_from_the_start_on_each_box_fault() {
         // A walk is kept on some prefix of each, but of a bad `ftyp`.
         let kept = check(name, bytes) > 0;
         assert_eq!(kept, !name.contains("ftyp"), "{name}: kept a walk");
+    }
+}
+
+/// A box whose type is wrong where it stands, cut inside its `XLBox`, gives
+/// the error of its type, and more bytes cannot make the type right: the
+/// fault is final, but where the `XLBox` can still be below 16, a fault a
+/// read of the whole box meets first. That is a box other than `jp2c` whose
+/// `XLBox` is all 0 so far; a top-level `jp2c` with an `XLBox` below 16
+/// runs to the end of the file instead. The positions: the box after the
+/// signature that is not `ftyp`, and a `jp2c` with no `jp2h` before it
+/// (#718).
+#[test]
+fn a_cut_box_of_the_wrong_type_is_final_unless_its_length_can_still_fault() {
+    let ftyp = synth::ftyp_jp2();
+    for (name, before, kind, message) in [
+        (
+            "a jp2c after the signature",
+            &[][..],
+            b"jp2c",
+            "must follow the signature, not `jp2c`",
+        ),
+        (
+            "a jp2h after the signature",
+            &[],
+            b"jp2h",
+            "must follow the signature, not `jp2h`",
+        ),
+        (
+            "a jp2c with no jp2h",
+            &ftyp[..],
+            b"jp2c",
+            "no `jp2h` header box before its `jp2c`",
+        ),
+    ] {
+        // The bytes of the `XLBox` in, and whether one is not 0.
+        for (xl, zeros) in [
+            (&[][..], true),
+            (&[0][..], true),
+            (&[0; 7][..], true),
+            (&[1][..], false),
+            (&[0, 0, 0, 0, 0, 0, 1][..], false),
+        ] {
+            let bytes = file(&[before.to_vec(), header_only(1, kind), xl.to_vec()]);
+            let at = format!("{name}, XLBox {xl:?} so far");
+            let fault = parse_boxes(&bytes, &DecodeOptions::default().packet_work_limit)
+                .err()
+                .unwrap_or_else(|| panic!("{at}: parsed"));
+            let error = format!("{:?}", fault.error);
+            assert!(
+                error.starts_with("FileFormat(") && error.contains(message),
+                "{at}: {error}"
+            );
+            assert_eq!(fault.open, kind != b"jp2c" && zeros, "{at}: open");
+        }
     }
 }

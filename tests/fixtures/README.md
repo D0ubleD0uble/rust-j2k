@@ -696,6 +696,17 @@ All but the first start with `SOC` or the JP2 signature, so the target
 reads them with all-zero control bytes. Their extension keeps them out of
 the sweeps of the fixtures. Replay them with the command above.
 
+`incremental/header_split_jp2c_after_signature_cut_xlbox.seed` (37 bytes,
+SHA-256 `6db1e7df5527f53445ecc9aebb1275437cd71695736c07ea7ec75d77f414c6c3`)
+is a seed of the `header_split` fuzz target, which found it on 2026-11-27
+while gating #717 (#718). It is committed as found: 12 control bytes, then
+the JP2 signature and a `jp2c` box with `LBox` 1, cut 5 bytes into its
+`XLBox`, where the `ftyp` belongs. It was made by the fuzzer, so it has no
+license restriction. `header` waited on it where `read_header_with`
+refuses; `tests/jp2_box_error_final.rs` checks every prefix. Replay it with
+`cargo +nightly fuzz run header_split
+tests/fixtures/incremental/header_split_jp2c_after_signature_cut_xlbox.seed`.
+
 ### Retry ladder fixtures
 
 `retry_ladder/tile_precincts.j2k` (98 bytes, SHA-256
