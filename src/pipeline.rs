@@ -15,6 +15,7 @@
 //! inverse DWT through the color transform to image assembly.
 
 pub(crate) mod decode;
+pub(crate) mod header;
 pub(crate) mod meter;
 mod report;
 
