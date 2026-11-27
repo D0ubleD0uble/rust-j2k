@@ -67,10 +67,10 @@ testing that are not listed here.
    version section and refresh the compare links at the bottom. Consolidate
    duplicate Keep-a-Changelog section headers that accumulated while features
    landed.
-2. Bump `version` in `Cargo.toml` to match, and the `rust-j2k` entry in both
-   lockfiles. Cargo updates `Cargo.lock` on the next build, but not
-   `fuzz/Cargo.lock`, which belongs to the detached fuzz workspace, so edit
-   its `version` line by hand.
+2. Bump `version` in `Cargo.toml` to match, and the `rust-j2k` entry in all
+   three lockfiles. Cargo updates `Cargo.lock` on the next build, but not
+   `fuzz/Cargo.lock` or `scripts/icc_convert/Cargo.lock`, which belong to
+   detached workspaces, so edit their `version` lines by hand.
 3. Update the supported-versions table in `SECURITY.md` to the new minor
    version.
 4. Point the published docs at the release, so docs.rs, crates.io and the

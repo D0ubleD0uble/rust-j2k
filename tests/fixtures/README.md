@@ -415,7 +415,7 @@ script exits non-zero.
 nice -n 19 python3 scripts/check-icc-exhaustive.py [--only SUBSTRING] [--work DIR]
 ```
 
-It builds `examples/icc_convert.rs` with `cargo build --release`, makes its
+It builds `scripts/icc_convert/` with `cargo build --release`, makes its
 three input codestreams with `opj_compress`, and needs the conformance corpus
 for the `icc_variants.json` cases. A full run decodes a 16-million-pixel image
 for each 8-bit case, so expect around twenty minutes of one core; `--work`
