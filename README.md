@@ -65,7 +65,9 @@ The values are the image's samples. Unsigned ones run from 0 to
 
 To try it on a file, see the
 [examples](https://github.com/D0ubleD0uble/rust-j2k/tree/main/examples):
-`decode` writes a PGM or PPM, and `info` prints a file's header.
+`decode` writes a PGM or PPM, `info` prints a file's header, `thumbnail`
+decodes at a smaller size or a window, and `stream` decodes a file fed in
+chunks.
 
 To show a `.jp2` image, decode it with
 `DecodeOptions::default().with_color(ColorOutput::Srgb)` through `decode_with`,

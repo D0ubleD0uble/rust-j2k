@@ -75,10 +75,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Two examples: `cargo run --example decode` writes a decoded file as a PGM
   or PPM, and `cargo run --example info` prints what `read_header` returns.
   `examples/README.md` lists them.
-- Two more examples: `cargo run --example untrusted` shows the default
-  limits, an opt-in retry with `DecodeOptions::raised_for` and a decode with
-  `strict` off for a cut-short file, and `cargo run --example grib2` scales
-  a GRIB2 section 7 codestream to physical values.
+- Two more examples: `cargo run --example thumbnail` decodes at a reduced
+  resolution or a window, and `cargo run --example stream` feeds a file to
+  `IncrementalDecoder` in chunks and prints each refine.
+- The `untrusted` and `grib2` examples: `cargo run --example untrusted`
+  shows the default limits, an opt-in retry with
+  `DecodeOptions::raised_for` and a decode with `strict` off for a
+  cut-short file, and `cargo run --example grib2` scales a GRIB2 section 7
+  codestream to physical values.
 - `docs/stability.md` says what the API covers within a minor version and
   what can change: message and `Display` text, which fault is reported
   first, and the default limit values (raised in any release, lowered only
@@ -295,18 +299,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- sRGB output no longer builds its 98 KB shaper table on the stack, which
+  could overflow a thread with a small stack (#683).
 - `IncrementalDecoder::header` called after every feed no longer reads the
   whole input again on each call while the main header is still coming in.
   Each call goes on from the last whole box before the codestream and the
   last whole marker segment of the main header, so the calls read a large
   `PPM` main header, or many boxes before the `jp2c`, about once in all. A
   256 KiB `PPM` main header fed 256 bytes at a time was walked 506 times
-  over and is now walked once. The headers and errors it returns are
-  unchanged. Once the main header is whole, each call still parses it.
-  While it is cut short, the decoder holds what its segments read so far
-  set: up to about 14 bytes for each byte of `COC`, `QCC` and `RGN`
-  segments, about 12 MB at most, plus 24 bytes for each `PPM` segment,
-  1.6 MB at most.
+  over and is now walked once. Each call still reads from the start when a
+  box of length 0 comes before the codestream, or when the `jp2c` box ends
+  inside its own main header and the bytes after it do not parse as more
+  of that header. The headers and errors it returns are unchanged. Once
+  the main header is whole, each call still parses it. While it is cut
+  short, the decoder holds what its segments read so far set: up to about
+  20 bytes for each byte of `COC`, `QCC` and `RGN` segments, plus under
+  1 KB and 4 bytes for each component, and 24 to 48 bytes for each `PPM`
+  segment, as their table grows by doubling. That is about 13 MB at most
+  (#682).
 - A JP2 file padded with boxes holds less memory while its boxes are read.
   The boxes after the codestream are held once instead of twice, and a box
   the decoder neither reads nor reports (an unknown box, a JPX box, an

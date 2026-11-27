@@ -17,6 +17,24 @@ quality layers, and the JP2 metadata:
 cargo run --example info -- tests/fixtures/jp2_metadata_boxes.jp2
 ```
 
+`thumbnail` decodes at a smaller size, and optionally only a window, with
+`with_resolution_reduction` and `with_region`. The first command drops 2
+levels (a quarter of each side), the second drops 1 level of a window:
+
+```sh
+cargo run --example thumbnail -- \
+    tests/fixtures/precincts_varied_sizes_lossless.j2k 2 thumb.ppm
+cargo run --example thumbnail -- \
+    tests/fixtures/precincts_varied_sizes_lossless.j2k 1 16 8 112 88 part.ppm
+```
+
+`stream` feeds a file to `IncrementalDecoder` in chunks and prints each
+refine as the bytes arrive:
+
+```sh
+cargo run --example stream -- tests/fixtures/layers/lrcp.j2k 100
+```
+
 `untrusted` decodes a file from a source you don't trust. It uses the
 default limits, prints the details of a limit refusal, and retries past it
 only with `--allow-raise`, by a factor of at most 4. A cut-short file is
