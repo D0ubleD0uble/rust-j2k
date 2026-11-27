@@ -183,6 +183,12 @@ different error from the one `refine` gave.
 the first and with `Waiting::Held { error }` for the second. `finish`
 reports the held fault once the input ends.
 
+### The minimum Rust version
+
+The crate needs Rust 1.87 or newer (`rust-version` in `Cargo.toml`). The
+minimum rises only in a minor release, so a patch release never needs a
+newer Rust than its minor release did.
+
 ## What is not covered
 
 These can change in any release:
@@ -197,8 +203,6 @@ These can change in any release:
 - **Which fault wins.** When an input has more than one fault, which one is
   reported, including its variant. The rustdoc of `Error` lists what holds
   today.
-- **The minimum Rust version.** It is 1.87 (`rust-version` in
-  `Cargo.toml`). No policy is set for raising it.
 - **The hidden `fuzz` module** and the `__fuzz` feature it needs. They exist
   for the crate's own fuzz targets and tests, and are not part of the API.
 
