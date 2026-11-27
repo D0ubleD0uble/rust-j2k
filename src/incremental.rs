@@ -4,7 +4,8 @@
 use std::fmt;
 use std::sync::{Mutex, PoisonError, TryLockError};
 
-use crate::pipeline::decode::{HeaderCache, check_options, decode_metered, read_header_streamed};
+use crate::pipeline::decode::{check_options, decode_metered};
+use crate::pipeline::header::{HeaderCache, read_header_streamed};
 use crate::pipeline::meter::{Ledger, Refusal, Spent, lifts_with_bytes};
 use crate::{DecodeOptions, Error, Header, Image, LimitDetail, Region, Result, decode_with, jp2};
 #[cfg(doc)]

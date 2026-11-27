@@ -320,7 +320,7 @@ had none, has another order of packets or reads them from elsewhere, so its
 walk starts again.
 
 `header` keeps what its last call found for the tiles over a cap under the
-main header, in `pipeline::decode::HeaderCache`: the walk of the tile-parts,
+main header, in `pipeline::header::HeaderCache`: the walk of the tile-parts,
 where it stopped, the first tile-part offset of each tile it reached, and
 the counts of each tile's own header once that tile-part is whole. A later
 call goes on from there, so the calls after each feed read each `SOT` about
@@ -328,7 +328,7 @@ once in all. Once the main header is whole, each call also parses it
 again, so a call costs the main header (`PPM` data included) plus the
 tile-parts fed since. While the bytes fed end before the main header is
 whole, a call goes on from where the last one stopped instead, in
-`pipeline::decode::KeptCut`: after the last whole box before a JP2 file's
+`pipeline::header::KeptCut`: after the last whole box before a JP2 file's
 `jp2c`, and after the main header's last whole marker segment, with what
 the segments before it set (`PPM` data as offsets, not a copy). The calls
 then read those boxes and segments about once in all. Two cases are read from
