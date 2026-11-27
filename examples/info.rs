@@ -78,6 +78,10 @@ fn describe(res: Option<Res>) -> String {
     )
 }
 
+fn show_count<T>(what: &str, boxes: &[T]) {
+    println!("  {what}: {}", boxes.len());
+}
+
 fn print_jp2(jp2: &Jp2Metadata) {
     println!("JP2 metadata:");
     match &jp2.color {
@@ -103,15 +107,10 @@ fn print_jp2(jp2: &Jp2Metadata) {
     }
     println!("  capture resolution: {}", describe(jp2.resolution.capture));
     println!("  display resolution: {}", describe(jp2.resolution.display));
-    let counts = [
-        ("xml", jp2.xml.len()),
-        ("uuid", jp2.uuid.len()),
-        ("intellectual property", jp2.ipr.len()),
-        ("uuid info", jp2.uuid_info.len()),
-    ];
-    for (kind, count) in counts {
-        println!("  {kind} boxes: {count}");
-    }
+    show_count("xml boxes", &jp2.xml);
+    show_count("UUID boxes", &jp2.uuid);
+    show_count("intellectual property boxes", &jp2.ipr);
+    show_count("UUID info boxes", &jp2.uuid_info);
     let ft = &jp2.file_type;
     let codes = ft.compatibility.iter().map(|b| fourcc(*b));
     let compatible: Vec<_> = codes.collect();
