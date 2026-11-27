@@ -127,9 +127,12 @@ pub(crate) struct Jp2File<'a> {
     /// cannot be found from the tile-part lengths (see [`after::codestream_end`]
     /// and [`locate_codestream`]).
     pub(crate) codestream: &'a [u8],
-    /// The other top-level boxes before the codestream (`xml `, `uuid`, `rreq`
-    /// and the like, and header boxes misplaced before `jp2h`, which OpenJPEG
-    /// ignores), in file order.
+    /// The other top-level boxes before the codestream that [`passthrough`]
+    /// reads, in file order: the `xml `, `uuid`, `jp2i` and `uinf` boxes and
+    /// the first `rreq` ([`Reported`]). The rest (header boxes misplaced
+    /// before `jp2h`, which OpenJPEG ignores, the JPX boxes and unknown ones)
+    /// are skipped without a record, so padding of such boxes holds no
+    /// memory.
     pub(crate) other: Vec<Jp2Box<'a>>,
     /// The whole boxes after the codestream, from just after its last
     /// tile-part, as far as OpenJPEG's walk there follows them (see
@@ -140,8 +143,10 @@ pub(crate) struct Jp2File<'a> {
     /// the same way. Their `xml `, `uuid`, `jp2i` and `uinf` boxes are
     /// reported, like those in `other`. This differs from `after_codestream`
     /// when the box is longer than its codestream: padding inside the box is
-    /// skipped by its length here.
-    pub(crate) after_box: Vec<Jp2Box<'a>>,
+    /// skipped by its length here. `None` when the two walks start at the
+    /// same byte, so the boxes are held once, in `after_codestream`; read
+    /// them through [`Jp2File::after_box`].
+    pub(crate) after_box: Option<Vec<Jp2Box<'a>>>,
     /// Whether OpenJPEG reads the boxes after the codestream: true when the
     /// codestream's end was found from its tile-part lengths. When the last
     /// tile-part has `Psot = 0`, OpenJPEG runs it to the end of the file and
@@ -172,6 +177,33 @@ pub(crate) struct Jp2File<'a> {
     /// ([`boxes::Boxes::last_was_whole`]). Then the decode's answer is
     /// final, as a raw codestream's is once it closes.
     pub(crate) codestream_fixed: bool,
+}
+
+impl<'a> Jp2File<'a> {
+    /// The whole boxes after both the codestream and the `jp2c` box (see
+    /// [`Jp2File::after_box`](field@Jp2File::after_box)).
+    pub(crate) fn after_box(&self) -> &[Jp2Box<'a>] {
+        self.after_box.as_deref().unwrap_or(&self.after_codestream)
+    }
+}
+
+/// Picks the top-level boxes before the codestream that [`passthrough`]
+/// reads, so that [`Jp2File::other`] holds a record for those alone.
+#[derive(Default)]
+struct Reported {
+    /// Whether an `rreq` has been kept: only the first is read.
+    rreq: bool,
+}
+
+impl Reported {
+    /// Whether to keep a box of type `kind`, met in file order.
+    fn keeps(&mut self, kind: [u8; 4]) -> bool {
+        match &kind {
+            b"xml " | b"uuid" | b"jp2i" | b"uinf" => true,
+            b"rreq" => !core::mem::replace(&mut self.rreq, true),
+            _ => false,
+        }
+    }
 }
 
 /// A fault of the boxes, and whether more bytes can change it.
@@ -275,6 +307,7 @@ pub(crate) fn parse_boxes<'a>(
 
     let mut header: Option<Jp2Header<'_>> = None;
     let mut other = Vec::new();
+    let mut reported = Reported::default();
     // Whether a box with length 0 ("to the end of the file") was read, for the
     // message when it swallowed the boxes meant to follow it, and whether it
     // was the `ftyp` or a `jp2h`, whose contents more bytes can still fault.
@@ -314,11 +347,8 @@ pub(crate) fn parse_boxes<'a>(
                 let after = walk_after_codestream(rest);
                 // Both are ends of the file; the shorter starts later.
                 let past_box = boxes.rest();
-                let after_box = if past_box.len() < rest.len() {
-                    walk_after_codestream(past_box).boxes
-                } else {
-                    after.boxes.clone()
-                };
+                let after_box =
+                    (past_box.len() < rest.len()).then(|| walk_after_codestream(past_box).boxes);
                 return Ok(Jp2File {
                     file_type,
                     header,
@@ -342,7 +372,7 @@ pub(crate) fn parse_boxes<'a>(
                 let taken = header
                     .as_mut()
                     .is_some_and(|header| header.add_misplaced(item));
-                if !taken {
+                if !taken && reported.keeps(item.kind) {
                     other.push(item);
                 }
             }
@@ -699,7 +729,7 @@ struct Passthrough {
 fn passthrough(file: &Jp2File<'_>) -> Passthrough {
     let mut out = Passthrough::default();
     let mut rreq_seen = false;
-    for item in file.other.iter().chain(&file.after_box) {
+    for item in file.other.iter().chain(file.after_box()) {
         match &item.kind {
             b"xml " => out.xml.push(XmlBox {
                 payload: item.payload.to_vec(),
