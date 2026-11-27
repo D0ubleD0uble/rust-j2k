@@ -63,6 +63,7 @@ costly API choices a second reader finds.
 rustup update stable
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
+cargo clippy --lib -- -D warnings
 cargo test
 cargo deny check
 ```
@@ -319,12 +320,12 @@ and there is no `.git` next to `Cargo.toml`. In the repository the test fails
 instead if a fixture is missing, and a missing marker in a git checkout panics,
 so a moved marker turns every CI job red. A packaged crate, `cargo vendor`
 output and a distro build have no `.git`, so they skip, whatever `CI` is set
-to. A test skips all of its fixtures at once, so a
-test that mixes packaged and excluded fixtures does not run on the packaged
-ones. The shared helper is `tests/support/skip.rs`. Cargo can reuse a stale
-build of the crate from an earlier unpack at the same path, which gives
-failures that are not real, so run `cargo clean -p rust-j2k` in the unpacked
-directory before `cargo test`.
+to. A test that reads only excluded fixtures skips whole. A test that
+mixes packaged and excluded fixtures skips only the excluded entries, each
+with its own line, and runs the rest. The shared helper is
+`tests/support/skip.rs`. Cargo can reuse a stale build of the crate from an
+earlier unpack at the same path, which gives failures that are not real, so
+run `cargo clean -p rust-j2k` in the unpacked directory before `cargo test`.
 
 **Cost:** a few minutes, plus a second build of the crate and its tests.
 

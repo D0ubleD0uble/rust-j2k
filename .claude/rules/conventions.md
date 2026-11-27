@@ -20,6 +20,7 @@ or machine paths.
 ## Quality gates (must pass before opening a PR)
 - `cargo fmt --all -- --check`
 - `cargo clippy --all-targets -- -D warnings`
+- `cargo clippy --lib -- -D warnings`
 - `cargo test`
 - `cargo deny check`
 

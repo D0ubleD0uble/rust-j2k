@@ -59,19 +59,20 @@ fn cod_layers(bytes: &[u8]) -> u16 {
 /// `jp2_real/byte.jp2` 12, `jp2_palette_8bit.jp2` 3.
 #[test]
 fn read_header_reports_the_layer_count_opj_dump_prints() {
-    if support::skip::excluded() {
-        return;
-    }
-    let cases: [(PathBuf, u16); 7] = [
-        (fixtures().join("layers/lrcp.j2k"), 4),
-        (fixtures().join("layers/pterm_cut.j2k"), 2),
-        (fixtures().join("multilayer_lossless.j2k"), 3),
-        (fixtures().join("irreversible_lossy.j2k"), 1),
-        (fixtures().join("jp2_cdef_rgba.jp2"), 1),
-        (fixtures().join("jp2_real/byte.jp2"), 12),
-        (fixtures().join("jp2_palette_8bit.jp2"), 3),
+    let cases: [(&str, u16); 7] = [
+        ("layers/lrcp.j2k", 4),
+        ("layers/pterm_cut.j2k", 2),
+        ("multilayer_lossless.j2k", 3),
+        ("irreversible_lossy.j2k", 1),
+        ("jp2_cdef_rgba.jp2", 1),
+        ("jp2_real/byte.jp2", 12),
+        ("jp2_palette_8bit.jp2", 3),
     ];
-    for (path, numlayers) in cases {
+    for (rel, numlayers) in cases {
+        if support::skip::excluded_path(rel) {
+            continue;
+        }
+        let path = fixtures().join(rel);
         let header =
             read_header(&read(&path)).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert_eq!(header.quality_layers, numlayers, "{}", path.display());
@@ -239,11 +240,11 @@ fn part4_codestreams_match_openjpeg_at_each_cap() {
 /// the small codestreams, to keep the test short.
 #[test]
 fn a_cap_at_or_past_the_layer_count_is_no_cap() {
-    if support::skip::excluded() {
-        return;
-    }
     let mut paths: Vec<PathBuf> = Vec::new();
     for dir in ["", "conformance/codestreams", "layers"] {
+        if !dir.is_empty() && support::skip::excluded_path(&format!("{dir}/")) {
+            continue;
+        }
         for entry in std::fs::read_dir(fixtures().join(dir)).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().is_some_and(|e| e == "j2k") {
@@ -252,7 +253,13 @@ fn a_cap_at_or_past_the_layer_count_is_no_cap() {
         }
     }
     paths.sort();
-    assert!(paths.len() > 60, "{} codestreams", paths.len());
+    // The packaged codestreams are the 56 of `tests/fixtures/` and `layers/`.
+    let floor = if support::skip::is_excluded_path("conformance/") {
+        50
+    } else {
+        60
+    };
+    assert!(paths.len() > floor, "{} codestreams", paths.len());
     let unlimited = |options: DecodeOptions| {
         options
             .with_packet_work_limit(WorkLimit::Unlimited)
