@@ -3,13 +3,14 @@
 //! codestream run past 2^32 bytes, which OpenJPEG skips unread, and those
 //! bytes also raise the default sample limit.
 //!
-//! On `header_split_lbox0_after_codestream_cap_lifts_tile_part_fault.seed`,
+//! On `header_split_colr_lbox0_after_codestream_cap_lifts_tile_part_fault.seed`,
 //! at a feed of 2999 bytes, `read_header_with` refuses a tile over a cap and
-//! so meets a tile-part fault, which the walk gives. A raised limit counts
-//! no tile over a cap, and the fault is not met. `header` holds it, as a box
-//! after the codestream can still be read, and 2^32 more bytes take it away.
-//! Under [`SampleLimit::AtMost`] no byte raises the limit, so the same fault
-//! is final, and `replaceable` must find no suffix there.
+//! so meets a tile-part fault, which it gives. A raised limit counts no tile
+//! over a cap, and the fault is not met. The input ends inside a `colr` of
+//! length 0 after the codestream, so `header` holds the fault, and 2^32
+//! more bytes take it away. Under [`SampleLimit::AtMost`] no byte raises the
+//! limit, so the same fault is final, and `replaceable` must find no suffix
+//! there.
 
 #[path = "support/inconsistent.rs"]
 mod inconsistent;
@@ -20,7 +21,7 @@ mod replaceable;
 #[path = "support/synth.rs"]
 mod synth;
 
-use rust_j2k::{DecodeOptions, Error, SampleLimit, read_header_with};
+use rust_j2k::{DecodeOptions, Error, IncrementalDecoder, SampleLimit, read_header_with};
 
 /// The seed's file and the options its piece stream sets by the feed that
 /// ends at `fed`: the reduction of its first control byte, then the
@@ -53,7 +54,7 @@ fn at_feed(name: &str, fed: usize) -> (Vec<u8>, DecodeOptions) {
     (data[..fed].to_vec(), options)
 }
 
-const SEED: &str = "header_split_lbox0_after_codestream_cap_lifts_tile_part_fault";
+const SEED: &str = "header_split_colr_lbox0_after_codestream_cap_lifts_tile_part_fault";
 
 const FAULT: &str = "tile 28 tile-part index is 2, but 0 of its tile-parts have been read";
 
@@ -68,8 +69,9 @@ fn fault_of<T>(result: Result<T, Error>) -> Option<&'static str> {
 
 /// At 2999 bytes the read meets the fault under the default limit and not
 /// under a raised one, and `replaceable` finds that the 2^32 bytes that
-/// skip the box of length 0 change it. Before it read that stand-in under
-/// the limit those bytes give, it found no suffix, and the target failed.
+/// skip the `colr` of length 0 change it. Before it read that stand-in
+/// under the limit those bytes give, it found no suffix, and the target
+/// failed.
 #[test]
 fn a_tile_part_fault_met_through_a_cap_gives_way_to_the_bytes_that_skip_the_box() {
     let (prefix, options) = at_feed(SEED, 2999);
@@ -80,6 +82,10 @@ fn a_tile_part_fault_met_through_a_cap_gives_way_to_the_bytes_that_skip_the_box(
     assert!(read(&options.clone().with_sample_limit(SampleLimit::Unlimited)).is_none());
     assert!(read(&options.clone().with_sample_limit(SampleLimit::Raised(2))).is_none());
     assert!(replaceable::replaceable(&prefix, &options));
+    // The decoder holds it there, which is what the seed tests.
+    let mut decoder = IncrementalDecoder::new(options).unwrap();
+    decoder.feed(&prefix);
+    assert!(matches!(decoder.header(), Ok(Some(_))));
 }
 
 /// Under `AtMost(2^29)` the read meets the same fault, and no byte raises

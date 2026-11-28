@@ -779,34 +779,44 @@ too. `the_header_split_seeds_of_726_keep_their_piece_streams` checks that
 the two #726 seeds still change the reduction where they were made to,
 through the target's own piece stream (`tests/support/pieces.rs`).
 
-`incremental/header_split_lbox0_after_codestream_cap_lifts_tile_part_fault.seed`
+`incremental/header_split_lbox0_after_codestream_tile_part_fault.seed`
 (3184 bytes, SHA-256
 `d3a007c52f2817d53ba8d234183623bf17d72e2a5c188b8ec82dfa6c4bbca282`) is a
 seed of the `header_split` fuzz target, which found it on 2026-11-27 while
-gating #726; it is committed as minimized there and reported in #730. It
+gating #726. It is committed as minimized there and reported in #730. It
 was made by the fuzzer, so it has no license restriction. It holds 12
 control bytes, then a gray JP2 file of 64 tiles 1040 x 512 in which a
 tile-part of tile 28 with index 2 comes before any other of that tile's,
-then,
-after the `EOC`, a box of 520 bytes and a box of length 0. At a feed of
-2999 bytes, under a reduction of 1 and a layer cap of 1, `read_header_with`
-counts a tile over a cap under the default sample limit, so it meets the
-tile-part fault ("tile 28 tile-part index is 2, but 0 of its tile-parts
-have been read") and gives it. Under `SampleLimit::Raised(2)` or
-`Unlimited` it gives the header. `header` holds the fault, as a box after
-the codestream can still be read, and it is right to: past 2^32 bytes
-OpenJPEG skips the box of length 0, and those bytes raise the default
-limit. The target's `replaceable` now reads the input up to that box
-under the limit they raise it to (`Unlimited`, or an `AtMost` ceiling
-unchanged); before, it failed on the seed. `tests/header_split_sample_limit.rs`
-checks this at that feed, and that under `AtMost(2^29)` the same fault is
-final.
+then, after the `EOC`, a box of 520 bytes and a box of length 0 of type
+`00 00 00 00`. At a feed of 2999 bytes, under a reduction of 1 and a layer
+cap of 1, `read_header_with` counts a tile over a cap under the default
+sample limit, so it meets the tile-part fault ("tile 28 tile-part index is
+2, but 0 of its tile-parts have been read") and gives it. Under
+`SampleLimit::Raised(2)` or `Unlimited` it gives the header. When it was
+found, `header` held the fault, as a box after the codestream could still
+be read, and the target failed on it. Since #725, a box of length 0 of a
+type the decode does not check there ends the walk for good, and `header`
+gives the fault at once.
+
+`incremental/header_split_colr_lbox0_after_codestream_cap_lifts_tile_part_fault.seed`
+(3184 bytes, SHA-256
+`3211a1a6037b49a5bb25f9b580cdfad7e9704bdc0903f2bb74483e601dc09091`) is
+that seed with the box of length 0 made a `colr` holding `METH` 1 and
+`EnumCS` 17, then zeros, written by a one-off script (#730). The decode
+checks a `colr` there, so `header` still holds the fault, and it is right
+to: past 2^32 bytes OpenJPEG skips the box, and those bytes raise the
+default limit. The target's `replaceable` reads the input up to that box
+under the limit they raise it to (`Unlimited`, or an `AtMost` ceiling as it
+is). Without that, the target fails on the seed at 2999 bytes.
+`tests/header_split_sample_limit.rs` checks this at that feed, and that
+under `AtMost(2^29)` the same fault is final. It is synthetic, so it has
+no license restriction.
 
 `incremental/header_split_psot0_tile_part_fault_at_most.seed` (3184 bytes,
 SHA-256
 `29c6b166cca12318e842b1512757a6fcaa2c28aeb9fc8438e5d3ec297afcab6e`) is the
-seed above with control byte 1 set to `06` and byte 4 to `ff`, so the
-sample limit is `AtMost(1 + 255 * 2^16)`, and the `Psot` of the last
+first of these seeds with control byte 1 set to `06` and byte 4 to `ff`, so
+the sample limit is `AtMost(1 + 255 * 2^16)`, and the `Psot` of the last
 tile-part (tile 63's fourth) set to 0, written by a one-off script (#730).
 Its codestream then runs to the end of the input, no box after it is read,
 and no byte raises the limit, so the tile-part fault the cap count meets is
