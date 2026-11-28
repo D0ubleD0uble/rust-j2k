@@ -56,6 +56,10 @@ jobs:
       - run: cargo test --all-targets
       - name: Doc tests
         run: cargo test --doc
+      # The small-stack sRGB test catches a table built on the stack only at
+      # opt-level 0; the test profile's opt-level 1 hides it (tests/srgb_small_stack.rs).
+      - name: Small-stack sRGB test at opt-level 0
+        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo test --test srgb_small_stack
 
   msrv:
     name: msrv

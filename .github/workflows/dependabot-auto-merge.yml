@@ -3,7 +3,7 @@ name: Dependabot auto-merge
 # Enable auto-merge for low-risk Dependabot updates so they land without manual
 # babysitting once CI is green. Branch protection still gates the actual merge
 # on the required checks, and Dependabot keeps the branch rebased while it waits.
-# Higher-risk bumps stay manual (see the gate below).
+# Higher-risk bumps stay manual (see the gates below).
 #
 # Runs on pull_request_target so the GITHUB_TOKEN has write scope (Dependabot
 # PRs otherwise get a read-only token). This is safe because the job never
@@ -20,19 +20,34 @@ jobs:
   auto-merge:
     name: Enable auto-merge for low-risk updates
     runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]'
+    # Gate on both the PR author and github.actor. On pull_request_target the
+    # actor is whoever caused the event, so the author check stops Dependabot
+    # acting on a PR someone else opened, and the actor check stops a person
+    # who pushes to or reopens a Dependabot PR from turning auto-merge on.
+    # A re-run keeps the original actor.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.actor == 'dependabot[bot]'
     steps:
       - name: Fetch Dependabot metadata
         id: meta
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3
 
-      # Auto-merge patch bumps only. Anything wider — dev-dependency minors
-      # included — stays manual: dev dependencies run inside CI with access to
-      # its secrets, so a compromised minor is not low-risk. For grouped PRs
-      # the update-type reflects the highest-risk member, so the gate stays
-      # conservative.
+      # Auto-merge cargo patch bumps only. Anything wider (dev-dependency
+      # minors included) stays manual: dev dependencies run inside CI with
+      # access to its secrets, so a compromised minor is not low-risk. For
+      # grouped PRs the update-type reflects the highest-risk member, so the
+      # gate stays conservative.
+      #
+      # Every other ecosystem stays manual, patches included. GitHub Actions
+      # bumps change code that runs in CI, and some of those actions run in
+      # the publish job with id-token and contents write access. fetch-metadata
+      # reads package-ecosystem from the branch name (dependabot/cargo/...),
+      # so cargo is "cargo" and Actions is "github_actions".
       - name: Enable auto-merge
-        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        if: >-
+          steps.meta.outputs.package-ecosystem == 'cargo' &&
+          steps.meta.outputs.update-type == 'version-update:semver-patch'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}

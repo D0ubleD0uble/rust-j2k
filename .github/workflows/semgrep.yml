@@ -20,8 +20,13 @@ jobs:
     # SARIF upload to GitHub Code Scanning needs either a public repo or GitHub
     # Advanced Security. Skip until the repo is public.
     if: github.event.repository.visibility == 'public'
+    # Pinned by digest like every other dependency here. Dependabot can't bump
+    # it: the docker ecosystem reads only Dockerfiles and Kubernetes/Helm
+    # YAML, and the github-actions ecosystem reads only `uses:` references.
+    # Bump by hand: take the digest of the newest tag at least 7 days old (the
+    # Dependabot cooldown) from Docker Hub.
     container:
-      image: semgrep/semgrep
+      image: semgrep/semgrep:1.186.0@sha256:6e1b04340e60e910fbb4ddbf3c857ab0918f064417ad5ac530014ccb3cf8c8f1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
