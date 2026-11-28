@@ -322,8 +322,9 @@ pub(crate) struct AfterCodestream<'a> {
     /// `LBox` 0 and runs to the end.
     pub(crate) open: bool,
     /// Whether the walk stopped for good on bytes already in, so no byte
-    /// appended to the input reaches it: at a `jp2c`, or at an `XLBox` of
-    /// 2^32 or more.
+    /// appended to the input reaches it: at a `jp2c`, at an `XLBox` of 2^32
+    /// or more, or at a box of length 0 with 2^32 bytes or more from its
+    /// start.
     pub(crate) ended: bool,
 }
 
@@ -360,10 +361,14 @@ pub(crate) fn walk_after_codestream(mut rest: &[u8]) -> AfterCodestream<'_> {
             // OpenJPEG cannot hold a box over 2^32 bytes, and ends its walk
             // there with no error. So a box of length 0 is read only while
             // under 2^32 bytes follow, and more bytes can always take its
-            // fault away.
+            // fault away. Past that, more bytes leave it past 2^32, so the
+            // walk ends there for good.
             0 => match u32::try_from(rest.len()) {
                 Ok(length) => (length, 8),
-                Err(_) => break None,
+                Err(_) => {
+                    ended = true;
+                    break None;
+                }
             },
             1 => match rest.get(8..16) {
                 Some(&[0, 0, 0, 0, l0, l1, l2, l3]) => (u32::from_be_bytes([l0, l1, l2, l3]), 16),

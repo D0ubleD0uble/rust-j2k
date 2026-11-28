@@ -936,7 +936,11 @@ final_at_once! {
 fn check_final(index: usize) {
     let shapes = final_shapes();
     assert_eq!(shapes.len(), 13, "a shape with no test");
-    let (name, bytes, options, after) = shapes.into_iter().nth(index).expect("a shape");
+    check_final_shape(shapes.into_iter().nth(index).expect("a shape"));
+}
+
+/// The checks of [`final_at_once!`] on one shape.
+fn check_final_shape((name, bytes, options, after): FinalShape) {
     let settled = bytes.len() - after;
     let lenient = options.clone().with_strict(false);
     let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
@@ -1472,4 +1476,150 @@ fn the_header_split_seeds_of_726_keep_their_piece_streams() {
     let early = feeds("header_split_ftyp_cut_after_refused_reduction");
     assert_eq!(changes(&early), [(97, reduction(2))]);
     assert!(early.iter().any(|feed| (168..187).contains(&feed.to)));
+}
+
+/// Boxes of length 0 after the codestream of a type the decode does not
+/// check there, each after an error that comes before them: an sRGB
+/// refusal, or a fault in a tile-part header. No box can follow such a box,
+/// and its contents never fault, so the error is final once its type is in
+/// (#725). Each comes with how many bytes of it settle the error: those
+/// after the box's header.
+fn unread_after_shapes() -> Vec<FinalShape> {
+    let xml = open_box(b"xml ", b"<a/>");
+    vec![
+        (
+            "an sRGB refusal, then an xml of length 0 after the codestream",
+            cmyk_file(None, &xml),
+            srgb(),
+            4,
+        ),
+        (
+            "a fault in a tile-part header, then an xml of length 0",
+            tile_part_file(&coc_fault(), &xml),
+            DecodeOptions::default(),
+            4,
+        ),
+    ]
+}
+
+/// [`final_at_once!`] on [`unread_after_shapes`].
+macro_rules! final_at_once_unread {
+    ($($test:ident: $index:expr,)*) => {$(
+        #[test]
+        fn $test() {
+            let shapes = unread_after_shapes();
+            assert_eq!(shapes.len(), 2, "a shape with no test");
+            check_final_shape(shapes.into_iter().nth($index).expect("a shape"));
+        }
+    )*};
+}
+
+final_at_once_unread! {
+    an_srgb_refusal_before_an_xml_of_length_0_is_final: 0,
+    a_tile_part_fault_before_an_xml_of_length_0_is_final: 1,
+}
+
+/// The types of a box of length 0 after the codestream that leave an
+/// error before it final: types the decode does not check there, `ihdr`
+/// among them.
+const UNREAD: [&[u8; 4]; 9] = [
+    b"xml ", b"uuid", b"jp2i", b"res ", b"uinf", b"rreq", b"ihdr", b"free", b"jp2x",
+];
+
+/// The types of a box of length 0 after the codestream that the decode
+/// checks there, whose contents, or whose absence past 2^32 bytes, can
+/// change the error, each with contents that pass in a gray file where the
+/// type allows: a `jp2h` with an `ihdr`, a gray `colr`, a `bpcc` for one
+/// component, a first `pclr`, a `cdef`. The signature box, the `ftyp` and
+/// a `cmap` with no `pclr` are at fault on their type.
+fn checked_after() -> [(&'static [u8; 4], Vec<u8>); 8] {
+    [
+        (b"jP  ", vec![0x0D, 0x0A, 0x87, 0x0A]),
+        (b"ftyp", b"jp2 \0\0\0\0jp2 ".to_vec()),
+        (b"jp2h", synth::ihdr_for(&codestream(1))),
+        (b"colr", synth::colr_enum(17)),
+        (b"bpcc", vec![7]),
+        (b"pclr", PCLR.to_vec()),
+        (b"cmap", CMAP.to_vec()),
+        (b"cdef", CDEF.to_vec()),
+    ]
+}
+
+/// A fault in a tile-part header, then a box of length 0 of each type, fed
+/// whole and then with more bytes. After each of [`UNREAD`], holding 2
+/// bytes that would be at fault in a `colr`, `refine` gives the fault at
+/// once and `header` what `read_header_with` gives, and more bytes change
+/// neither. After each of [`checked_after`], `header` gives the header and
+/// `refine` waits on `Held`, though the box passes where its type allows:
+/// more bytes can bring a fault in it, as they do to a `bpcc` and a `jp2h`
+/// here.
+#[test]
+fn an_error_before_a_box_of_length_0_is_final_only_for_a_type_not_checked() {
+    let lenient = DecodeOptions::default().with_strict(false);
+    let unread = UNREAD.iter().map(|kind| (*kind, vec![1, 0], true));
+    let checked = checked_after().into_iter();
+    for (kind, payload, final_at_once) in unread.chain(checked.map(|(k, p)| (k, p, false))) {
+        let name = String::from_utf8_lossy(&kind[..]).into_owned();
+        let bytes = tile_part_file(&coc_fault(), &open_box(kind, &payload));
+        let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
+        let fault = [b"bpcc", b"jp2h"].contains(&kind).then(|| {
+            let more = [&bytes[..], &synth::bx(b"colr", &[1, 0])].concat();
+            error_of(&decode_with(&more, &lenient)).expect("an error")
+        });
+        assert!(fault.is_none_or(|fault| fault != whole), "{name}: {whole}");
+        let whole_header = error_of(&read_header_with(&bytes, &lenient));
+        if final_at_once {
+            assert!(whole.contains("COC"), "{name}: {whole}");
+        }
+        for strict in [false, true] {
+            let mut decoder =
+                IncrementalDecoder::new(lenient.clone().with_strict(strict)).expect("valid");
+            for (fed, piece) in [&bytes[..], &gray(), &[0; 64]].into_iter().enumerate() {
+                decoder.feed(piece);
+                let at = format!("`{name}`, strict {strict}, then {} bytes", piece.len());
+                if final_at_once {
+                    assert_eq!(error_of(&decoder.header()), whole_header, "{at}: header");
+                    assert_eq!(error_of(&decoder.refine()), Some(whole.clone()), "{at}");
+                } else {
+                    assert!(matches!(decoder.header(), Ok(Some(_))), "{at}: header");
+                    match decoder.refine() {
+                        Ok(Refined::Waiting(Waiting::Held { .. })) => {}
+                        // Too few bytes since the last decode for another.
+                        Ok(Refined::Waiting(Waiting::MoreBytes { .. })) if fed > 0 => {}
+                        other => panic!("{at}: {other:?}"),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Why [`unread_after_shapes`] are final at any length: with 2^32 bytes or
+/// more after the codestream, OpenJPEG skips the box of length 0 there
+/// unread, and the decode gives the same error. So it does after a box of
+/// length 0 of each of [`UNREAD`]. The zeros are allocated lazily and only
+/// the start is written, so the test needs little memory.
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn an_error_before_a_box_of_length_0_not_checked_stays_past_2_32_bytes() {
+    let mut shapes = unread_after_shapes();
+    for kind in UNREAD {
+        shapes.push((
+            "a fault in a tile-part header, then a box of length 0",
+            tile_part_file(&coc_fault(), &open_box(kind, &[1, 0])),
+            DecodeOptions::default(),
+            0,
+        ));
+    }
+    for (name, bytes, options, _) in &shapes {
+        let lenient = options.clone().with_strict(false);
+        let whole = error_of(&decode_with(bytes, &lenient)).expect("an error");
+        let mut padded = vec![0u8; bytes.len() + (1 << 32) + 16];
+        padded[..bytes.len()].copy_from_slice(bytes);
+        assert_eq!(
+            error_of(&decode_with(&padded, &lenient)),
+            Some(whole),
+            "{name}, {bytes:?}"
+        );
+    }
 }

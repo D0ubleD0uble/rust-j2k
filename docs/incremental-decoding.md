@@ -140,11 +140,14 @@ each such error waits while a box after the codestream can still be read.
 None can once OpenJPEG's walk there meets a `jp2c` or an `XLBox` of 2^32
 or more, and none ever is where the last tile-part has `Psot` 0, which runs
 to the end of the file, or where the tile-part chain is broken on the bytes
-fed, so that OpenJPEG's walk cannot reach the boxes after it. A box of length 0
-after the codestream is still read while under 2^32 bytes follow it, so it does
-not end the wait. Once no box there can be read, the tile-parts are held as a
-codestream's are: a fault of the tile-parts is final, and an error in a tile
-waits until they close.
+fed, so that OpenJPEG's walk cannot reach the boxes after it. A box of
+length 0 after the codestream is still read while under 2^32 bytes follow
+it, so it does not end the wait, unless the decode does not check its type
+there, such as `xml `: no box can follow it, and its contents are never at
+fault. Once 2^32 bytes or more follow it, OpenJPEG skips it unread, so it
+ends the wait whatever its type. Once no box there can be read, the
+tile-parts are held as a codestream's are: a fault of the tile-parts is
+final, and an error in a tile waits until they close.
 
 Until the input closes, `refine` waits on the error as `Waiting::Held`,
 which carries the error `decode_with` gives on the bytes fed, and `header`
@@ -224,14 +227,16 @@ Some of these are final all the same, and are given at once:
 - A refusal of the sRGB step where OpenJPEG reads no box after the
   codestream, whatever follows: its last tile-part has `Psot` 0, so it
   runs to the end of the file, or the walk after it stops at a `jp2c` or
-  at an `XLBox` of 2^32 or more.
+  at an `XLBox` of 2^32 or more. So is one where the walk ends on a box
+  of length 0 of a type the decode does not check there, such as `xml `.
 
 An unsupported brand in an `ftyp` of length 0 is not final: more bytes
 add compatibility codes, and `jp2 ` among them makes the file readable,
 while a byte or three leaves the box out of whole codes. Nor is any fault
 of a box of length 0 after the codestream, even one judged on its type
 (a second `pclr`): OpenJPEG skips such a box unread once 2^32 bytes or
-more follow it, and the file then decodes.
+more follow it, and the file then decodes. From there no byte appended
+changes that, so an error before such a box is final whatever its type.
 
 `refine` waits on these as `Waiting::Held`, with the error
 `decode_with` gives on the bytes fed, and `finish` reports what the whole

@@ -982,7 +982,8 @@ fn check_suffixes(bytes: &[u8], options: &DecodeOptions, name: &str) {
 /// final at the `EOC`, and `refine` returns it once that box is in, as
 /// `header` does a tile the header read refuses. A box of length 0 after
 /// the codestream is read whatever follows it, while under 2^32 bytes do,
-/// so the error stays held.
+/// so after a `colr` of length 0 the error stays held. After an `xml ` of
+/// length 0, which is never at fault, it is final.
 #[test]
 fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
     for (name, codestream, options) in mended() {
@@ -1020,19 +1021,35 @@ fn a_jp2_file_settles_once_no_box_after_the_codestream_can_be_read() {
             );
             assert!(matches!(cut.header(), Ok(Some(_))), "{name}: cut");
         }
-        let name = format!("{name} in JP2, then a box of length 0");
-        let open = [&[0, 0, 0, 0][..], b"xml ", b"<a/>"].concat();
+        // A `colr` of length 0, which passes so far, can still be at fault.
+        let at = format!("{name} in JP2, then a colr of length 0");
+        let open = [&[0, 0, 0, 0][..], b"colr", &synth::colr_enum(17)].concat();
         let bytes = in_jp2(&codestream, &[open]);
-        assert!(!held::closes(&bytes), "{name}");
+        assert!(!held::closes(&bytes), "{at}");
         let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
         decoder.feed(&bytes);
         match decoder.refine() {
             Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
-                assert_eq!(format!("{error:?}"), tiles, "{name}");
+                assert_eq!(format!("{error:?}"), tiles, "{at}");
             }
-            other => panic!("{name}: {other:?}"),
+            other => panic!("{at}: {other:?}"),
         }
-        assert!(matches!(decoder.header(), Ok(Some(_))), "{name}");
+        assert!(matches!(decoder.header(), Ok(Some(_))), "{at}");
+        // An `xml ` of length 0 is never at fault and no box follows it, so
+        // it settles the walk (#725). `held::closes` does not count it, so
+        // the oracles allow a hold there that the decoder does not make.
+        let at = format!("{name} in JP2, then an xml of length 0");
+        let open = [&[0, 0, 0, 0][..], b"xml ", b"<a/>"].concat();
+        let bytes = in_jp2(&codestream, &[open]);
+        let mut decoder = IncrementalDecoder::new(lenient.clone()).expect("valid options");
+        decoder.feed(&bytes);
+        assert_eq!(error_of(&decoder.refine()), Some(tiles.clone()), "{at}");
+        assert_eq!(
+            error_of(&decoder.header()),
+            error_of(&read_header_with(&bytes, &lenient)),
+            "{at}"
+        );
+        check_suffixes(&bytes, &options, &at);
     }
 }
 

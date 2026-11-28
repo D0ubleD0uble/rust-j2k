@@ -162,10 +162,12 @@ pub(crate) struct Jp2File<'a> {
     /// [`boxes::AfterCodestream::open`]).
     pub(crate) after_open: bool,
     /// Whether no byte appended to the input changes what [`after::check`]
-    /// reads: OpenJPEG never reads the boxes after the codestream, as it
+    /// gives: OpenJPEG never reads the boxes after the codestream, as it
     /// steps to a last tile-part with `Psot = 0` or the tile-part chain is
     /// broken on bytes in, or its walk there stopped for good
-    /// ([`boxes::AfterCodestream::ended`]). Then the
+    /// ([`boxes::AfterCodestream::ended`]) or ends on a box of length 0 of
+    /// a type `check` does not read, such as `xml ` ([`after::settled`]).
+    /// Then the
     /// [`codestream`](Self::codestream) of a longer input starts with this
     /// one, as a raw codestream's does: it is fixed, or it runs to the end
     /// of the input.
@@ -276,6 +278,11 @@ pub(crate) fn parse_boxes<'a>(
     let (codestream, rest, reads) =
         locate_codestream(bytes, item.payload, boxes.rest(), packet_work);
     let after = walk_after_codestream(rest);
+    let settled = match reads {
+        AfterRead::Yes => after::settled(&after),
+        AfterRead::Never | AfterRead::Broken => true,
+        AfterRead::NotYet => false,
+    };
     // Both are ends of the file; the shorter starts later.
     let past_box = boxes.rest();
     let after_box = (past_box.len() < rest.len()).then(|| walk_after_codestream(past_box).boxes);
@@ -290,11 +297,7 @@ pub(crate) fn parse_boxes<'a>(
         after_read: reads == AfterRead::Yes,
         after_fault: after.fault,
         after_open: after.open,
-        after_settled: match reads {
-            AfterRead::Yes => after.ended,
-            AfterRead::Never | AfterRead::Broken => true,
-            AfterRead::NotYet => false,
-        },
+        after_settled: settled,
         codestream_fixed: reads == AfterRead::Broken && whole,
     })
 }
