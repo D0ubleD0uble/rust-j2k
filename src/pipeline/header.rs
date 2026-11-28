@@ -433,6 +433,8 @@ fn largest_stop(
     kept: Option<(&mut HeaderCache, usize, MainKey)>,
     faults: &mut Faults,
 ) -> Option<Error> {
+    // `KeptLargest` is not keyed on `strict`: only reads with it off keep.
+    debug_assert!(kept.is_none() || !strict);
     let (cache, key) = match kept {
         Some((cache, start, main)) => (
             Some(cache),
@@ -483,6 +485,9 @@ thread_local! {
 /// which differs only in what it says of the cap. Then no byte lifts it.
 fn same_stop(now: &Error, largest: &Error) -> bool {
     match (now, largest) {
+        // Guards no reachable input tells apart: at the largest cap every
+        // cap refusal is `AddressSpace`, and a tile over it is over every
+        // smaller cap, so a match of kind is a match of tile.
         (Error::Limit(now), Error::Limit(largest)) => {
             now.kind() == largest.kind()
                 && now.refused_at().map(|at| at.tile()) == largest.refused_at().map(|at| at.tile())
