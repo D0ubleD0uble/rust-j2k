@@ -111,6 +111,15 @@ pub(crate) struct Cap {
 }
 
 impl Cap {
+    /// Whether a longer input can raise this cap: the default limit grows
+    /// with the input, and a `Raised` factor of it with it, up to
+    /// [`ADDRESSABLE_SAMPLES`]. A ceiling the caller set
+    /// ([`SampleLimit::AtMost`]) does not grow, and nor does a cap at the
+    /// samples the target can address, such as `Unlimited`'s.
+    pub(crate) fn grows(self) -> bool {
+        self.at_most.is_none() && self.allowed < ADDRESSABLE_SAMPLES
+    }
+
     /// The most code-blocks one tile may hold under this cap:
     /// [`TILE_BLOCKS_FLOOR`], or one for each [`SAMPLES_PER_BLOCK`] samples
     /// the cap allows when that is more.

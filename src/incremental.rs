@@ -375,7 +375,13 @@ impl IncrementalDecoder {
     /// bytes fed and the `jp2c` box's length ends the box within them:
     /// the codestream is then the same whatever follows, so only a tile
     /// refusal more bytes lift is held, and every other error is given at
-    /// once. It holds back the errors
+    /// once. Where the box after the codestream that the bytes fed end
+    /// inside is a `colr` of length 0 that the decode passes, it passes
+    /// with any bytes more, so more bytes change only the sample limit:
+    /// an error met counting the tiles, or the fault of the tile-parts it
+    /// meets, is held while the limit can still grow, under the default or
+    /// a `Raised` limit, and given at once under `AtMost` or `Unlimited`.
+    /// It holds back the errors
     /// `refine` waits on in a JP2 file's boxes too: a fault in a box after
     /// the codestream that the bytes fed end inside, and a refusal of the
     /// sRGB step while a box after the codestream can still be read, one
@@ -1032,7 +1038,8 @@ pub enum Waiting {
     /// length 0 there is read while under 2^32 bytes follow it, so it does
     /// not count, unless the decode does not check its type, such as
     /// `xml `: no box follows it, and its contents are never at fault, so
-    /// none can be read once it is in.
+    /// none can be read once it is in. Nor does a `colr` of length 0 that
+    /// the decode passes, as it passes with any bytes more.
     ///
     /// More bytes can replace the error with one that comes earlier in the
     /// input, and an image can still follow, for example where a later

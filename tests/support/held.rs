@@ -25,7 +25,8 @@
 //! it count a box of length 0 after the codestream of a type the decode
 //! never checks there (an `xml `, say), after which the decoder gives the
 //! error at once too: no box can follow it, and its contents are never at
-//! fault.
+//! fault. Nor a `colr` of length 0 there that the decode passes, as it
+//! passes with any bytes more.
 //!
 //! This file has no dependency but `rust_j2k`. It does not say which errors
 //! are held: an oracle allows a held error only where the input has not

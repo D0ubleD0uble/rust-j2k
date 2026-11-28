@@ -173,6 +173,12 @@ pub(crate) struct Jp2File<'a> {
     /// one, as a raw codestream's does: it is fixed, or it runs to the end
     /// of the input.
     pub(crate) after_settled: bool,
+    /// Whether, though a box after the codestream can still be read,
+    /// [`after::check`] gives what it gives now whatever bytes follow, where
+    /// it passes now: OpenJPEG reads the boxes after the codestream, and
+    /// its walk there ends on a `colr` of length 0 ([`after::passes_on`]).
+    /// The codestream is then the same whatever follows.
+    pub(crate) after_passes_on: bool,
     /// Whether the decode reads the same codestream, and nothing after it,
     /// whatever bytes follow: the tile-part chain is broken on bytes in
     /// ([`after::End::Broken`]), so the codestream is the `jp2c` box's
@@ -291,6 +297,7 @@ pub(crate) fn parse_boxes<'a>(
         AfterRead::Never | AfterRead::Broken => true,
         AfterRead::NotYet => false,
     };
+    let passes_on = reads == AfterRead::Yes && !settled && after::passes_on(&after);
     // Both are ends of the file; the shorter starts later.
     let past_box = boxes.rest();
     let after_box = (past_box.len() < rest.len()).then(|| walk_after_codestream(past_box).boxes);
@@ -306,6 +313,7 @@ pub(crate) fn parse_boxes<'a>(
         after_fault: after.fault,
         after_open: after.open,
         after_settled: settled,
+        after_passes_on: passes_on,
         codestream_fixed: reads == AfterRead::Broken && whole,
         end_walk: end_walk.filter(|_| whole),
     })

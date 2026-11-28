@@ -1549,16 +1549,18 @@ fn checked_after() -> [(&'static [u8; 4], Vec<u8>); 8] {
 /// whole and then with more bytes. After each of [`UNREAD`], holding 2
 /// bytes that would be at fault in a `colr`, `refine` gives the fault at
 /// once and `header` what `read_header_with` gives, and more bytes change
-/// neither. After each of [`checked_after`], `header` gives the header and
-/// `refine` waits on `Held`, though the box passes where its type allows:
-/// more bytes can bring a fault in it, as they do to a `bpcc` and a `jp2h`
-/// here.
+/// neither. So it is after a `colr` that passes, which passes with any
+/// bytes more. After each other of [`checked_after`], `header` gives the
+/// header and `refine` waits on `Held`, though the box passes where its
+/// type allows: more bytes can bring a fault in it, as they do to a `bpcc`
+/// and a `jp2h` here.
 #[test]
-fn an_error_before_a_box_of_length_0_is_final_only_for_a_type_not_checked() {
+fn an_error_before_a_box_of_length_0_is_final_only_where_the_box_cannot_turn_at_fault() {
     let lenient = DecodeOptions::default().with_strict(false);
     let unread = UNREAD.iter().map(|kind| (*kind, vec![1, 0], true));
     let checked = checked_after().into_iter();
-    for (kind, payload, final_at_once) in unread.chain(checked.map(|(k, p)| (k, p, false))) {
+    let checked = checked.map(|(kind, payload)| (kind, payload, kind == b"colr"));
+    for (kind, payload, final_at_once) in unread.chain(checked) {
         let name = String::from_utf8_lossy(&kind[..]).into_owned();
         let bytes = tile_part_file(&coc_fault(), &open_box(kind, &payload));
         let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
