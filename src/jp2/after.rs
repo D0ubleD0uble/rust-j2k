@@ -600,7 +600,16 @@ mod tests {
                         continue;
                     };
                     passing += 1;
-                    for extra in [&[0u8][..], &[1], &[2], &[0xFF], &[0, 0], &[9, 0xFF, 3, 7]] {
+                    for extra in [
+                        &[0u8][..],
+                        &[1],
+                        &[2],
+                        &[0xFF],
+                        &[0, 0],
+                        &[9, 0xFF, 3, 7],
+                        &[0xFF; 4],
+                        &[0x5A; 40],
+                    ] {
                         let longer = [payload.as_slice(), extra].concat();
                         assert_eq!(
                             read(has_color, &longer).as_ref().ok(),
