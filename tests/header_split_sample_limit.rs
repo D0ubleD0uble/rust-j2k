@@ -404,3 +404,60 @@ fn a_stop_at_the_budget_the_largest_cap_still_meets_is_given_at_once() {
     assert_eq!(got, oracle(&file, &options));
     assert!(part_fault(decoder.header()));
 }
+
+/// Four tiles, of 4 components under 20 levels and 4x4 code-blocks, read
+/// under a reduction of 19: tile 0 is 4096 x 4096, over the default cap on
+/// code-blocks, tiles 1 and 2 are 2^31 x 4096 and 4096 x 2^31, and tile 3
+/// is 2^31 x 2^31, past what the target can address. Each has one empty
+/// tile-part.
+fn a_liftable_tile_before_one_past_the_address_space() -> (Vec<u8>, DecodeOptions) {
+    let (side, origin, tile) = (u32::MAX, (1 << 31) - 4096, 1 << 31);
+    let main = main_header([side, side, origin, origin, tile, tile, 0, 0], 4, 20, 0);
+    let parts: Vec<u8> = (0..4)
+        .flat_map(|index| synth::tile_part(index, 0, 1, &[], &[]))
+        .collect();
+    let file = jp2_ending_in_a_passing_colr(&main, &parts);
+    let options = DecodeOptions::default()
+        .with_strict(false)
+        .with_resolution_reduction(19);
+    (file, options)
+}
+
+/// The tile and kind of the limit `result` refuses, if it refuses one.
+fn refused<T>(result: Result<T, Error>) -> Option<(u32, LimitKind)> {
+    match result {
+        Err(Error::Limit(limit)) => Some((limit.refused_at()?.tile(), limit.kind())),
+        _ => None,
+    }
+}
+
+/// The read refuses tile 0 over the default cap, which more bytes lift.
+/// Under the largest cap the count refuses tile 3 instead, past the address
+/// space, so a longer input gives that refusal, and `header` holds tile 0's
+/// as `refine` waits on it. It gave tile 0's at once while any refusal under
+/// the largest cap gave the stop at once.
+#[test]
+fn a_refusal_a_larger_cap_replaces_with_a_later_tile_is_held() {
+    let (file, options) = a_liftable_tile_before_one_past_the_address_space();
+    let tile_0 = Some((0, LimitKind::TileCodeBlocks));
+    assert_eq!(refused(read_header_with(&file, &options)), tile_0);
+    let unlimited = options.clone().with_sample_limit(SampleLimit::Unlimited);
+    assert_eq!(
+        refused(read_header_with(&file, &unlimited)),
+        Some((3, LimitKind::AddressSpace))
+    );
+    assert!(replaceable::replaceable(&file, &options));
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&file);
+    assert!(matches!(decoder.header(), Ok(Some(_))));
+    assert!(matches!(decoder.header(), Ok(Some(_))), "again");
+    assert!(matches!(
+        decoder.refine(),
+        Ok(rust_j2k::Refined::Waiting(
+            rust_j2k::Waiting::SampleLimit { .. }
+        ))
+    ));
+    // One byte more changes neither.
+    decoder.feed(&[0]);
+    assert!(matches!(decoder.header(), Ok(Some(_))));
+}

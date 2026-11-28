@@ -338,60 +338,157 @@ fn check_geometry(
             .map(|(cache, main)| (cache, start, main)),
         &mut faults,
     );
-    // Under `Hold::Lifting` only a larger cap can take a stop away, so a
-    // stop is held only where the count under the largest cap more bytes
-    // can bring, at the samples the target can address, passes, or stops
-    // at a budget with no fault to meet. A stop the count still meets
-    // there, such as a tile past the address space, is given at once. That
-    // count keeps nothing and runs under the same budgets, and only here;
-    // at that cap a tile's size admits it unless it is near the address
-    // space, so it is mostly a pass over the sizes of the tiles read.
-    let lifts = hold == Hold::Lifting
-        && cap.grows()
-        && !matches!(counted, Ok(true))
-        && match count_geometry(
-            bytes,
-            parsed,
-            selection,
-            reduction,
-            samples::Cap {
-                allowed: samples::ADDRESSABLE_SAMPLES,
-                ..cap
-            },
-            strict,
-            None,
-            &mut faults,
-        ) {
-            Ok(true) => true,
-            Ok(false) => faults.find(bytes, parsed, strict).is_none(),
-            Err(_) => false,
-        };
     // The decode parses every tile-part before it counts any tile, whatever
     // the selection, so where the count refuses a tile or stops at a budget,
     // that parse's fault comes first.
-    let mut fault = || faults.find(bytes, parsed, strict);
-    let checked = match counted {
-        Ok(true) => Ok(()),
-        Ok(false) | Err(_) if lifts => Ok(()),
-        Ok(false) => fault().map_or(Ok(()), Err),
-        Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => match fault() {
-            Some(fault) => Err(fault),
-            // A later tile-part may yet hold a fault, which comes first,
-            // whether or not more bytes would lift the refusal.
-            None if hold == Hold::UntilClosed && !faults.closed => Ok(()),
-            None if hold == Hold::Liftable
-                && matches!(&error, Error::Limit(limit) if meter::lifts_with_bytes(limit)) =>
-            {
-                Ok(())
+    let checked = if hold == Hold::Lifting && cap.grows() {
+        // Only a larger cap can take a stop away here, so the error of this
+        // count is given at once only where the count under the largest cap
+        // more bytes can bring, at the samples the target can address,
+        // meets the same stop ([`same_stop`]): no byte lifts it. Otherwise
+        // a longer input takes it away or gives another, and it is held.
+        match settle(counted, &mut faults, bytes, parsed, strict) {
+            None => Ok(()),
+            Some(now) => {
+                let largest = largest_stop(
+                    bytes,
+                    parsed,
+                    selection,
+                    reduction,
+                    cap,
+                    strict,
+                    cache
+                        .as_deref_mut()
+                        .zip(main)
+                        .map(|(cache, main)| (cache, start, main)),
+                    &mut faults,
+                );
+                match largest {
+                    Some(largest) if same_stop(&now, &largest) => Err(now),
+                    _ => Ok(()),
+                }
             }
-            None => Err(error),
-        },
-        Err(error) => Err(error),
+        }
+    } else {
+        let mut fault = || faults.find(bytes, parsed, strict);
+        match counted {
+            Ok(true) => Ok(()),
+            Ok(false) => fault().map_or(Ok(()), Err),
+            Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => match fault() {
+                Some(fault) => Err(fault),
+                // A later tile-part may yet hold a fault, which comes first,
+                // whether or not more bytes would lift the refusal.
+                None if hold == Hold::UntilClosed && !faults.closed => Ok(()),
+                None if hold == Hold::Liftable
+                    && matches!(&error, Error::Limit(limit) if meter::lifts_with_bytes(limit)) =>
+                {
+                    Ok(())
+                }
+                None => Err(error),
+            },
+            Err(error) => Err(error),
+        }
     };
     if let (Some(cache), Some(main), Some(walk)) = (cache, main, faults.walk) {
         cache.fault = Some(Box::new(KeptFault { start, main, walk }));
     }
     checked
+}
+
+/// The error [`check_geometry`] gives for `counted`, the count's result,
+/// where it holds none: the decode's fault for the tile-parts where the
+/// count refuses a tile or stops at a budget, else the refusal. `None`
+/// where it gives none.
+fn settle(
+    counted: Result<bool>,
+    faults: &mut Faults,
+    bytes: &[u8],
+    parsed: &codestream::ParsedHeader,
+    strict: bool,
+) -> Option<Error> {
+    match counted {
+        Ok(true) => None,
+        Ok(false) => faults.find(bytes, parsed, strict),
+        Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => {
+            Some(faults.find(bytes, parsed, strict).unwrap_or(error))
+        }
+        Err(error) => Some(error),
+    }
+}
+
+/// What [`settle`] gives for the count under the largest cap more bytes can
+/// bring `cap` to: one at the samples the target can address. Under
+/// [`Hold::Lifting`] the codestream is the same whatever follows, so a call
+/// that keeps counts it once for the codestream, main header, selected area
+/// and reduction, and keeps what it gives ([`KeptLargest`]). The count keeps
+/// nothing else, and runs under the same budgets as the first.
+#[allow(clippy::too_many_arguments)]
+fn largest_stop(
+    bytes: &[u8],
+    parsed: &codestream::ParsedHeader,
+    selection: &window::Selection,
+    reduction: u8,
+    cap: samples::Cap,
+    strict: bool,
+    kept: Option<(&mut HeaderCache, usize, MainKey)>,
+    faults: &mut Faults,
+) -> Option<Error> {
+    let (cache, key) = match kept {
+        Some((cache, start, main)) => (
+            Some(cache),
+            Some(KeptLargest {
+                start,
+                len: bytes.len(),
+                main,
+                area: selection.area.image_rect(),
+                reduction,
+                stop: None,
+            }),
+        ),
+        None => (None, None),
+    };
+    if let (Some(cache), Some(key)) = (&cache, &key) {
+        if let Some(largest) = cache.largest.as_deref().filter(|kept| kept.is_for(key)) {
+            return largest.stop.clone();
+        }
+    }
+    #[cfg(test)]
+    LARGEST_COUNTS.with(|counts| counts.set(counts.get() + 1));
+    let largest = samples::Cap {
+        allowed: samples::ADDRESSABLE_SAMPLES,
+        ..cap
+    };
+    let counted = count_geometry(
+        bytes, parsed, selection, reduction, largest, strict, None, faults,
+    );
+    let stop = settle(counted, faults, bytes, parsed, strict);
+    if let (Some(cache), Some(key)) = (cache, key) {
+        cache.largest = Some(Box::new(KeptLargest {
+            stop: stop.clone(),
+            ..key
+        }));
+    }
+    stop
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The counts [`largest_stop`] has run on this thread.
+    static LARGEST_COUNTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether `now`, the error of the count under the cap of the bytes so
+/// far, is the stop the count under the largest cap meets, `largest`: the
+/// same error, or a refusal of a limit of the same kind for the same tile,
+/// which differs only in what it says of the cap. Then no byte lifts it.
+fn same_stop(now: &Error, largest: &Error) -> bool {
+    match (now, largest) {
+        (Error::Limit(now), Error::Limit(largest)) => {
+            now.kind() == largest.kind()
+                && now.refused_at().map(|at| at.tile()) == largest.refused_at().map(|at| at.tile())
+        }
+        _ => format!("{now:?}") == format!("{largest:?}"),
+    }
 }
 
 /// Whether [`check_geometry`] holds a tile refusal back.
@@ -417,9 +514,9 @@ enum Hold {
     /// more bytes change only the cap. A larger one can take a stop of the
     /// count away: a refusal, a stop at a budget, or the refusal of a lower
     /// tile counted only because a tile over the cap follows it. So a stop
-    /// is held only where the count under a cap at the samples the target
-    /// can address takes it away, and given at once where that count still
-    /// meets one, as for a tile past the address space.
+    /// is given at once only where the count under a cap at the samples
+    /// the target can address meets the same one ([`same_stop`]), as for a
+    /// tile past the address space, and held otherwise.
     Lifting,
 }
 
@@ -693,6 +790,9 @@ pub(crate) struct HeaderCache {
     /// The walk for the decode's error for the tile-parts, which does not
     /// depend on the selection or the reduction, so it is kept apart.
     fault: Option<Box<KeptFault>>,
+    /// What the count under the largest cap gave, under [`Hold::Lifting`]
+    /// ([`largest_stop`]).
+    largest: Option<Box<KeptLargest>>,
     /// Where the last call stopped, if it found the main header cut short.
     /// It depends on no option, so a change of options keeps it.
     cut: Option<Box<KeptCut>>,
@@ -889,6 +989,34 @@ impl KeptCut {
     }
 }
 
+/// [`HeaderCache::largest`]: what [`settle`] gave for the count under the
+/// largest cap, and what it was kept for. Under [`Hold::Lifting`] the
+/// codestream is whole in the input and no byte appended changes it, so
+/// that count gives the same on any longer input for the same codestream,
+/// main header, selected area and reduction. A header read keeps `strict`
+/// off, and the sample limit is the decoder's, so neither is keyed.
+struct KeptLargest {
+    /// Where the codestream starts in the input.
+    start: usize,
+    /// The length of the codestream.
+    len: usize,
+    main: MainKey,
+    area: codestream::markers::Rect,
+    reduction: u8,
+    stop: Option<Error>,
+}
+
+impl KeptLargest {
+    /// Whether this was kept for what `key` is for.
+    fn is_for(&self, key: &KeptLargest) -> bool {
+        self.start == key.start
+            && self.len == key.len
+            && self.main == key.main
+            && self.area == key.area
+            && self.reduction == key.reduction
+    }
+}
+
 /// [`HeaderCache::fault`], and what it was kept for.
 struct KeptFault {
     /// Where the codestream starts in the input.
@@ -977,6 +1105,7 @@ impl HeaderCache {
     /// and the header read always reads with `strict` off, so it is kept.
     pub(crate) fn clear_selection(&mut self) {
         self.kept = None;
+        self.largest = None;
     }
 
     /// The fault walk kept, if it was kept for a codestream at `start` of
@@ -2148,5 +2277,57 @@ mod tests {
         assert!(matches!(first, Err(Error::Limit(_))), "{first:?}");
         let got = read_header_kept(&mcc, &lenient, Some(&mut kept));
         assert_eq!(format!("{got:?}"), format!("{want:?}"));
+    }
+
+    /// Under `Hold::Lifting` the count under the largest cap is kept: a
+    /// call on one byte more, or a second call, does not count again,
+    /// while a change of the reduction does. The file is 1024 tiles of
+    /// 16 x 16, each of 1024 components under 5 levels, whose count stops
+    /// at its budget under the default cap and meets tile 28's tile-part
+    /// fault, then a `colr` of length 0 that passes whatever follows. (On
+    /// a 32-bit target the default cap is at the address space already.)
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn the_count_under_the_largest_cap_is_kept() {
+        use crate::synth;
+        let siz = synth::siz_body([512, 512, 0, 0, 16, 16, 0, 0], &vec![[7, 1, 1]; 1024]);
+        let mut codestream = [vec![0xFF, 0x4F], synth::seg(0xFF51, &siz)].concat();
+        codestream.extend(synth::seg(0xFF52, &synth::cod_body(1, 5, 4, 0)));
+        codestream.extend(synth::seg(0xFF5C, &synth::qcd_none_body(2, &[9; 16])));
+        codestream.extend(synth::tile_part(28, 2, 3, &[], &[]));
+        codestream.extend([0xFF, 0xD9]);
+        let header = [
+            synth::ihdr_for(&codestream),
+            synth::bx(b"colr", &synth::colr_enum(16)),
+        ];
+        let mut bytes = synth::jp2_file(&header, &[], &codestream, &[]);
+        bytes.extend_from_slice(b"\0\0\0\0colr\x01\0\0\0\0\0\x11");
+        let options = DecodeOptions::default().with_strict(false);
+        let counts = || LARGEST_COUNTS.with(|counts| counts.replace(0));
+        counts();
+        let mut kept = HeaderCache::default();
+        let mut longer = bytes.clone();
+        for call in 0..3 {
+            if call == 2 {
+                longer.push(0);
+            }
+            let read = read_header_streamed(&longer, &options, Some(&mut kept));
+            assert!(read.is_ok(), "call {call}: {read:?}");
+        }
+        assert_eq!(counts(), 1);
+        // Without a cache each call counts again.
+        assert!(read_header_streamed(&longer, &options, None).is_ok());
+        assert_eq!(counts(), 1);
+        // What was kept is for one reduction, and a change of the
+        // selection drops it.
+        let reduced = options.clone().with_resolution_reduction(1);
+        for _ in 0..2 {
+            let read = read_header_streamed(&longer, &reduced, Some(&mut kept));
+            assert!(read.is_ok(), "{read:?}");
+        }
+        assert_eq!(counts(), 1);
+        assert!(kept.largest.is_some());
+        kept.clear_selection();
+        assert!(kept.largest.is_none());
     }
 }
