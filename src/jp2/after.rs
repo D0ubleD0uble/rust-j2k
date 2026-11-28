@@ -372,10 +372,10 @@ pub(crate) fn settled(after: &AfterCodestream<'_>) -> bool {
 /// of it but the method, the length of an enumerated color space and
 /// whether a profile is empty ([`color::is_usable`]), and not copying the
 /// profile. A rule on the profile's size would break it. OpenJPEG 2.5's
-/// `opj_jp2_read_colr` casts `icc_len` to `OPJ_INT32`, so it fails a
-/// `METH` 2 profile of 2^31 + 3 bytes or more; this decoder does not
-/// copy that, and a `colr` of length 0 reaches that size only past 2^31
-/// bytes of input, as the walk stops short of it from 2^32 on.
+/// `opj_jp2_read_colr` casts the box length to `OPJ_INT32` before taking 3
+/// from it, so it fails a `METH` 2 profile of 2^31 bytes or more. This
+/// decoder does not copy that rule. Such a box sits in the band from 2^31
+/// to 2^32 bytes, where the walk still takes a box of length 0.
 ///
 /// The other types [`check`] reads can turn at fault as they grow: a
 /// `bpcc` holds one byte for each component, and a `jp2h` can take a child
@@ -569,5 +569,48 @@ mod tests {
             }
         }
         assert_eq!(shapes, 6 * 12 * 3 * 2);
+    }
+
+    /// Whatever bytes follow a `colr` the after-codestream read passes, it
+    /// passes, with the same result, under both held states: the claim
+    /// [`passes_on`] rests on. Driven through [`State::read`].
+    #[test]
+    fn a_colr_after_the_codestream_that_passes_keeps_passing_with_bytes_more() {
+        let [empty, _] = states();
+        let read = |has_color: bool, payload: &[u8]| {
+            let mut state = State {
+                has_color,
+                ..empty.clone()
+            };
+            let item = Jp2Box {
+                kind: *b"colr",
+                payload,
+            };
+            state.read(&item).map(|()| state.clone())
+        };
+        let mut passing = 0;
+        for method in [0u8, 1, 2, 3, 255] {
+            for length in 0..12usize {
+                let mut payload = vec![0x11; length];
+                if let Some(first) = payload.first_mut() {
+                    *first = method;
+                }
+                for has_color in [false, true] {
+                    let Ok(before) = read(has_color, &payload) else {
+                        continue;
+                    };
+                    passing += 1;
+                    for extra in [&[0u8][..], &[1], &[2], &[0xFF], &[0, 0], &[9, 0xFF, 3, 7]] {
+                        let longer = [payload.as_slice(), extra].concat();
+                        assert_eq!(
+                            read(has_color, &longer).as_ref().ok(),
+                            Some(&before),
+                            "METH {method}, {payload:?} then {extra:?}, held {has_color}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(passing > 20);
     }
 }

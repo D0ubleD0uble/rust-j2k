@@ -87,6 +87,8 @@ pub(super) fn parse_usable(payload: &[u8]) -> Result<Option<ColorSpace>> {
     }
     let rest = &payload[3..];
     if payload[0] == ENUMERATED {
+        // `is_usable` has refused a shorter `rest`; the pattern is what binds
+        // the four bytes.
         let &[a, b, c, d, ..] = rest else {
             return Err(short_enumerated(payload.len()));
         };
