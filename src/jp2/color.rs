@@ -82,32 +82,45 @@ pub(crate) fn read(header: &Jp2Header<'_>) -> Result<ColorSpace> {
 /// Read one `colr` of at least 3 bytes. `None` for a `METH` that is neither 1
 /// nor 2: the box is ignored and does not count as the first.
 pub(super) fn parse_usable(payload: &[u8]) -> Result<Option<ColorSpace>> {
-    let method = payload[0];
-    let rest = &payload[3..];
-    match method {
-        ENUMERATED => {
-            let Some(&[a, b, c, d]) = rest.first_chunk::<4>() else {
-                return Err(Error::file_format(format!(
-                    "a `colr` box with `METH` 1 holds {} bytes; it needs 7 for the \
-                     enumerated color space",
-                    payload.len()
-                )));
-            };
-            Ok(Some(match u32::from_be_bytes([a, b, c, d]) {
-                16 => ColorSpace::Srgb,
-                17 => ColorSpace::Grayscale,
-                18 => ColorSpace::Sycc,
-                other => ColorSpace::Enumerated(other),
-            }))
-        }
-        RESTRICTED_ICC => {
-            if rest.is_empty() {
-                return Err(Error::file_format(
-                    "a `colr` box with `METH` 2 holds no ICC profile",
-                ));
-            }
-            Ok(Some(ColorSpace::RestrictedIcc(rest.to_vec())))
-        }
-        _ => Ok(None),
+    if !is_usable(payload)? {
+        return Ok(None);
     }
+    let rest = &payload[3..];
+    if payload[0] == ENUMERATED {
+        // `is_usable` has refused a shorter `rest`; the pattern is what binds
+        // the four bytes.
+        let &[a, b, c, d, ..] = rest else {
+            return Err(short_enumerated(payload.len()));
+        };
+        return Ok(Some(match u32::from_be_bytes([a, b, c, d]) {
+            16 => ColorSpace::Srgb,
+            17 => ColorSpace::Grayscale,
+            18 => ColorSpace::Sycc,
+            other => ColorSpace::Enumerated(other),
+        }));
+    }
+    Ok(Some(ColorSpace::RestrictedIcc(rest.to_vec())))
+}
+
+/// Whether [`parse_usable`] takes a `colr` of at least 3 bytes as usable,
+/// with the same errors, without copying its profile. Reads the method, the
+/// length of an enumerated color space, and whether a profile is empty,
+/// nothing more: [`super::after::passes_on`] depends on that.
+pub(super) fn is_usable(payload: &[u8]) -> Result<bool> {
+    let rest = &payload[3..];
+    match payload[0] {
+        ENUMERATED if rest.len() < 4 => Err(short_enumerated(payload.len())),
+        RESTRICTED_ICC if rest.is_empty() => Err(Error::file_format(
+            "a `colr` box with `METH` 2 holds no ICC profile",
+        )),
+        ENUMERATED | RESTRICTED_ICC => Ok(true),
+        _ => Ok(false),
+    }
+}
+
+fn short_enumerated(length: usize) -> Error {
+    Error::file_format(format!(
+        "a `colr` box with `METH` 1 holds {length} bytes; it needs 7 for the \
+         enumerated color space",
+    ))
 }
