@@ -1,16 +1,18 @@
 //! The `header_split` target's [`replaceable::replaceable`] where the
 //! suffix that changes a held error is a box of length 0 after the
 //! codestream run past 2^32 bytes, which OpenJPEG skips unread, and those
-//! bytes also raise the default sample limit.
+//! bytes also raise the default sample limit, to about 2^35 at 2^32 bytes
+//! and without bound short of what the target can address as more follow.
 //!
 //! On `header_split_colr_lbox0_after_codestream_cap_lifts_tile_part_fault.seed`,
 //! at a feed of 2999 bytes, `read_header_with` refuses a tile over a cap and
 //! so meets a tile-part fault, which it gives. A raised limit counts no tile
 //! over a cap, and the fault is not met. The input ends inside a `colr` of
-//! length 0 after the codestream, so `header` holds the fault, and 2^32
-//! more bytes take it away. Under [`SampleLimit::AtMost`] no byte raises the
-//! limit, so the same fault is final, and `replaceable` must find no suffix
-//! there.
+//! length 0 after the codestream, so `header` holds the fault. On a long
+//! enough suffix the header read no longer meets it, though `finish` and
+//! `decode_with`, which parse every tile-part, still refuse. Under
+//! [`SampleLimit::AtMost`] no byte raises the limit, so the same fault is
+//! final, and `replaceable` must find no suffix there.
 
 #[path = "support/inconsistent.rs"]
 mod inconsistent;
@@ -68,10 +70,10 @@ fn fault_of<T>(result: Result<T, Error>) -> Option<&'static str> {
 }
 
 /// At 2999 bytes the read meets the fault under the default limit and not
-/// under a raised one, and `replaceable` finds that the 2^32 bytes that
-/// skip the `colr` of length 0 change it. Before it read that stand-in
-/// under the limit those bytes give, it found no suffix, and the target
-/// failed.
+/// under a raised one, and `replaceable` finds that a suffix that skips
+/// the `colr` of length 0, read under the limit of the longest such suffix,
+/// changes it. Before it read that stand-in under that limit, it found no
+/// suffix, and the target failed.
 #[test]
 fn a_tile_part_fault_met_through_a_cap_gives_way_to_the_bytes_that_skip_the_box() {
     let (prefix, options) = at_feed(SEED, 2999);

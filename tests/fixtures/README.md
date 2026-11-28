@@ -804,10 +804,14 @@ gives the fault at once.
 that seed with the box of length 0 made a `colr` holding `METH` 1 and
 `EnumCS` 17, then zeros, written by a one-off script (#730). The decode
 checks a `colr` there, so `header` still holds the fault, and it is right
-to: past 2^32 bytes OpenJPEG skips the box, and those bytes raise the
-default limit. The target's `replaceable` reads the input up to that box
-under the limit they raise it to (`Unlimited`, or an `AtMost` ceiling as it
-is). Without that, the target fails on the seed at 2999 bytes.
+to: past 2^32 bytes OpenJPEG skips the box, and the bytes raise the default
+limit, to about 2^35 at 2^32 bytes and to what `Unlimited` allows past
+about 2^58. On a long enough suffix the header read no longer meets the
+fault, though `finish` and `decode_with`, which parse every tile-part,
+still refuse. The target's `replaceable` reads the input up to that box
+under the limit of the longest such suffix (`Unlimited`, or an `AtMost`
+ceiling as it is). Without that, the target fails on the seed at 2999
+bytes.
 `tests/header_split_sample_limit.rs` checks this at that feed, and that
 under `AtMost(2^29)` the same fault is final. It is synthetic, so it has
 no license restriction.
@@ -823,6 +827,19 @@ and no byte raises the limit, so the tile-part fault the cap count meets is
 final and `header` gives it. With `check_geometry`
 (`src/pipeline/header.rs`) holding every tile-part fault, the target fails
 on it at 2407 bytes. It is synthetic, so it has no license restriction.
+
+`incremental/header_split_lbox0_after_codestream_tile_part_fault_at_most.seed`
+(3184 bytes, SHA-256
+`f8aa564d4668c12db31590b57095d7aed1212a9179d4cd6b0d6edb4a06719c57`) is the
+seed of #730 as found with control byte 1 set to `06` and byte 4 to `ff`,
+so the sample limit is `AtMost(1 + 255 * 2^16)`, written by a one-off
+script (#730). The box of length 0 after the codestream is of a type the
+decode does not check, so since #725 `header` gives the tile-part fault at
+once, and no byte raises the limit, so no suffix lifts it. With
+`after::settled` (`src/jp2/after.rs`) taking such a box as unsettled again,
+`header` holds the fault and the target fails on it at 2999 bytes; under
+the default limit the target's stand-in for a long suffix lets that hold
+through. It is synthetic, so it has no license restriction.
 
 ### Retry ladder fixtures
 

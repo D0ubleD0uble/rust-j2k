@@ -112,9 +112,10 @@ fn oracle(prefix: &[u8], options: &DecodeOptions) -> String {
 /// it, while the input has not closed ([`held::closes`]): in a codestream,
 /// always; in a JP2 file, where a suffix changes what `read_header_with`
 /// gives ([`replaceable`], which reads the input up to a box of length 0
-/// after the codestream under the sample limit the 2^32 bytes that skip it
-/// raise the default to, so a tile-part fault met only because a tile is
-/// over a cap gives way there), or, for a refusal of the sRGB step, as the
+/// after the codestream under the limit of the longest suffix that skips
+/// it, `Unlimited`, so the header read no longer meets a tile-part fault it
+/// meets only because a tile is over a cap), or, for a refusal of the sRGB
+/// step, as the
 /// header with the channels as coded, or for a tile cap that grows with the
 /// input, which more bytes lift (`refine` waits on it as
 /// `Waiting::SampleLimit`; past the fuzz input size, so no suffix here
