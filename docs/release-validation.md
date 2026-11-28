@@ -122,10 +122,10 @@ nice -n 19 ionice -c3 cargo +nightly fuzz run decode -- \
 ```
 
 The CI smoke (the `fuzz-smoke` job in `.github/workflows/ci.yml`) builds every
-target, then runs all thirteen for 15 to 60 s each, with a per-input `-timeout=30`
-and `-rss_limit_mb=4096`. An input that runs longer than 30 s fails the job.
-The [corpus replay](#corpus-replay-against-the-resource-bounds) checks slow
-inputs against a tighter limit.
+target, then runs all thirteen for 15 to 60 s each, with a per-input
+`-timeout=30` and `-rss_limit_mb=4096`. An input that runs longer than 30 s
+fails the job. The [corpus replay](#corpus-replay-against-the-resource-bounds)
+checks slow inputs against a tighter limit.
 
 Before a release, every target runs locally for 60 s, one after another,
 seeded as fuzz/README.md describes. This is the pre-release fuzz run, which
