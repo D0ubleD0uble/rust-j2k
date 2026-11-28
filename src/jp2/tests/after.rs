@@ -832,8 +832,14 @@ fn the_walk_steps_over_a_main_header_marker_with_no_segment() {
 
 /// The walk to the end of the codestream, gone on with from where it
 /// stopped on each shorter prefix, gives what a walk from the start gives
-/// on every prefix of codestreams that end at `EOC`, in a tile-part of
-/// `Psot = 0`, or broken, fed a byte at a time and in pieces of 7 bytes.
+/// on every prefix, and on a prefix where both find no end yet, stops in
+/// the same place. The codestreams end at `EOC`, in a tile-part of
+/// `Psot = 0`, broken, on a lone `FF` where a marker belongs, inside a
+/// tile-part of a large `Psot`, or inside a main header segment whose
+/// length runs past the input; each main header has a marker with no
+/// segment and a `COM` holding `FF D9`. They are fed a byte at a time, in
+/// pieces of 7 bytes, and in pieces of 1 to 9 bytes drawn at random, so
+/// that markers and `Psot` fields are split across feeds.
 #[test]
 fn the_walk_to_the_end_goes_on_from_where_it_stopped() {
     use crate::jp2::after::{End, EndWalk, codestream_end, codestream_end_from};
@@ -851,27 +857,61 @@ fn the_walk_to_the_end_goes_on_from_where_it_stopped() {
     ]
     .concat();
     let codestreams = [
-        [&main[..], &parts, &[0xFF, 0xD9]].concat(),
-        [&main[..], &parts, &synth::sot(0, 0, 0, 1), &[0xFF, 0x93, 0]].concat(),
-        [&main[..], &parts, &[0xFF, 0x64, 0, 4]].concat(),
-        [&main[..], &[0x00, 0x00]].concat(),
+        ([&main[..], &parts, &[0xFF, 0xD9]].concat(), false),
+        (
+            [&main[..], &parts, &synth::sot(0, 0, 0, 1), &[0xFF, 0x93, 0]].concat(),
+            false,
+        ),
+        ([&main[..], &parts, &[0xFF, 0x64, 0, 4]].concat(), false),
+        ([&main[..], &[0x00, 0x00]].concat(), false),
+        ([&main[..], &parts, &[0xFF]].concat(), true),
+        ([&main[..], &parts, &[0x12]].concat(), false),
+        (
+            [
+                &main[..],
+                &synth::sot(0, 1 << 20, 0, 1),
+                &[0xFF, 0x93, 0, 0],
+            ]
+            .concat(),
+            true,
+        ),
+        (
+            [&main[..], &[0xFF, 0x64, 0x40, 0, 0, 1, 0xFF]].concat(),
+            true,
+        ),
     ];
-    for (index, bytes) in codestreams.iter().enumerate() {
-        for piece in [1, 7] {
+    // splitmix64, for piece sizes the same on every run.
+    let mut state = 0x719u64;
+    let mut next = move || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    for (index, (bytes, open)) in codestreams.iter().enumerate() {
+        let feeds: Vec<Option<usize>> = [Some(1), Some(7)].into_iter().chain([None; 16]).collect();
+        for piece in feeds {
             let mut walk = Some(EndWalk::default());
             let mut len = 0;
             while len < bytes.len() {
-                len = (len + piece).min(bytes.len());
-                let fresh = codestream_end(&bytes[..len]);
+                let step = piece.unwrap_or_else(|| 1 + (next() % 9) as usize);
+                len = (len + step).min(bytes.len());
+                let mut from_start = EndWalk::default();
+                let fresh = codestream_end_from(&bytes[..len], &mut from_start);
+                assert_eq!(fresh, codestream_end(&bytes[..len]));
                 if let Some(kept) = &mut walk {
                     let resumed = codestream_end_from(&bytes[..len], kept);
                     assert_eq!(resumed, fresh, "codestream {index} at {len}");
+                    if fresh == End::Unknown {
+                        assert_eq!(*kept, from_start, "codestream {index} at {len}");
+                    }
                 }
                 if fresh != End::Unknown {
                     walk = None;
                 }
             }
-            assert!(walk.is_none(), "codestream {index}");
+            assert_eq!(walk.is_some(), *open, "codestream {index}");
         }
     }
 }

@@ -2498,6 +2498,63 @@ fn header_calls_after_a_jp2c_box_ending_before_a_large_psot_read_it_about_once()
     }
 }
 
+/// The shapes of [`jp2c_box_cut_before_a_large_psot`], with the tile-part
+/// 4 KiB long and an `EOC` after it, so that the walk that finds where the
+/// codestream ends reaches it, fed 61 bytes at a time with the reduction
+/// and the region changed between the feeds: what a call keeps of that
+/// walk depends on no option, so each call gives what a read from the
+/// start gives under the decoder's options of the moment, a reduction the
+/// header refuses and a window that runs past the image's edge
+/// included.
+#[test]
+fn header_calls_after_a_jp2c_box_ending_inside_its_main_header_under_changing_options() {
+    use crate::{Window, synth};
+    let whole = ppm_codestream(2);
+    let cut = second_ppm(&whole);
+    let reductions = [0, 1, 3];
+    let regions = [
+        Region::Whole,
+        Region::Window(Window::new(0, 0, 32, 32)),
+        Region::Window(Window::new(48, 48, 96, 96)),
+    ];
+    for (what, extra) in segments_after_a_jp2c_box() {
+        let (mut bytes, box_end) = jp2c_box_cut_at(&whole, cut, 0);
+        bytes.extend(&extra);
+        bytes.extend(&whole[cut..first_sot(&whole).unwrap()]);
+        bytes.extend(synth::tile_part(0, 0, 1, &[], &[0; 4096]));
+        bytes.extend([0xFF, 0xD9]);
+        let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+        decoder.feed(&bytes[..box_end]);
+        let chunks = bytes[box_end..].chunks(61).map(Some);
+        // Then every pair of options on the whole input.
+        let mut answers = Vec::new();
+        for (index, chunk) in chunks.chain([None; 9]).enumerate() {
+            if let Some(chunk) = chunk {
+                decoder.feed(chunk);
+            }
+            decoder
+                .set_resolution_reduction(reductions[index % 3])
+                .unwrap();
+            decoder.set_region(regions[index / 3 % 3].clone()).unwrap();
+            let got = format!("{:?}", decoder.header());
+            assert_eq!(
+                got,
+                fresh_header(decoder.bytes(), decoder.options()),
+                "{what} at {} bytes",
+                decoder.bytes_fed()
+            );
+            answers.push(got);
+        }
+        // On the whole input, the refused segment is an error under every
+        // option, and the header is read under the reductions it takes.
+        let last = &answers[answers.len() - 9..];
+        let read = last.iter().filter(|got| got.starts_with("Ok(Some")).count();
+        let refused = last.iter().filter(|got| got.starts_with("Err(")).count();
+        let expected = if extra.is_empty() { (3, 6) } else { (0, 9) };
+        assert_eq!((read, refused), expected, "{what}: {last:?}");
+    }
+}
+
 /// The top-level `jp2c` box of the JP2 file `bytes`: where it starts, the
 /// length of its header, 8 or 16 bytes.
 fn jp2c_box(bytes: &[u8]) -> Option<(usize, usize)> {
@@ -2598,13 +2655,38 @@ fn header_on_fixtures_whose_jp2c_box_ends_inside_the_main_header_is_a_read_from_
                 &[0xFF, 0xD9],
             ]
             .concat();
-            for (what, rest) in [
-                ("the rest", &whole[box_end..]),
-                ("boxes", &boxes[..]),
-                ("the rest, then an xml of length 0", &open_xml[..]),
-                ("the main header, then a tile-part of 1 KB", &long_part[..]),
-            ] {
-                let bytes = [&whole[..box_at], &header, &whole[payload..box_end], rest].concat();
+            // The box as it was, whose length runs past the bytes fed, so
+            // the input cuts it at `box_end` inside its main header and
+            // its payload grows with each feed: no read may keep where the
+            // walk that finds where the codestream ends stopped, as the
+            // codestream is no fixed payload (`Jp2File::end_walk`). It is
+            // the same file at every cut, so it is fed around the first
+            // and the last cut alone.
+            let uncut = [cuts[0], cuts[cuts.len() - 1]].contains(&cut).then(|| {
+                (
+                    "the box uncut, cut by the input",
+                    &whole[box_at..payload],
+                    &whole[box_end..],
+                )
+            });
+            for (what, header, rest) in [
+                ("the rest", &header[..], &whole[box_end..]),
+                ("boxes", &header[..], &boxes[..]),
+                (
+                    "the rest, then an xml of length 0",
+                    &header[..],
+                    &open_xml[..],
+                ),
+                (
+                    "the main header, then a tile-part of 1 KB",
+                    &header[..],
+                    &long_part[..],
+                ),
+            ]
+            .into_iter()
+            .chain(uncut)
+            {
+                let bytes = [&whole[..box_at], header, &whole[payload..box_end], rest].concat();
                 let bytes = &bytes[..bytes.len().min(1 << 16)];
                 let near = box_end.saturating_sub(16).max(1);
                 let mut points: Vec<usize> = (1..near).step_by(5).collect();
