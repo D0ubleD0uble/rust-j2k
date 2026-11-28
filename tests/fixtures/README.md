@@ -841,6 +841,34 @@ once, and no byte raises the limit, so no suffix lifts it. With
 the default limit the target's stand-in for a long suffix lets that hold
 through. It is synthetic, so it has no license restriction.
 
+`incremental/header_split_colr_lbox0_after_codestream_tile_part_fault_at_most.seed`
+(3184 bytes, SHA-256
+`9514676d0ea5addf569df33a3267e6403f12cb0ae3b4d2addc5fbfa4d5b8659d`) is the
+`colr` seed above with control byte 1 set to `06` and byte 4 to `ff`, so
+the sample limit is `AtMost(1 + 255 * 2^16)`, written by a one-off script
+(#735). At 2999 bytes the read meets the tile-part fault through the cap,
+and no byte raises the limit. The decode passes a `colr` of length 0 with
+any bytes more, so `header` gives the fault at once. Holding it, as
+`header` did while the box was a type the decode checks, the target fails
+on it at 2999 bytes. It is synthetic, so it has no license restriction.
+
+`incremental/header_split_colr_lbox0_after_codestream_address_space_tile_part_fault.seed`
+(3184 bytes, SHA-256
+`3c44697b9d064c0246208965c7af811f5ab4a9c61f052ed2b4001470c32d68d8`) is the
+`colr` seed above with control byte 1 set to `04`, so the sample limit is
+`Unlimited`, and SIZ set to an image of 2^31 x 2^27 in tiles of
+2^25 x 2^27 from offset 0, with `ihdr`'s height and width to match,
+written by a one-off script (the PR #734 review, for #735). At 2999 bytes
+the read meets the tile-part fault through a tile past what the target
+can address, which no limit admits, so `header` gives it at once. Holding
+it, the target fails on it at 2999 bytes. Under the default limit the
+image's samples are refused first. It is synthetic, so it has no license
+restriction.
+
+`tests/header_split_sample_limit.rs` checks both, and that a `bpcc` of
+length 0 in place of the `colr`, which one byte more puts at fault, still
+holds the fault.
+
 ### Retry ladder fixtures
 
 `retry_ladder/tile_precincts.j2k` (98 bytes, SHA-256

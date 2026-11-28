@@ -147,7 +147,12 @@ there, such as `xml `: no box can follow it, and its contents are never at
 fault. Once 2^32 bytes or more follow it, OpenJPEG skips it unread, so it
 ends the wait whatever its type. Once no box there can be read, the
 tile-parts are held as a codestream's are: a fault of the tile-parts is
-final, and an error in a tile waits until they close.
+final, and an error in a tile waits until they close. A `colr` of length 0
+that the decode passes ends the wait too, as it passes with any bytes
+more. There `header` still holds what its count of the tiles meets while
+the sample limit can grow with the input, under the default or a `Raised`
+limit, as a larger limit can take it away, and gives it at once under
+`AtMost` or `Unlimited`.
 
 Until the input closes, `refine` waits on the error as `Waiting::Held`,
 which carries the error `decode_with` gives on the bytes fed, and `header`

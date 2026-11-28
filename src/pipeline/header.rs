@@ -46,7 +46,10 @@ pub(crate) fn read_header_kept(
 /// still be read ([`jp2::Jp2File::after_settled`]). Once none can, the
 /// tile-parts are held as a codestream's are, or, where the codestream is
 /// the same whatever follows ([`jp2::Jp2File::codestream_fixed`]), only a
-/// tile refusal more bytes lift is. Past that, it gives what
+/// tile refusal more bytes lift is. Where a box after the codestream can
+/// still be read but passes whatever follows
+/// ([`jp2::Jp2File::after_passes_on`]), an error of the count of the tiles
+/// is held only while the sample limit can grow. Past that, it gives what
 /// [`read_header`] gives.
 pub(crate) fn read_header_streamed(
     bytes: &[u8],
@@ -145,14 +148,17 @@ fn read_header_cut(
             if !hold {
                 return Err(held.clone());
             }
-        } else if !hold || prefix.settled {
+        } else if !hold || prefix.settled || prefix.passes_on {
             // Once no box after the codestream can be read, the codestream
             // grows as a raw one does, and its tile-parts are held as a raw
             // one's are, or, where it is the same whatever follows, only a
             // tile refusal more bytes lift is
-            // ([`jp2::Jp2File::codestream_fixed`]). Before that, a fault of
-            // such a box comes first, so every error of the tile-parts is
-            // held, and they are not walked.
+            // ([`jp2::Jp2File::codestream_fixed`]). Where a box there can
+            // still be read but passes whatever follows, more bytes change
+            // only the sample limit, so only an error they can lift is
+            // held ([`Hold::Lifting`]). Otherwise a fault of such a box
+            // comes first, so every error of the tile-parts is held, and
+            // they are not walked.
             check_geometry(
                 prefix.codestream,
                 &prefix.parsed,
@@ -160,10 +166,11 @@ fn read_header_cut(
                 reduction,
                 samples::cap(&options.sample_limit, bytes.len()),
                 options.strict,
-                match (hold, prefix.fixed) {
-                    (false, _) => Hold::Never,
-                    (true, false) => Hold::UntilClosed,
-                    (true, true) => Hold::Liftable,
+                match (hold, prefix.fixed, prefix.settled) {
+                    (false, ..) => Hold::Never,
+                    (true, true, _) => Hold::Liftable,
+                    (true, false, true) => Hold::UntilClosed,
+                    (true, false, false) => Hold::Lifting,
                 },
                 kept.map(|kept| (kept, start)),
             )?;
@@ -289,7 +296,9 @@ const GEOMETRY_STEPS: u64 = 1 << 22;
 /// With [`Hold::UntilClosed`], a refusal with no fault in the tile-parts is
 /// held while the walk of the tile-parts has not closed (see
 /// [`read_header_streamed`]), one more bytes lift included. With
-/// [`Hold::Liftable`], only a refusal more bytes lift is held.
+/// [`Hold::Liftable`], only a refusal more bytes lift is held. With
+/// [`Hold::Lifting`], an error is held only where a larger cap can take
+/// it away.
 ///
 /// `kept` is what an earlier call on the start of the same input left, with
 /// where the codestream `bytes` starts in that input (see [`HeaderCache`]).
@@ -335,6 +344,8 @@ fn check_geometry(
     let mut fault = || faults.find(bytes, parsed, strict);
     let checked = match counted {
         Ok(true) => Ok(()),
+        // Under `Hold::Lifting` only a larger cap can take a stop away.
+        Ok(false) | Err(_) if hold == Hold::Lifting && cap.grows() => Ok(()),
         Ok(false) => fault().map_or(Ok(()), Err),
         Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => match fault() {
             Some(fault) => Err(fault),
@@ -368,6 +379,18 @@ enum Hold {
     /// it: the tile-parts never close, and no byte changes them
     /// ([`jp2::Jp2File::codestream_fixed`]).
     Liftable,
+    /// It holds every error of the count of the tiles, and the fault of
+    /// the tile-parts each meets, while the cap can grow
+    /// ([`samples::Cap::grows`]), and gives them once it cannot: under a
+    /// ceiling the caller set
+    /// ([`SampleLimit::AtMost`](crate::SampleLimit::AtMost)), or at the
+    /// samples the target can address, as under `Unlimited`. The codestream
+    /// is the same whatever follows, and a box after it can still be read
+    /// but passes whatever follows ([`jp2::Jp2File::after_passes_on`]), so
+    /// more bytes change only the cap. A larger one can take any stop of
+    /// the count away: a refusal, a stop at a budget, or the refusal of a
+    /// lower tile counted only because a tile over the cap follows it.
+    Lifting,
 }
 
 /// The walk of the tile-parts for the decode's error for them
@@ -1297,6 +1320,12 @@ pub(super) struct Jp2Prefix<'a> {
     /// Whether no box after the codestream can still be read, whatever
     /// bytes follow ([`jp2::Jp2File::after_settled`]).
     pub(super) settled: bool,
+    /// Whether, though a box after the codestream can still be read, the
+    /// boxes there that pass now pass whatever bytes follow, and the
+    /// codestream is the same ([`jp2::Jp2File::after_passes_on`]). More
+    /// bytes then change only the sample limit, so only an error a larger
+    /// limit can take away is held ([`Hold::Lifting`]).
+    pub(super) passes_on: bool,
     /// Whether the codestream the decode reads is the same whatever bytes
     /// follow, with no box after it read ([`jp2::Jp2File::codestream_fixed`]),
     /// so that the tile-parts' errors are final though they have not closed.
@@ -1489,6 +1518,7 @@ pub(super) fn read_jp2_prefix<'a>(
         selection,
         held,
         settled: file.after_settled,
+        passes_on: file.after_passes_on,
         fixed: file.codestream_fixed,
     })
 }
