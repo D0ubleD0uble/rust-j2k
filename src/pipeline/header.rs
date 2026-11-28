@@ -654,7 +654,10 @@ pub(crate) struct HeaderCache {
 /// the start gives. It is kept only while the reads find the main header
 /// cut short: the first read that gives anything else drops it. Where the
 /// `jp2c` box ends inside its own main header and no byte after it can
-/// change the codestream, it keeps that error instead ([`Self::ended`]).
+/// change the codestream, it keeps that error instead ([`Self::ended`]),
+/// and until the bytes fed show whether that is so, the error with where
+/// the walk that finds where the codestream ends stopped
+/// ([`Self::unended`]).
 #[derive(Default)]
 pub(crate) struct KeptCut {
     /// The bytes of the input when it was kept.
@@ -674,6 +677,13 @@ pub(crate) struct KeptCut {
     /// read of more bytes gives: the boxes before the codestream, the box
     /// and its payload are all in and do not change.
     ended: Option<Error>,
+    /// In a JP2 file whose `jp2c` box ends inside its own main header and
+    /// within the input, where the walk that finds where the codestream ends
+    /// stopped ([`jp2::Jp2File::end_walk`]), and the error the read gave.
+    /// While that walk, gone on with on more bytes, finds no end or fault,
+    /// the codestream is the box's payload, and every read gives that error
+    /// (see [`Self::main_still_cut`]).
+    unended: Option<(jp2::EndWalk, Error)>,
     /// A hash of a sample of the input when it was kept ([`sample_hash`]),
     /// to check in a debug build that a no shorter input still starts with
     /// it.
@@ -740,7 +750,10 @@ impl KeptCut {
 
     /// Whether there is anything to go on from.
     fn keeps(&self) -> bool {
-        self.boxes.is_some() || self.main.is_some() || self.ended.is_some()
+        self.boxes.is_some()
+            || self.main.is_some()
+            || self.ended.is_some()
+            || self.unended.is_some()
     }
 
     /// The error a read of `bytes` gives where the walk of the boxes before
@@ -771,11 +784,30 @@ impl KeptCut {
     /// go on with the header. Once they do not, this gives `None`, and the
     /// read from the start finds the codestream fixed to the box's payload
     /// and keeps its error in [`Self::ended`], which every later call gives.
+    ///
+    /// Until then, where that read found the `jp2c` box whole and the walk
+    /// that finds where the codestream ends cut short, it keeps where that
+    /// walk stopped and its error in [`Self::unended`]. A later call goes on
+    /// with the walk from there, over the bytes fed since, and gives that
+    /// error while the walk still finds no end or fault: the codestream is
+    /// then still the box's payload, which is whole and does not change
+    /// ([`jp2::Jp2File::end_walk`]), and the boxes before it do not either,
+    /// so a read from the start gives the same error. Nothing past the box
+    /// is read but by that walk, so the error does not depend on what the
+    /// bytes after the box hold, and the walk reads each of them once over
+    /// the calls. Where it finds an end or a fault, it is let go and the
+    /// call reads from the start.
     fn main_still_cut(&mut self, bytes: &[u8]) -> Option<Error> {
         if let Some(ended) = &self.ended {
             return Some(ended.clone());
         }
         let start = self.jp2c?;
+        if let Some((walk, error)) = &mut self.unended {
+            if walk.still_cut(bytes.get(start..)?) {
+                return Some(error.clone());
+            }
+            self.unended = None;
+        }
         let (at, main) = self.main.take()?;
         let tail = bytes.get(start..).filter(|_| at == start)?;
         match codestream::parse_header_resumed(tail, Some(main)) {
@@ -1355,10 +1387,18 @@ pub(super) fn read_jp2_prefix<'a>(
             //   box, the payload is the rest of the input, the walk's own
             //   bytes, which reach an `SOT` or a fault, so the parse does not
             //   stop cut short.
+            //
+            // Where the walk that finds where the codestream ends is cut
+            // short, and the box is whole, the codestream is the box's
+            // payload until more bytes let that walk reach an end or a
+            // fault, so a later read gives this error while it does not
+            // ([`KeptCut::main_still_cut`]).
             if let Err(error @ Error::Incomplete(_)) = &parsed {
                 if file.after_settled {
                     cut.main = None;
                     cut.ended = Some(error.clone());
+                } else if let Some(walk) = file.end_walk {
+                    cut.unended = Some((walk, error.clone()));
                 }
             }
             parsed?

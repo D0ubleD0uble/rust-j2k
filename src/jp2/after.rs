@@ -62,35 +62,67 @@ pub(crate) enum End {
     Broken,
 }
 
+/// Where [`codestream_end`] stopped on input that cuts its walk short
+/// ([`End::Unknown`]), to go on from on a longer input that starts with the
+/// same bytes ([`codestream_end_from`]). Each step reads only bytes before
+/// the end of the input it was taken on, so on such an input the walk goes
+/// through the same steps to the same place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct EndWalk {
+    /// The offset of the next marker to read: `SOC` at 0, then a marker of
+    /// the main header, or an `SOT` once [`Self::tile_parts`] is set.
+    at: usize,
+    /// Whether the walk is past the main header, among the tile-parts.
+    tile_parts: bool,
+}
+
+impl EndWalk {
+    /// Whether the walk, gone on with on `codestream`, which extends the
+    /// input it stopped on, still finds no end or fault there
+    /// ([`End::Unknown`]). It is left where it stops.
+    pub(crate) fn still_cut(&mut self, codestream: &[u8]) -> bool {
+        codestream_end_from(codestream, self) == End::Unknown
+    }
+}
+
 /// Find where the codestream at the start of `bytes` ends by stepping over the
 /// main header's marker segments and then the tile-parts by their `Psot`. This
 /// reads only marker and segment lengths; the codestream parser checks the
 /// rest. Each step moves at least 2 bytes, so the walk is linear in the input.
 pub(crate) fn codestream_end(bytes: &[u8]) -> End {
+    codestream_end_from(bytes, &mut EndWalk::default())
+}
+
+/// [`codestream_end`], going on from `walk`, where a walk of a shorter input
+/// that `bytes` extend stopped. Where it gives [`End::Unknown`], `walk` is
+/// left where this walk stopped; otherwise it is left anywhere.
+pub(crate) fn codestream_end_from(bytes: &[u8], walk: &mut EndWalk) -> End {
     let marker = |at: usize| {
         bytes
             .get(at..at.checked_add(2)?)
             .map(|b| u16::from_be_bytes([b[0], b[1]]))
     };
-    match marker(0) {
-        Some(SOC) => {}
-        Some(_) => return End::Broken,
-        None => return End::Unknown,
+    if walk.at == 0 {
+        match marker(0) {
+            Some(SOC) => walk.at = 2,
+            Some(_) => return End::Broken,
+            None => return End::Unknown,
+        }
     }
     // The main header is stepped through as the codestream parser walks it:
     // `SOC`, `SOD`, `EOC` and a code that is no marker are refused there on
     // their two bytes, and a marker with no segment (`EPH` and the reserved
     // `0xFF30..=0xFF3F`) is two bytes long.
-    let mut at = 2usize;
-    loop {
+    while !walk.tile_parts {
+        let at = walk.at;
         match marker(at) {
-            Some(SOT) => break,
+            Some(SOT) => walk.tile_parts = true,
             Some(SOC | SOD | EOC) => return End::Broken,
             Some(code) if !is_marker(code) => return End::Broken,
-            Some(code) if !has_segment(code) => at = stepped(at, at + 2, bytes),
+            Some(code) if !has_segment(code) => walk.at = stepped(at, at + 2, bytes),
             Some(_) => match marker(at + 2) {
                 Some(length) if length >= 2 => {
-                    at = stepped(at, at + 2 + usize::from(length), bytes);
+                    walk.at = stepped(at, at + 2 + usize::from(length), bytes);
                 }
                 Some(_) => return End::Broken,
                 None => return End::Unknown,
@@ -99,6 +131,7 @@ pub(crate) fn codestream_end(bytes: &[u8]) -> End {
         }
     }
     loop {
+        let at = walk.at;
         let Some(&[p0, p1, p2, p3]) = at.checked_add(6).and_then(|from| bytes.get(from..from + 4))
         else {
             return End::Unknown;
@@ -120,7 +153,7 @@ pub(crate) fn codestream_end(bytes: &[u8]) -> End {
         };
         match marker(end) {
             Some(EOC) => return End::At(end + 2),
-            Some(SOT) => at = stepped(at, end, bytes),
+            Some(SOT) => walk.at = stepped(at, end, bytes),
             Some(_) => return End::Broken,
             // One byte in that is not `0xFF` starts no marker, whatever
             // byte follows it.

@@ -336,14 +336,17 @@ whole, a call goes on from where the last one stopped instead, in
 `pipeline::header::KeptCut`: after the last whole box before a JP2 file's
 `jp2c`, and after the main header's last whole marker segment, with what
 the segments before it set (`PPM` data as offsets, not a copy). The calls
-then read those boxes and segments about once in all. Two cases are read from
+then read those boxes and segments about once in all. One case is read from
 the start on each call: a box of length 0 before the codestream, which runs to
-the end of the bytes fed, and a `jp2c` box that ends inside its own main header
-where the bytes after the box read as marker segments that the header's parse
-refuses, or that end the header (`KeptCut::main_still_cut` then drops its
-parse), until the bytes fed let the walk of their segment and tile-part lengths
-reach an end or a fault, which a large `Psot` can put gigabytes away. Where the
-codestream is then the box's payload whatever follows
+the end of the bytes fed. Where a `jp2c` box ends inside its own main header,
+and is whole in the bytes fed, the codestream is the box's payload until the
+walk of the segment and tile-part lengths after the box
+(`jp2::after::codestream_end`) reaches an end or a fault, which a large `Psot`
+can put gigabytes away. The first read that finds the main header cut short
+there keeps its error with where that walk stopped (`KeptCut::unended`), and
+each later call goes on with the walk over the bytes fed since and gives that
+error while it finds neither. Once it does, the call reads from the start.
+Where the codestream is then the box's payload whatever follows
 (`jp2::Jp2File::after_settled`), the error of that read is kept
 (`KeptCut::ended`) and given by every later call, and the parse is let go. The
 header of a tile-part not yet fed in full is read
