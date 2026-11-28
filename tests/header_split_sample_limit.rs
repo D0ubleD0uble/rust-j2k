@@ -13,6 +13,13 @@
 //! `decode_with`, which parse every tile-part, still refuse. Under
 //! [`SampleLimit::AtMost`] no byte raises the limit, so the same fault is
 //! final, and `replaceable` must find no suffix there.
+//!
+//! The decode passes such a `colr` with any bytes more, so where no byte
+//! raises the cap, under `AtMost` or under `Unlimited` (where the read
+//! meets the fault through a tile past the address space), `header` gives
+//! the fault at once, and `refine` gives its decode's fault under any
+//! limit. A `bpcc` there can still turn at fault, so the fault is still
+//! held behind one.
 
 #[path = "support/inconsistent.rs"]
 mod inconsistent;
@@ -99,4 +106,127 @@ fn under_a_ceiling_the_same_fault_is_final() {
     let ceiling = options.with_sample_limit(SampleLimit::AtMost(1 << 29));
     assert_eq!(fault_of(read_header_with(&prefix, &ceiling)), Some(FAULT));
     assert!(!replaceable::replaceable(&prefix, &ceiling));
+}
+
+/// The `colr` seed with the sample limit `AtMost(1 + 255 * 2^16)`: control
+/// byte 1 is `06` and byte 4 is `ff`.
+const AT_MOST: &str = "header_split_colr_lbox0_after_codestream_tile_part_fault_at_most";
+
+/// The `colr` seed under `Unlimited` (control byte 1 is `04`), its image
+/// 2^31 x 2^27 in tiles 2^25 x 2^27, past what the target can address.
+const ADDRESS_SPACE: &str =
+    "header_split_colr_lbox0_after_codestream_address_space_tile_part_fault";
+
+/// The seed `name`: its 12 control bytes, then the file.
+fn seed_of(name: &str) -> Vec<u8> {
+    synth::read_file(synth::fixtures(&format!("incremental/{name}.seed")))
+}
+
+/// What `header()` must give on `prefix`, as the target has it:
+/// `read_header_with` with `strict` off, an incomplete main header as
+/// `None`, as text.
+fn oracle(prefix: &[u8], options: &DecodeOptions) -> String {
+    format!(
+        "{:?}",
+        match inconsistent::checked(read_header_with(prefix, options)) {
+            Ok(header) => Ok(Some(header)),
+            Err(Error::Incomplete(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    )
+}
+
+/// `refine` on a decoder fed `prefix` under `options`, as an error.
+fn refined(prefix: &[u8], options: &DecodeOptions) -> Result<(), Error> {
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(prefix);
+    decoder.refine().map(|_| ())
+}
+
+/// Under a limit no byte raises, the fault the read meets through a cap at
+/// 2999 bytes is final: the `colr` of length 0 the input ends inside passes
+/// whatever follows, and from 2^32 bytes on it is skipped, which raises no
+/// cap here. So `header` gives it at once, and `refine`, whose decode meets
+/// it in its parse of the tile-parts, too. From there on each call of a
+/// decoder fed the seed's pieces gives what `read_header_with` gives on the
+/// bytes fed, and so does a second call.
+fn a_fault_no_byte_lifts_is_given_at_once(name: &str, limit: SampleLimit) {
+    let (prefix, options) = at_feed(name, 2999);
+    let options = options.with_sample_limit(limit);
+    assert_eq!(fault_of(read_header_with(&prefix, &options)), Some(FAULT));
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&prefix);
+    assert_eq!(fault_of(decoder.header()), Some(FAULT), "{name}");
+    assert_eq!(fault_of(decoder.header()), Some(FAULT), "{name}: again");
+    assert_eq!(
+        fault_of(refined(&prefix, &options)),
+        Some(FAULT),
+        "{name}: refine"
+    );
+    // The same through what the decoder keeps, fed in the seed's pieces.
+    let seed = seed_of(name);
+    let (control, file) = seed.split_at(12);
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    for feed in pieces::Pieces::new(control, file.len()) {
+        decoder.feed(&file[decoder.bytes_fed()..feed.to]);
+        let got = format!("{:?}", inconsistent::checked(decoder.header()));
+        if feed.to >= 2999 {
+            let at = format!("{name} at {}", feed.to);
+            assert_eq!(got, oracle(&file[..feed.to], &options), "{at}");
+            assert_eq!(format!("{:?}", decoder.header()), got, "{at}: again");
+        }
+    }
+}
+
+/// Under `AtMost` the cap is a ceiling the caller set. Before, `header`
+/// held the fault, as the box of length 0 was of a type the decode checks,
+/// and the `header_split` target failed on the seed at 2999 bytes.
+#[test]
+fn under_a_ceiling_header_gives_a_fault_met_through_a_cap_at_once() {
+    a_fault_no_byte_lifts_is_given_at_once(AT_MOST, SampleLimit::AtMost(1 + (255 << 16)));
+}
+
+/// Under `Unlimited` the read meets the fault through a tile past the
+/// address space, which no limit admits. Before, `header` held it, and the
+/// target failed on the seed at 2999 bytes.
+#[test]
+fn under_unlimited_header_gives_a_fault_met_past_the_address_space_at_once() {
+    a_fault_no_byte_lifts_is_given_at_once(ADDRESS_SPACE, SampleLimit::Unlimited);
+}
+
+/// Under the default limit `header` still holds the fault, which a longer
+/// input lifts (above), but `refine`, whose decode parses every tile-part
+/// whatever the limit, gives it at once: no box after the codestream can
+/// turn at fault before it.
+#[test]
+fn under_the_default_limit_only_header_holds_the_fault() {
+    let (prefix, options) = at_feed(SEED, 2999);
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&prefix);
+    assert!(matches!(decoder.header(), Ok(Some(_))));
+    assert_eq!(fault_of(refined(&prefix, &options)), Some(FAULT));
+}
+
+/// A `bpcc` of length 0 in place of the `colr`, holding the one byte the
+/// file's one component takes, passes now, and one byte more puts it at
+/// fault, which the decode meets before the tile-parts. So under a ceiling
+/// `header` still holds the fault it meets through a cap there, and
+/// `refine` waits on it.
+#[test]
+fn a_bpcc_of_length_0_after_the_codestream_can_still_turn_at_fault() {
+    let (prefix, options) = at_feed(AT_MOST, 2999);
+    let options = options.with_sample_limit(SampleLimit::AtMost(1 + (255 << 16)));
+    let colr = prefix.len() - 72;
+    assert_eq!(&prefix[colr..colr + 8], b"\0\0\0\0colr");
+    let bpcc = [&prefix[..colr], b"\0\0\0\0bpcc", &[7]].concat();
+    assert_eq!(fault_of(read_header_with(&bpcc, &options)), Some(FAULT));
+    let longer = [&bpcc[..], &[7]].concat();
+    assert!(matches!(
+        read_header_with(&longer, &options),
+        Err(Error::FileFormat(_))
+    ));
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&bpcc);
+    assert!(matches!(decoder.header(), Ok(Some(_))));
+    assert!(refined(&bpcc, &options).is_ok());
 }

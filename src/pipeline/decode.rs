@@ -219,12 +219,15 @@ fn decode_jp2(bytes: &[u8], options: &DecodeOptions, ledger: Option<&Ledger>) ->
     // one's are: a fault of the parse of the tile-parts is final, and an
     // error past it is held until they close, or, where the codestream is
     // the same whatever follows ([`jp2::Jp2File::codestream_fixed`]), not
-    // at all.
+    // at all. Where a box there can still be read but passes whatever
+    // follows, and the codestream is the same
+    // ([`jp2::Jp2File::after_passes_on`]), they are held as once none can.
+    let settled = prefix.settled || prefix.passes_on;
     let cs = match codestream::parse_tiles_with(prefix.codestream, prefix.parsed, options.strict) {
         Ok(cs) => cs,
-        Err(fault) => return held_unless(prefix.settled, ledger, Err(fault)),
+        Err(fault) => return held_unless(settled, ledger, Err(fault)),
     };
-    let closed = prefix.fixed || (prefix.settled && cs.closed);
+    let closed = prefix.fixed || (settled && cs.closed);
     let decoded = || {
         let cap = samples::cap(&options.sample_limit, bytes.len());
         let image = decode_codestream(cs, options, &prefix.selection, cap, ledger)?;

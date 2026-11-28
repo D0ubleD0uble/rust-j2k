@@ -375,7 +375,13 @@ impl IncrementalDecoder {
     /// bytes fed and the `jp2c` box's length ends the box within them:
     /// the codestream is then the same whatever follows, so only a tile
     /// refusal more bytes lift is held, and every other error is given at
-    /// once. It holds back the errors
+    /// once. Where the box after the codestream that the bytes fed end
+    /// inside is a `colr` of length 0 that the decode passes, it passes
+    /// with any bytes more, so more bytes change only the sample limit:
+    /// an error met counting the tiles, or the fault of the tile-parts it
+    /// meets, is held while the limit can still grow, under the default or
+    /// a `Raised` limit, and given at once under `AtMost` or `Unlimited`.
+    /// It holds back the errors
     /// `refine` waits on in a JP2 file's boxes too: a fault in a box after
     /// the codestream that the bytes fed end inside, and a refusal of the
     /// sRGB step while a box after the codestream can still be read, one
@@ -389,19 +395,17 @@ impl IncrementalDecoder {
     /// before the codestream, and in the main header, after its last whole
     /// marker segment. So the calls after each feed read the boxes before the
     /// codestream and the main header about once in all, however small the
-    /// pieces, with two exceptions. A call that finds a box of length 0 before
+    /// pieces, with one exception: a call that finds a box of length 0 before
     /// the codestream reads the boxes from the start, as that box runs to the
-    /// end of the bytes fed. And where the `jp2c` box ends inside its own main
-    /// header and the bytes after the box read as marker segments that the
-    /// header's parse refuses, or that end the header, each call reads the
-    /// boxes and the main header from the start until the bytes fed let the
-    /// walk of their segment and tile-part lengths reach an end or a fault,
-    /// which a large `Psot` can put gigabytes away. To resume, the decoder
-    /// keeps where the last call stopped, the first `ihdr`, and what the
-    /// main header's segments read so far set (its `PPM` data as
-    /// offsets into the bytes fed, not a copy), until a call finds the main
-    /// header whole, or an error. It is held while the main header stays
-    /// cut short, whether or not `header` is called again. It takes up to
+    /// end of the bytes fed. Where the `jp2c` box ends inside its own main
+    /// header, a call also goes on from where the last one stopped the walk
+    /// of the segment and tile-part lengths after the box, which finds where
+    /// the codestream ends. To resume, the decoder keeps where the last call
+    /// stopped, the first `ihdr`, and what the main header's segments read so
+    /// far set (its `PPM` data as offsets into the bytes fed, not a copy),
+    /// until a call finds the main header whole, or an error. It is held
+    /// while the main header stays cut short, whether or not `header` is
+    /// called again. It takes up to
     /// about 20 bytes for each byte of `COC`, `QCC` and `RGN` segments, plus
     /// under 1 KB and 4 bytes for each component, and 24 to 48 bytes for
     /// each `PPM` segment, as their table grows by doubling. That is about
@@ -1034,7 +1038,8 @@ pub enum Waiting {
     /// length 0 there is read while under 2^32 bytes follow it, so it does
     /// not count, unless the decode does not check its type, such as
     /// `xml `: no box follows it, and its contents are never at fault, so
-    /// none can be read once it is in.
+    /// none can be read once it is in. Nor does a `colr` of length 0 that
+    /// the decode passes, as it passes with any bytes more.
     ///
     /// More bytes can replace the error with one that comes earlier in the
     /// input, and an image can still follow, for example where a later

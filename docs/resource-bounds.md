@@ -671,13 +671,15 @@ megabytes of `PPM` data is parsed on every call from then on. Before that,
 while the bytes fed end inside the main header or before a JP2 file's
 `jp2c`, each call goes on from the last whole marker segment or box, so the
 calls read them about once in all (a 256 KiB `PPM` main header fed 256
-bytes at a time: 506 times over before, once now). Two cases are read from
+bytes at a time: 506 times over before, once now). One case is read from
 the start on each call: a box of length 0 before the codestream, which runs
-to the end of the bytes fed, and a `jp2c` box that ends inside its own main
-header where the bytes after the box read as marker segments that the header's
-parse refuses, or that end the header, until the bytes fed let the walk of
-their segment and tile-part lengths reach an end or a fault, which a large
-`Psot` can put gigabytes away. Where the bytes after the box are not marker segments,
+to the end of the bytes fed. Where a `jp2c` box ends inside its own main
+header, the walk of the segment and tile-part lengths after it, which finds
+where the codestream ends, also goes on from where the last call left it, so
+a large `Psot` that puts that end gigabytes away costs each call only the
+bytes fed since (a 33 KB codestream cut inside its main header, then a
+`Psot` of 16 MiB, fed 256 bytes at a time: about 79 KB walked a call before,
+a few bytes now). Where the bytes after the box are not marker segments,
 the codestream is the box's payload whatever follows, and the calls give the
 error kept from the first read that finds that, holding under 4 KB. To go on from
 where it stopped, the decoder keeps what the main header's segments read so far

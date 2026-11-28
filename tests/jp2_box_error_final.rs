@@ -757,6 +757,32 @@ fn tile_part_file(codestream: &[u8], trailing: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// A fault in a tile-part header, then a whole `colr` with an explicit
+/// length that passes: `refine` holds the fault, since a box after the
+/// `colr` can still be at fault. With a `colr` too short after it,
+/// `decode_with` gives that box's error instead.
+#[test]
+fn a_fault_before_a_whole_colr_that_passes_is_held() {
+    let colr = synth::bx(b"colr", &synth::colr_enum(17));
+    let bytes = tile_part_file(&coc_fault(), &colr);
+    let whole = error_of(&decode_with(&bytes, &DecodeOptions::default())).expect("an error");
+    assert!(whole.starts_with("Marker"), "{whole}");
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).expect("valid");
+    decoder.feed(&bytes);
+    match decoder.refine() {
+        Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
+            assert_eq!(format!("{error:?}"), whole);
+        }
+        other => panic!("{other:?}"),
+    }
+    let longer = [bytes, synth::bx(b"colr", &[1, 0])].concat();
+    let error = error_of(&decode_with(&longer, &DecodeOptions::default())).expect("an error");
+    assert!(
+        error.starts_with("FileFormat") && error.contains("a `colr` box holds 2 bytes"),
+        "{error}"
+    );
+}
+
 /// [`codestream`] of one component with the reserved marker `FF 30`, which
 /// has no segment, at the end of its main header, then a `COM` of `comment`
 /// zero bytes when `comment` is not 0.
@@ -1549,16 +1575,18 @@ fn checked_after() -> [(&'static [u8; 4], Vec<u8>); 8] {
 /// whole and then with more bytes. After each of [`UNREAD`], holding 2
 /// bytes that would be at fault in a `colr`, `refine` gives the fault at
 /// once and `header` what `read_header_with` gives, and more bytes change
-/// neither. After each of [`checked_after`], `header` gives the header and
-/// `refine` waits on `Held`, though the box passes where its type allows:
-/// more bytes can bring a fault in it, as they do to a `bpcc` and a `jp2h`
-/// here.
+/// neither. So it is after a `colr` that passes, which passes with any
+/// bytes more. After each other of [`checked_after`], `header` gives the
+/// header and `refine` waits on `Held`, though the box passes where its
+/// type allows: more bytes can bring a fault in it, as they do to a `bpcc`
+/// and a `jp2h` here.
 #[test]
-fn an_error_before_a_box_of_length_0_is_final_only_for_a_type_not_checked() {
+fn an_error_before_a_box_of_length_0_is_final_only_where_the_box_cannot_turn_at_fault() {
     let lenient = DecodeOptions::default().with_strict(false);
     let unread = UNREAD.iter().map(|kind| (*kind, vec![1, 0], true));
     let checked = checked_after().into_iter();
-    for (kind, payload, final_at_once) in unread.chain(checked.map(|(k, p)| (k, p, false))) {
+    let checked = checked.map(|(kind, payload)| (kind, payload, kind == b"colr"));
+    for (kind, payload, final_at_once) in unread.chain(checked) {
         let name = String::from_utf8_lossy(&kind[..]).into_owned();
         let bytes = tile_part_file(&coc_fault(), &open_box(kind, &payload));
         let whole = error_of(&decode_with(&bytes, &lenient)).expect("an error");
