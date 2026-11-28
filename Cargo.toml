@@ -54,6 +54,13 @@ exclude = [
 all-features   = true
 rustdoc-args   = ["--cfg", "docsrs"]
 
+# Cargo skips scraping `examples/` for the "Examples found in repository" panels
+# when a crate has dev-dependencies, unless one example opts in. docs.rs already
+# passes `-Zrustdoc-scrape-examples`, so this is all it takes.
+[[example]]
+name                = "decode"
+doc-scrape-examples = true
+
 # Decode-only and self-contained on purpose: no third-party codec dependency, so
 # the crate stays pure-Rust and cross-compiles to every target with no C toolchain.
 [dependencies]
