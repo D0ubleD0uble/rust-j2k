@@ -87,6 +87,7 @@ pub use palette::{ChannelMapping, MappingKind, Palette, PaletteColumn};
 use crate::codestream::markers::Siz;
 use crate::{Component, ComponentInfo, Error, Result, WorkLimit};
 use after::End;
+pub(crate) use after::EndWalk;
 use boxes::{Boxes, Jp2Box, type_name, walk_after_codestream};
 use channels::ChannelPlan;
 pub(crate) use header::is_jph;
@@ -179,6 +180,13 @@ pub(crate) struct Jp2File<'a> {
     /// ([`boxes::Boxes::last_was_whole`]). Then the decode's answer is
     /// final, as a raw codestream's is once it closes.
     pub(crate) codestream_fixed: bool,
+    /// Where the walk that finds where the codestream ends stopped
+    /// ([`after::codestream_end_from`]), when the input cuts it short and
+    /// the `jp2c` box ends where its header says, within the input. Until a
+    /// longer input lets that walk reach an end or a fault, the codestream
+    /// of that input is this one, the box's payload, and nothing after it
+    /// is read.
+    pub(crate) end_walk: Option<after::EndWalk>,
 }
 
 impl<'a> Jp2File<'a> {
@@ -275,7 +283,7 @@ pub(crate) fn parse_boxes<'a>(
     color::check_bpcc(&header)?;
     let color = color::read(&header)?;
     let whole = boxes.last_was_whole();
-    let (codestream, rest, reads) =
+    let (codestream, rest, reads, end_walk) =
         locate_codestream(bytes, item.payload, boxes.rest(), packet_work);
     let after = walk_after_codestream(rest);
     let settled = match reads {
@@ -299,6 +307,7 @@ pub(crate) fn parse_boxes<'a>(
         after_open: after.open,
         after_settled: settled,
         codestream_fixed: reads == AfterRead::Broken && whole,
+        end_walk: end_walk.filter(|_| whole),
     })
 }
 
@@ -543,7 +552,9 @@ impl BoxesCut {
 
 /// Find the codestream that starts with the `jp2c` box's contents `payload`,
 /// the box being followed by `rest` in `file`. Returns the codestream, the
-/// bytes after it, and whether OpenJPEG reads those bytes as boxes.
+/// bytes after it, whether OpenJPEG reads those bytes as boxes, and, where
+/// the input cuts short the walk that finds where the codestream ends
+/// ([`after::codestream_end_from`]), where that walk stopped.
 ///
 /// OpenJPEG reads the codestream from the start of the box to wherever its
 /// tile-parts end, whatever the box's length says. When every tile-part has a
@@ -567,16 +578,18 @@ fn locate_codestream<'a>(
     payload: &'a [u8],
     rest: &'a [u8],
     packet_work: &WorkLimit,
-) -> (&'a [u8], &'a [u8], AfterRead) {
+) -> (&'a [u8], &'a [u8], AfterRead, Option<EndWalk>) {
     // `payload` and `rest` are the end of `file`, back to back.
     let tail = file
         .len()
         .checked_sub(rest.len() + payload.len())
         .and_then(|start| file.get(start..));
     let Some(tail) = tail else {
-        return (payload, rest, AfterRead::NotYet);
+        return (payload, rest, AfterRead::NotYet, None);
     };
-    match after::codestream_end(tail) {
+    let mut walk = EndWalk::default();
+    let (codestream, rest, reads): (_, &[u8], _) = match after::codestream_end_from(tail, &mut walk)
+    {
         End::At(end) => (&tail[..end], &tail[end..], AfterRead::Yes),
         End::OpenLastPart(_) if payload.ends_with(&[0xFF, 0xD9]) => {
             (payload, rest, AfterRead::Never)
@@ -597,8 +610,9 @@ fn locate_codestream<'a>(
         }
         End::OpenLastPart(_) => (tail, &[], AfterRead::Never),
         End::Broken => (payload, rest, AfterRead::Broken),
-        End::Unknown => (payload, rest, AfterRead::NotYet),
-    }
+        End::Unknown => return (payload, rest, AfterRead::NotYet, Some(walk)),
+    };
+    (codestream, rest, reads, None)
 }
 
 /// Whether OpenJPEG reads the boxes after the codestream

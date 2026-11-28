@@ -2243,15 +2243,11 @@ fn header_calls_after_a_jp2c_box_ending_inside_its_main_header_read_it_about_onc
     }
 }
 
-/// A `jp2c` box whose payload ends inside a `COM` segment just after the
-/// bytes `FF D9`, with the `COM` going on past the box, then a tile-part of
-/// `Psot = 0` and 64 KiB of its data, fed 256 bytes at a time after the
-/// box. Once the `SOT` is in, the codestream is the box's payload whatever
-/// follows (it ends in `FF D9` before a tile-part of `Psot = 0`), so the
-/// calls read the boxes and the main header about once in all, and each
-/// gives what a read from the start gives.
-#[test]
-fn header_calls_on_a_jp2c_box_ending_in_ff_d9_inside_its_main_header_read_it_about_once() {
+/// A JP2 file whose `jp2c` box's payload ends inside a `COM` segment just
+/// after the bytes `FF D9`, with the `COM` going on past the box, then a
+/// tile-part of `Psot = 0` and 64 KiB of its data. Returns the file and
+/// where the box ends in it.
+fn jp2c_box_ending_in_ff_d9() -> (Vec<u8>, usize) {
     use crate::synth;
     let whole = ppm_codestream(8);
     let main = first_sot(&whole).unwrap();
@@ -2278,6 +2274,17 @@ fn header_calls_on_a_jp2c_box_ending_in_ff_d9_inside_its_main_header_read_it_abo
     bytes.extend(synth::sot(0, 0, 0, 1));
     bytes.extend([0xFF, 0x93]);
     bytes.resize(bytes.len() + (64 << 10), 0);
+    (bytes, box_end)
+}
+
+/// [`jp2c_box_ending_in_ff_d9`], fed 256 bytes at a time after the box.
+/// Once the `SOT` is in, the codestream is the box's payload whatever
+/// follows (it ends in `FF D9` before a tile-part of `Psot = 0`), so the
+/// calls read the boxes and the main header about once in all, and each
+/// gives what a read from the start gives.
+#[test]
+fn header_calls_on_a_jp2c_box_ending_in_ff_d9_inside_its_main_header_read_it_about_once() {
+    let (bytes, box_end) = jp2c_box_ending_in_ff_d9();
     let options = DecodeOptions::default();
     let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
     decoder.feed(&bytes[..box_end]);
@@ -2300,6 +2307,36 @@ fn header_calls_on_a_jp2c_box_ending_in_ff_d9_inside_its_main_header_read_it_abo
     let len = box_end as u64;
     println!("{len}-byte box end, {spent} bytes walked");
     assert!(spent <= 4 * len, "{spent} bytes walked for {len}");
+}
+
+/// [`jp2c_box_ending_in_ff_d9`] fed a byte at a time from the start, with a
+/// `header` call after each: while the bytes of the `SOT` come in, the walk
+/// that finds where the codestream ends goes on from where the last call
+/// left it, so the calls read the file about once in all.
+#[test]
+fn header_calls_on_a_jp2c_box_ending_in_ff_d9_fed_a_byte_at_a_time() {
+    let (bytes, _) = jp2c_box_ending_in_ff_d9();
+    let options = DecodeOptions::default();
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    walked();
+    let mut spent = 0;
+    for (index, byte) in bytes.iter().enumerate() {
+        decoder.feed(std::slice::from_ref(byte));
+        let got = format!("{:?}", decoder.header());
+        spent += walked();
+        if index % 997 == 0 || index + 1 == bytes.len() {
+            assert_eq!(
+                got,
+                fresh_header(decoder.bytes(), &options),
+                "at {} bytes",
+                index + 1
+            );
+            walked();
+        }
+    }
+    let len = bytes.len() as u64;
+    println!("{len} bytes, {spent} walked");
+    assert!(spent <= 3 * len, "{spent} bytes walked for {len}");
 }
 
 /// The same files fed a byte at a time from the start, with a `header` call
@@ -2338,6 +2375,186 @@ fn header_calls_on_a_jp2c_box_ending_inside_its_main_header_fed_a_byte_at_a_time
     }
 }
 
+/// A JP2 file whose `jp2c` box holds the first `cut` bytes of `whole`, a
+/// codestream, and ends there between two marker segments of its main
+/// header. After the box come `extra` (a marker segment or none), the rest
+/// of the main header, which ends it, and a tile-part of `Psot` 2^24 with
+/// `data` bytes of it, so the walk of the segment and tile-part lengths
+/// does not reach an end in the file. Returns the file and where the box
+/// ends in it.
+fn jp2c_box_cut_before_a_large_psot(
+    whole: &[u8],
+    cut: usize,
+    extra: &[u8],
+    data: usize,
+) -> (Vec<u8>, usize) {
+    use crate::synth;
+    let (mut bytes, box_end) = jp2c_box_cut_at(whole, cut, 0);
+    bytes.extend(extra);
+    bytes.extend(&whole[cut..first_sot(whole).unwrap()]);
+    bytes.extend(synth::sot(0, 1 << 24, 0, 1));
+    bytes.extend([0xFF, 0x93]);
+    bytes.resize(bytes.len() + data, 0);
+    (bytes, box_end)
+}
+
+/// The bytes after the box in [`jp2c_box_cut_before_a_large_psot`]: a
+/// marker segment the main header's parse refuses (a second `SIZ`), then
+/// more, or only more segments, which end the header.
+fn segments_after_a_jp2c_box() -> [(&'static str, Vec<u8>); 2] {
+    use crate::synth;
+    let siz = synth::siz_body([64, 64, 0, 0, 64, 64, 0, 0], &[[7, 1, 1]]);
+    [
+        ("a segment the parse refuses", synth::seg(0xFF51, &siz)),
+        ("segments that end the header", Vec::new()),
+    ]
+}
+
+/// Where the `PPM` segment after the first starts in a [`ppm_codestream`].
+fn second_ppm(whole: &[u8]) -> usize {
+    let at = whole
+        .windows(2)
+        .position(|code| code == [0xFF, 0x60])
+        .unwrap()
+        + 4
+        + 4097;
+    assert_eq!(whole[at..at + 2], [0xFF, 0x60]);
+    at
+}
+
+/// A `jp2c` box that ends inside its own main header, followed by bytes
+/// that read as more marker segments the header's parse refuses, or that
+/// end the header, then a tile-part with a large `Psot`, fed a byte at a
+/// time from the start with a `header` call after each: the walk that
+/// finds where the codestream ends goes on from where the last call left
+/// it, so the calls read the boxes, the main header and that walk about
+/// once in all, and each gives what a read from the start gives.
+#[test]
+fn header_calls_on_a_jp2c_box_ending_before_more_segments_and_a_large_psot_read_it_about_once() {
+    let whole = ppm_codestream(2);
+    let cut = second_ppm(&whole);
+    for (what, extra) in segments_after_a_jp2c_box() {
+        let (bytes, _) = jp2c_box_cut_before_a_large_psot(&whole, cut, &extra, 16 << 10);
+        let options = DecodeOptions::default();
+        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        walked();
+        let mut spent = 0;
+        for (index, byte) in bytes.iter().enumerate() {
+            decoder.feed(std::slice::from_ref(byte));
+            let got = format!("{:?}", decoder.header());
+            spent += walked();
+            if index % 997 == 0 || index + 1 == bytes.len() {
+                assert_eq!(
+                    got,
+                    fresh_header(decoder.bytes(), &options),
+                    "{what} at {} bytes",
+                    index + 1
+                );
+                walked();
+            }
+        }
+        let len = bytes.len() as u64;
+        println!("{what}: {len} bytes, {spent} walked");
+        assert!(spent <= 3 * len, "{what}: {spent} bytes walked for {len}");
+    }
+}
+
+/// The same shapes on a codestream of 33 KB cut before its 5th `PPM`
+/// segment, with 64 KiB of the tile-part, fed 256 bytes at a time after
+/// the box: the calls after the box read about the file once in all, not
+/// the box and its codestream again on each call.
+#[test]
+fn header_calls_after_a_jp2c_box_ending_before_a_large_psot_read_it_about_once() {
+    let whole = ppm_codestream(8);
+    let cut = second_ppm(&whole) + 3 * (4 + 4097);
+    assert_eq!(whole[cut..cut + 2], [0xFF, 0x60]);
+    for (what, extra) in segments_after_a_jp2c_box() {
+        let (bytes, box_end) = jp2c_box_cut_before_a_large_psot(&whole, cut, &extra, 64 << 10);
+        let options = DecodeOptions::default();
+        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        decoder.feed(&bytes[..box_end]);
+        assert_eq!(format!("{:?}", decoder.header()), "Ok(None)");
+        walked();
+        let (mut spent, mut calls) = (0, 0);
+        for chunk in bytes[box_end..].chunks(256) {
+            decoder.feed(chunk);
+            let got = format!("{:?}", decoder.header());
+            spent += walked();
+            calls += 1;
+            assert_eq!(
+                got,
+                fresh_header(decoder.bytes(), &options),
+                "{what} at {} bytes",
+                decoder.bytes_fed()
+            );
+            walked();
+        }
+        let len = bytes.len() as u64;
+        println!(
+            "{what}: {calls} calls after the box, {spent} bytes walked, {} a call",
+            spent / calls
+        );
+        assert!(spent <= 2 * len, "{what}: {spent} bytes walked for {len}");
+    }
+}
+
+/// The shapes of [`jp2c_box_cut_before_a_large_psot`], with the tile-part
+/// 4 KiB long and an `EOC` after it, so that the walk that finds where the
+/// codestream ends reaches it, fed 61 bytes at a time with the reduction
+/// and the region changed between the feeds: what a call keeps of that
+/// walk depends on no option, so each call gives what a read from the
+/// start gives under the decoder's options of the moment, a reduction the
+/// header refuses and a window that runs past the image's edge
+/// included.
+#[test]
+fn header_calls_after_a_jp2c_box_ending_inside_its_main_header_under_changing_options() {
+    use crate::{Window, synth};
+    let whole = ppm_codestream(2);
+    let cut = second_ppm(&whole);
+    let reductions = [0, 1, 3];
+    let regions = [
+        Region::Whole,
+        Region::Window(Window::new(0, 0, 32, 32)),
+        Region::Window(Window::new(48, 48, 96, 96)),
+    ];
+    for (what, extra) in segments_after_a_jp2c_box() {
+        let (mut bytes, box_end) = jp2c_box_cut_at(&whole, cut, 0);
+        bytes.extend(&extra);
+        bytes.extend(&whole[cut..first_sot(&whole).unwrap()]);
+        bytes.extend(synth::tile_part(0, 0, 1, &[], &[0; 4096]));
+        bytes.extend([0xFF, 0xD9]);
+        let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).unwrap();
+        decoder.feed(&bytes[..box_end]);
+        let chunks = bytes[box_end..].chunks(61).map(Some);
+        // Then every pair of options on the whole input.
+        let mut answers = Vec::new();
+        for (index, chunk) in chunks.chain([None; 9]).enumerate() {
+            if let Some(chunk) = chunk {
+                decoder.feed(chunk);
+            }
+            decoder
+                .set_resolution_reduction(reductions[index % 3])
+                .unwrap();
+            decoder.set_region(regions[index / 3 % 3].clone()).unwrap();
+            let got = format!("{:?}", decoder.header());
+            assert_eq!(
+                got,
+                fresh_header(decoder.bytes(), decoder.options()),
+                "{what} at {} bytes",
+                decoder.bytes_fed()
+            );
+            answers.push(got);
+        }
+        // On the whole input, the refused segment is an error under every
+        // option, and the header is read under the reductions it takes.
+        let last = &answers[answers.len() - 9..];
+        let read = last.iter().filter(|got| got.starts_with("Ok(Some")).count();
+        let refused = last.iter().filter(|got| got.starts_with("Err(")).count();
+        let expected = if extra.is_empty() { (3, 6) } else { (0, 9) };
+        assert_eq!((read, refused), expected, "{what}: {last:?}");
+    }
+}
+
 /// The top-level `jp2c` box of the JP2 file `bytes`: where it starts, the
 /// length of its header, 8 or 16 bytes.
 fn jp2c_box(bytes: &[u8]) -> Option<(usize, usize)> {
@@ -2363,7 +2580,8 @@ fn jp2c_box(bytes: &[u8]) -> Option<(usize, usize)> {
 /// Every JP2 and JPH file under `tests/fixtures`, with its `jp2c` box cut
 /// to end inside its main header at several points, then the rest of the
 /// file (which may read as more of the main header), alone or with an
-/// `xml ` box of length 0 after it, or boxes of 8 bytes:
+/// `xml ` box of length 0 after it, or boxes of 8 bytes, or the rest of the
+/// main header and a tile-part of 1 KB:
 /// `header` after each feed, a byte at a time around the box's end, gives
 /// what a read from the start of the same bytes gives.
 #[test]
@@ -2393,7 +2611,7 @@ fn header_on_fixtures_whose_jp2c_box_ends_inside_the_main_header_is_a_read_from_
         crate::skip::excluded_path(dir);
     }
     let packaged = crate::skip::is_excluded_path("conformance/");
-    // 44 files and 704 cases packaged, 89 and 1418 in the repository.
+    // 44 files and 1408 cases packaged, 89 and 2836 in the repository.
     let (least_files, least_cases) = if packaged { (40, 600) } else { (80, 1200) };
     assert!(files.len() > least_files, "{} files", files.len());
     let options = DecodeOptions::default();
@@ -2428,12 +2646,47 @@ fn header_on_fixtures_whose_jp2c_box_ends_inside_the_main_header_is_a_read_from_
             // A box of length 0 the walk after the codestream does not
             // check settles it, where that walk reaches the box (#725).
             let open_xml = [&whole[box_end..], &[0, 0, 0, 0], b"xml ", b"<a/>"].concat();
-            for (what, rest) in [
-                ("the rest", &whole[box_end..]),
-                ("boxes", &boxes[..]),
-                ("the rest, then an xml of length 0", &open_xml[..]),
-            ] {
-                let bytes = [&whole[..box_at], &header, &whole[payload..box_end], rest].concat();
+            // The rest of the main header, then a tile-part of 1 KB and an
+            // `EOC`, which the walk that finds where the codestream ends
+            // reaches over several calls, going on from where each left it.
+            let long_part = [
+                &whole[box_end..payload + main],
+                &synth::tile_part(0, 0, 1, &[], &[0; 1024]),
+                &[0xFF, 0xD9],
+            ]
+            .concat();
+            // The box as it was, whose length runs past the bytes fed, so
+            // the input cuts it at `box_end` inside its main header and
+            // its payload grows with each feed: no read may keep where the
+            // walk that finds where the codestream ends stopped, as the
+            // codestream is no fixed payload (`Jp2File::end_walk`). It is
+            // the same file at every cut, so it is fed around the first
+            // and the last cut alone.
+            let uncut = [cuts[0], cuts[cuts.len() - 1]].contains(&cut).then(|| {
+                (
+                    "the box uncut, cut by the input",
+                    &whole[box_at..payload],
+                    &whole[box_end..],
+                )
+            });
+            for (what, header, rest) in [
+                ("the rest", &header[..], &whole[box_end..]),
+                ("boxes", &header[..], &boxes[..]),
+                (
+                    "the rest, then an xml of length 0",
+                    &header[..],
+                    &open_xml[..],
+                ),
+                (
+                    "the main header, then a tile-part of 1 KB",
+                    &header[..],
+                    &long_part[..],
+                ),
+            ]
+            .into_iter()
+            .chain(uncut)
+            {
+                let bytes = [&whole[..box_at], header, &whole[payload..box_end], rest].concat();
                 let bytes = &bytes[..bytes.len().min(1 << 16)];
                 let near = box_end.saturating_sub(16).max(1);
                 let mut points: Vec<usize> = (1..near).step_by(5).collect();
