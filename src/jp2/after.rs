@@ -231,7 +231,7 @@ impl State {
                     )));
                 }
                 if !self.has_color {
-                    self.has_color = color::parse_usable(payload).map_err(context)?.is_some();
+                    self.has_color = color::is_usable(payload).map_err(context)?;
                 }
             }
             b"bpcc" => {
@@ -368,6 +368,15 @@ pub(crate) fn settled(after: &AfterCodestream<'_>) -> bool {
 /// with no fault.
 /// Either way [`check`] reads the same whole boxes before it.
 ///
+/// That a passing `colr` keeps passing depends on [`check`] reading nothing
+/// of it but the method, the length of an enumerated color space and
+/// whether a profile is empty ([`color::is_usable`]), and not copying the
+/// profile. A rule on the profile's size would break it. OpenJPEG 2.5's
+/// `opj_jp2_read_colr` casts `icc_len` to `OPJ_INT32`, so it fails a
+/// `METH` 2 profile of 2^31 + 3 bytes or more; this decoder does not
+/// copy that, and a `colr` of length 0 reaches that size only past 2^31
+/// bytes of input, as the walk stops short of it from 2^32 on.
+///
 /// The other types [`check`] reads can turn at fault as they grow: a
 /// `bpcc` holds one byte for each component, and a `jp2h` can take a child
 /// at fault.
@@ -477,5 +486,88 @@ mod tests {
             .filter(|kind| **kind != b"ihdr")
             .collect();
         assert_eq!(read, CHECKED.iter().collect::<Vec<_>>());
+    }
+
+    /// The `colr` read as it was before it stopped copying the profile:
+    /// the original `parse_usable` for a box with nothing held yet. Returns
+    /// the fault as text, or whether a `colr` is held after the box.
+    fn old_colr(has_color: bool, payload: &[u8]) -> core::result::Result<bool, String> {
+        fn old_parse(payload: &[u8]) -> Result<Option<Vec<u8>>> {
+            let rest = &payload[3..];
+            match payload[0] {
+                1 => {
+                    let Some(&[_, _, _, _]) = rest.first_chunk::<4>() else {
+                        return Err(Error::file_format(format!(
+                            "a `colr` box with `METH` 1 holds {} bytes; it needs 7 for the \
+                             enumerated color space",
+                            payload.len()
+                        )));
+                    };
+                    Ok(Some(Vec::new()))
+                }
+                2 => {
+                    if rest.is_empty() {
+                        return Err(Error::file_format(
+                            "a `colr` box with `METH` 2 holds no ICC profile",
+                        ));
+                    }
+                    Ok(Some(rest.to_vec()))
+                }
+                _ => Ok(None),
+            }
+        }
+        if payload.len() < 3 {
+            return Err(format!(
+                "{:?}",
+                fault(format!(
+                    "a `colr` box holds {} bytes; it needs at least 3",
+                    payload.len()
+                ))
+            ));
+        }
+        if has_color {
+            return Ok(true);
+        }
+        old_parse(payload)
+            .map(|parsed| parsed.is_some())
+            .map_err(|error| format!("{:?}", context(error)))
+    }
+
+    /// For every `colr` body of each `METH` and of 0 to 11 bytes, with and
+    /// without an earlier `colr` taken, the walk after the codestream
+    /// accepts and refuses as the copying read did, with the same fault and
+    /// the same state after.
+    #[test]
+    fn colr_after_the_codestream_reads_as_it_did_with_the_profile_copied() {
+        let [empty, _] = states();
+        let mut shapes = 0;
+        for method in [0u8, 1, 2, 3, 4, 255] {
+            for length in 0..12usize {
+                for fill in [0u8, 16, 0xFF] {
+                    let mut payload = vec![fill; length];
+                    if let Some(first) = payload.first_mut() {
+                        *first = method;
+                    }
+                    for has_color in [false, true] {
+                        let mut state = State {
+                            has_color,
+                            ..empty.clone()
+                        };
+                        let item = Jp2Box {
+                            kind: *b"colr",
+                            payload: &payload,
+                        };
+                        let new = state
+                            .read(&item)
+                            .map(|()| state.has_color)
+                            .map_err(|error| format!("{error:?}"));
+                        let old = old_colr(has_color, &payload);
+                        assert_eq!(new, old, "METH {method}, {payload:?}, held {has_color}");
+                        shapes += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(shapes, 6 * 12 * 3 * 2);
     }
 }

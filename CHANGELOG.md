@@ -299,6 +299,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `IncrementalDecoder::header` and `refine` no longer copy the ICC profile of
+  a `colr` box after the codestream to decide whether it passes. On a
+  `colr` of length 0 holding a 1 MiB profile, a `header` call held 1,048,880
+  more bytes at its peak and now holds 788. Which files are accepted does
+  not change (#741).
 - `IncrementalDecoder::refine` and `header` give a JP2 file's error at once
   when the last box after the codestream has length 0 and a type the
   decode does not check there, such as `xml `, `uuid` or `jp2i`. They held
