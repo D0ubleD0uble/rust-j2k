@@ -20,10 +20,14 @@ jobs:
   auto-merge:
     name: Enable auto-merge for low-risk updates
     runs-on: ubuntu-latest
-    # Gate on the PR author, not github.actor: on pull_request_target the actor
-    # is whoever triggered the latest event (a re-run, a label, a push), so it
-    # can be Dependabot acting on a PR that someone else opened.
-    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    # Gate on both the PR author and github.actor. On pull_request_target the
+    # actor is whoever caused the event, so the author check stops Dependabot
+    # acting on a PR someone else opened, and the actor check stops a person
+    # who pushes to or reopens a Dependabot PR from turning auto-merge on.
+    # A re-run keeps the original actor.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.actor == 'dependabot[bot]'
     steps:
       - name: Fetch Dependabot metadata
         id: meta
