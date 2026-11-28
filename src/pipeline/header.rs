@@ -338,14 +338,41 @@ fn check_geometry(
             .map(|(cache, main)| (cache, start, main)),
         &mut faults,
     );
+    // Under `Hold::Lifting` only a larger cap can take a stop away, so a
+    // stop is held only where the count under the largest cap more bytes
+    // can bring, at the samples the target can address, passes, or stops
+    // at a budget with no fault to meet. A stop the count still meets
+    // there, such as a tile past the address space, is given at once. That
+    // count keeps nothing and runs under the same budgets, and only here;
+    // at that cap a tile's size admits it unless it is near the address
+    // space, so it is mostly a pass over the sizes of the tiles read.
+    let lifts = hold == Hold::Lifting
+        && cap.grows()
+        && !matches!(counted, Ok(true))
+        && match count_geometry(
+            bytes,
+            parsed,
+            selection,
+            reduction,
+            samples::Cap {
+                allowed: samples::ADDRESSABLE_SAMPLES,
+                ..cap
+            },
+            strict,
+            None,
+            &mut faults,
+        ) {
+            Ok(true) => true,
+            Ok(false) => faults.find(bytes, parsed, strict).is_none(),
+            Err(_) => false,
+        };
     // The decode parses every tile-part before it counts any tile, whatever
     // the selection, so where the count refuses a tile or stops at a budget,
     // that parse's fault comes first.
     let mut fault = || faults.find(bytes, parsed, strict);
     let checked = match counted {
         Ok(true) => Ok(()),
-        // Under `Hold::Lifting` only a larger cap can take a stop away.
-        Ok(false) | Err(_) if hold == Hold::Lifting && cap.grows() => Ok(()),
+        Ok(false) | Err(_) if lifts => Ok(()),
         Ok(false) => fault().map_or(Ok(()), Err),
         Err(error @ (Error::Limit(_) | Error::InvalidOptions(_))) => match fault() {
             Some(fault) => Err(fault),
@@ -387,9 +414,12 @@ enum Hold {
     /// samples the target can address, as under `Unlimited`. The codestream
     /// is the same whatever follows, and a box after it can still be read
     /// but passes whatever follows ([`jp2::Jp2File::after_passes_on`]), so
-    /// more bytes change only the cap. A larger one can take any stop of
-    /// the count away: a refusal, a stop at a budget, or the refusal of a
-    /// lower tile counted only because a tile over the cap follows it.
+    /// more bytes change only the cap. A larger one can take a stop of the
+    /// count away: a refusal, a stop at a budget, or the refusal of a lower
+    /// tile counted only because a tile over the cap follows it. So a stop
+    /// is held only where the count under a cap at the samples the target
+    /// can address takes it away, and given at once where that count still
+    /// meets one, as for a tile past the address space.
     Lifting,
 }
 
