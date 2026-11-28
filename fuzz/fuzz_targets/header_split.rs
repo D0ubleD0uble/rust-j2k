@@ -111,14 +111,17 @@ fn oracle(prefix: &[u8], options: &DecodeOptions) -> String {
 /// the [`oracle`], allowing an error held back where more bytes can replace
 /// it, while the input has not closed ([`held::closes`]): in a codestream,
 /// always; in a JP2 file, where a suffix changes what `read_header_with`
-/// gives, or, for a refusal of the sRGB step, as the header with the
-/// channels as coded, or for a tile cap that grows with the input, which
-/// more bytes lift (`refine` waits on it as `Waiting::SampleLimit`;
-/// past the fuzz input size, so no suffix here tries it). A
-/// JP2 file's `None` for an error needs such a suffix too: a fault in a
-/// box of length 0 before the codestream that more bytes do not change,
-/// such as one of a whole child of a `jp2h`, is final. Returns what the
-/// oracle gives.
+/// gives ([`replaceable`], which reads the input up to a box of length 0
+/// after the codestream under the sample limit the 2^32 bytes that skip it
+/// raise the default to, so a tile-part fault met only because a tile is
+/// over a cap gives way there), or, for a refusal of the sRGB step, as the
+/// header with the channels as coded, or for a tile cap that grows with the
+/// input, which more bytes lift (`refine` waits on it as
+/// `Waiting::SampleLimit`; past the fuzz input size, so no suffix here
+/// tries it). A JP2 file's `None` for an error needs such a suffix too: a
+/// fault in a box of length 0 before the codestream that more bytes do not
+/// change, such as one of a whole child of a `jp2h`, is final. Returns what
+/// the oracle gives.
 fn check(
     got: &Result<Option<Header>, Error>,
     prefix: &[u8],

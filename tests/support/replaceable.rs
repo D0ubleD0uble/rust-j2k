@@ -1,7 +1,8 @@
 //! Whether more bytes can change what `read_header_with` gives on a JP2
 //! prefix: [`replaceable`] tries suffixes that complete the box or
 //! tile-part the input ends inside and then put a box at fault after the
-//! codestream, and stands in for one too long to build. The `header_split`
+//! codestream, and stands in for one too long to build, under the sample
+//! limit such a suffix raises the default to. The `header_split`
 //! fuzz target allows `header()` to hold an error back only where this
 //! finds such a suffix, and `tests/jp2_box_error_final.rs` checks it on the
 //! committed inputs.
@@ -13,7 +14,7 @@
 #![allow(dead_code)]
 
 use super::inconsistent::checked;
-use rust_j2k::{DecodeOptions, read_header_with};
+use rust_j2k::{DecodeOptions, SampleLimit, read_header_with};
 
 fn u16_at(bytes: &[u8], at: usize) -> Option<usize> {
     let b = bytes.get(at..at.checked_add(2)?)?;
@@ -65,11 +66,37 @@ enum Completion {
     /// holds instead is the input with that box or tile-part dropped, then
     /// an `EOC` where it is a tile-part, then [`SHORT_COLR`]. The decode
     /// checks that box before the tile-parts, so an error read there too
-    /// comes from before the bytes dropped, and no suffix replaces it. For
-    /// a box of length 0 after the codestream, the suffix is 2^32 bytes,
-    /// past which OpenJPEG skips the box unread, and this holds the input
-    /// up to that box ([`after_codestream`]).
+    /// comes from before the bytes dropped, and no suffix replaces it.
     Far(Vec<u8>),
+    /// The input ends inside a box of length 0 after the codestream, which
+    /// OpenJPEG skips unread once 2^32 bytes or more follow its header
+    /// ([`after_codestream`]). That suffix is not built: this holds the
+    /// input up to that box, which [`replaceable`] reads under the sample
+    /// limit the suffix raises the default to ([`grown`]).
+    Skipped(Vec<u8>),
+}
+
+/// `options` with the sample limit an input 2^32 bytes or more longer has:
+/// [`SampleLimit::Unlimited`], unless the limit is a ceiling the caller set
+/// ([`SampleLimit::AtMost`]), which no byte raises.
+///
+/// The default limit grows with the input: it is the larger of 2^29 and 8
+/// samples a byte (`samples::default_limit`). A `Raised` factor multiplies
+/// it, and both stop at the samples the target can address, which is what
+/// `Unlimited` allows. A
+/// suffix of 2^32 bytes or more after a skipped box is a suffix of any
+/// length past that, and the read of the codestream is the same for each,
+/// as OpenJPEG reads nothing of that box: so the longest suffix, under the
+/// largest limit, stands in for them all. A larger limit refuses fewer
+/// tiles, so where a tile-part fault is given only because a tile is over
+/// a cap, it gives way there, as it does on the longer input; a fault that
+/// needs no cap to be met stays, and so does a tile past what the target
+/// can address.
+fn grown(options: &DecodeOptions) -> DecodeOptions {
+    match options.sample_limit() {
+        SampleLimit::AtMost(_) => options.clone(),
+        _ => options.clone().with_sample_limit(SampleLimit::Unlimited),
+    }
 }
 
 /// `prefix`, a JP2 file whose codestream ends at `at`, with the box after
@@ -79,7 +106,8 @@ enum Completion {
 /// length 0 runs to the end of the input, and OpenJPEG skips it unread once
 /// 2^32 bytes or more follow its header, so its fault, whatever it is, is
 /// one more bytes take away: that suffix is not built
-/// ([`Completion::Far`]), and the input up to that box stands in for it.
+/// ([`Completion::Skipped`]), and the input up to that box stands in for
+/// it.
 /// `None` where the walk reads no box past the input: it stopped at a
 /// `jp2c`, a box of length 1 (an `XLBox`), or a box shorter than its
 /// header.
@@ -96,7 +124,7 @@ fn after_codestream(prefix: &[u8], mut at: usize) -> Option<Completion> {
             return None;
         }
         if length == 0 && rest.len() >= 8 {
-            return Some(Completion::Far(prefix[..at].to_vec()));
+            return Some(Completion::Skipped(prefix[..at].to_vec()));
         }
         if length < 8 {
             return None;
@@ -203,20 +231,26 @@ fn completed(prefix: &[u8]) -> Option<Completion> {
 /// Whether more bytes can change what `read_header_with` gives on the JP2
 /// prefix `prefix`: some suffix tried here gives another answer. A fault of
 /// a box held whole, and of the boxes before it, passes none. Where the
-/// suffix is too long to build ([`Completion::Far`]), the input it holds
-/// stands in for it.
+/// suffix is too long to build ([`Completion::Far`],
+/// [`Completion::Skipped`]), the input it holds stands in for it, the
+/// latter under the sample limit that suffix raises the default to.
 pub fn replaceable(prefix: &[u8], options: &DecodeOptions) -> bool {
     let lenient = options.clone().with_strict(false);
-    let answer = |bytes: &[u8]| format!("{:?}", checked(read_header_with(bytes, &lenient)));
-    let base = answer(prefix);
+    let answer = |bytes: &[u8], options: &DecodeOptions| {
+        format!("{:?}", checked(read_header_with(bytes, options)))
+    };
+    let base = answer(prefix, &lenient);
     let mut longer = vec![
-        [prefix, &[0; 64][..]].concat(),
-        [prefix, &vec![0; 8192][..]].concat(),
-        [prefix, &SHORT_COLR[..]].concat(),
+        ([prefix, &[0; 64][..]].concat(), lenient.clone()),
+        ([prefix, &vec![0; 8192][..]].concat(), lenient.clone()),
+        ([prefix, &SHORT_COLR[..]].concat(), lenient.clone()),
     ];
     match completed(prefix) {
-        Some(Completion::Bytes(bytes) | Completion::Far(bytes)) => longer.push(bytes),
+        Some(Completion::Bytes(bytes) | Completion::Far(bytes)) => longer.push((bytes, lenient)),
+        Some(Completion::Skipped(bytes)) => longer.push((bytes, grown(&lenient))),
         None => {}
     }
-    longer.iter().any(|bytes| answer(bytes) != base)
+    longer
+        .iter()
+        .any(|(bytes, options)| answer(bytes, options) != base)
 }
