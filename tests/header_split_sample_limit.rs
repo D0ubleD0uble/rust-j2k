@@ -378,3 +378,29 @@ fn a_stop_at_the_budget_a_larger_cap_takes_away_is_held() {
     decoder.feed(&file);
     assert!(part_fault(decoder.header()));
 }
+
+/// 16384 tiles of 2^25 x 2^25, each of 16 components under 20 levels, read
+/// under a reduction of 20, with the tile-part fault of
+/// [`a_budget_stop_meets_a_tile_part_fault`]. Even at the samples the
+/// target can address, a tile's size does not show it within the cap on
+/// code-blocks, so each is counted under the main header, at 336 steps a
+/// tile, and the count stops at its budget there too. So no cap takes the
+/// stop away, and `header` gives the fault at once under the default limit.
+#[test]
+fn a_stop_at_the_budget_the_largest_cap_still_meets_is_given_at_once() {
+    let side = u32::MAX;
+    let main = main_header([side, side, 0, 0, 1 << 25, 1 << 25, 0, 0], 16, 20, 4);
+    let file = jp2_ending_in_a_passing_colr(&main, &synth::tile_part(28, 2, 3, &[], &[]));
+    let options = DecodeOptions::default()
+        .with_strict(false)
+        .with_resolution_reduction(20);
+    for limit in [SampleLimit::Default, SampleLimit::Unlimited] {
+        let options = options.clone().with_sample_limit(limit.clone());
+        assert!(part_fault(read_header_with(&file, &options)), "{limit:?}");
+    }
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&file);
+    let got = format!("{:?}", inconsistent::checked(decoder.header()));
+    assert_eq!(got, oracle(&file, &options));
+    assert!(part_fault(decoder.header()));
+}

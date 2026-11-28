@@ -314,6 +314,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no byte raises the limit. Under the default or a `Raised` limit it still
   holds them, as a longer input raises the limit and can take them away.
   `header` held them under every limit before (#735).
+- In that state `header` under the default or a `Raised` limit holds only
+  what a larger limit takes away. A tile past what the target can address,
+  which no limit admits, is refused at once with `LimitKind::AddressSpace`,
+  as `read_header_with` and `refine` refuse it. `header` held it before
+  (#740).
 - The refusal of a resolution reduction that leaves a component with no
   resolution now reads correctly for a component with one resolution:
   "resolution reduction 1 leaves no resolution of component 0 (it has 1)"
