@@ -490,7 +490,7 @@ real codestreams to mutate, which reaches far more of the pipeline than random
 bytes:
 
 ```sh
-# Seed the corpus once, as the CI smoke does (67 files): the fixtures, the
+# Seed the corpus once, as the CI smoke does (72 files): the fixtures, the
 # OpenJPH codestreams, and the HT conformance codestreams of 6144 bytes or
 # less. Size tests here are in bytes (`-size -6145c`): the older `-size -6k`
 # rounds up to 6 KiB units and meant 5 KiB or less. The HT files reach the HT
@@ -498,7 +498,7 @@ bytes:
 # byte makes the body's code-blocks HT, and bit 6 with it makes them MIXED).
 mkdir -p fuzz/corpus/decode
 cp tests/fixtures/*.j2k tests/fixtures/openjph/files/*.j2c fuzz/corpus/decode/
-# Not in the CI smoke yet: the sYCC JP2 files, which the sRGB window draw needs.
+# The sYCC JP2 files, which the sRGB window draw needs, seed the CI smoke too.
 cp tests/fixtures/jp2_sycc_*.jp2 fuzz/corpus/decode/
 find tests/fixtures/conformance/ht/codestreams -size -6145c -name '*.j2k' -exec cp {} fuzz/corpus/decode/ \;
 # Optional, not in the CI smoke: the ISO/IEC 15444-4 codestreams carry
