@@ -757,6 +757,32 @@ fn tile_part_file(codestream: &[u8], trailing: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// A fault in a tile-part header, then a whole `colr` with an explicit
+/// length that passes: `refine` holds the fault, since a box after the
+/// `colr` can still be at fault. With a `colr` too short after it,
+/// `decode_with` gives that box's error instead.
+#[test]
+fn a_fault_before_a_whole_colr_that_passes_is_held() {
+    let colr = synth::bx(b"colr", &synth::colr_enum(17));
+    let bytes = tile_part_file(&coc_fault(), &colr);
+    let whole = error_of(&decode_with(&bytes, &DecodeOptions::default())).expect("an error");
+    assert!(whole.starts_with("Marker"), "{whole}");
+    let mut decoder = IncrementalDecoder::new(DecodeOptions::default()).expect("valid");
+    decoder.feed(&bytes);
+    match decoder.refine() {
+        Ok(Refined::Waiting(Waiting::Held { error, .. })) => {
+            assert_eq!(format!("{error:?}"), whole);
+        }
+        other => panic!("{other:?}"),
+    }
+    let longer = [bytes, synth::bx(b"colr", &[1, 0])].concat();
+    let error = error_of(&decode_with(&longer, &DecodeOptions::default())).expect("an error");
+    assert!(
+        error.starts_with("FileFormat") && error.contains("a `colr` box holds 2 bytes"),
+        "{error}"
+    );
+}
+
 /// [`codestream`] of one component with the reserved marker `FF 30`, which
 /// has no segment, at the end of its main header, then a `COM` of `comment`
 /// zero bytes when `comment` is not 0.

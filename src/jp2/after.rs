@@ -362,8 +362,10 @@ pub(crate) fn settled(after: &AfterCodestream<'_>) -> bool {
 /// passes now: the walk ends on a `colr` of length 0, under 2^32 bytes from
 /// its start. That box runs to the end of the input, so no box follows it.
 /// While it stays under 2^32 bytes, [`check`] reads it, and a `colr` it
-/// passes it passes with more bytes: it needs 3, and reads no more than
-/// the first 7. From 2^32 on, the walk ends before it, with no fault.
+/// passes it passes with more bytes: it needs 3, and whether it passes
+/// depends only on its first bytes, the method and, for `METH` 2, a
+/// profile that is not empty. From 2^32 on, the walk ends before it,
+/// with no fault.
 /// Either way [`check`] reads the same whole boxes before it.
 ///
 /// The other types [`check`] reads can turn at fault as they grow: a
