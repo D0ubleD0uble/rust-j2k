@@ -20,6 +20,10 @@
 //! the fault at once, and `refine` gives its decode's fault under any
 //! limit. A `bpcc` there can still turn at fault, so the fault is still
 //! held behind one.
+//!
+//! Under a limit that grows, `header` holds only a stop a larger cap takes
+//! away: one the count still meets at the samples the target can address,
+//! such as a tile past the address space, is given at once.
 
 #[path = "support/inconsistent.rs"]
 mod inconsistent;
@@ -30,7 +34,9 @@ mod replaceable;
 #[path = "support/synth.rs"]
 mod synth;
 
-use rust_j2k::{DecodeOptions, Error, IncrementalDecoder, SampleLimit, read_header_with};
+use rust_j2k::{
+    DecodeOptions, Error, IncrementalDecoder, LimitKind, SampleLimit, decode_with, read_header_with,
+};
 
 /// The seed's file and the options its piece stream sets by the feed that
 /// ends at `fed`: the reduction of its first control byte, then the
@@ -152,7 +158,7 @@ fn refined(prefix: &[u8], options: &DecodeOptions) -> Result<(), Error> {
 /// bytes fed, and so does a second call.
 fn a_fault_no_byte_lifts_is_given_at_once(name: &str, limit: SampleLimit) {
     let (prefix, options) = at_feed(name, 2999);
-    let options = options.with_sample_limit(limit);
+    let options = options.with_sample_limit(limit.clone());
     assert_eq!(fault_of(read_header_with(&prefix, &options)), Some(FAULT));
     let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
     decoder.feed(&prefix);
@@ -229,4 +235,229 @@ fn a_bpcc_of_length_0_after_the_codestream_can_still_turn_at_fault() {
     decoder.feed(&bpcc);
     assert!(matches!(decoder.header(), Ok(Some(_))));
     assert!(refined(&bpcc, &options).is_ok());
+}
+
+/// The bytes of a `colr` of length 0 that passes whatever follows: an
+/// enumerated color space, sRGB, and nothing after it.
+const PASSING_COLR: &[u8] = b"\0\0\0\0colr\x01\0\0\0\0\0\x11";
+
+/// A JP2 file of the codestream `main`, `tile_part` and `EOC`, then
+/// [`PASSING_COLR`] and the end of the input. Its `jp2h` holds an `ihdr`
+/// that matches the `SIZ` and an sRGB `colr`.
+fn jp2_ending_in_a_passing_colr(main: &[u8], tile_part: &[u8]) -> Vec<u8> {
+    let codestream = [main, tile_part, &[0xFF, 0xD9]].concat();
+    let header = [
+        synth::ihdr_for(&codestream),
+        synth::bx(b"colr", &synth::colr_enum(16)),
+    ];
+    let mut file = synth::jp2_file(&header, &[], &codestream, &[]);
+    file.extend_from_slice(PASSING_COLR);
+    file
+}
+
+/// A main header: a `SIZ` of the eight `grid` fields and `components`
+/// 8-bit components, a `COD` of `levels` levels and code-blocks of
+/// `4 << block` samples square, and a `QCD`.
+fn main_header(grid: [u32; 8], components: usize, levels: u8, block: u8) -> Vec<u8> {
+    let mut main = vec![0xFF, 0x4F];
+    main.extend(synth::seg(
+        0xFF51,
+        &synth::siz_body(grid, &vec![[7, 1, 1]; components]),
+    ));
+    main.extend(synth::seg(0xFF52, &synth::cod_body(1, levels, block, 0)));
+    let exponents = vec![9; 1 + 3 * usize::from(levels)];
+    main.extend(synth::seg(0xFF5C, &synth::qcd_none_body(2, &exponents)));
+    main
+}
+
+/// The repro of #740: one 4-component tile of (2^32 - 1)^2 under 20 levels
+/// and 4x4 code-blocks, read under a reduction of 19. Its code-blocks are
+/// past what the target can address, so no sample limit admits it.
+fn past_the_address_space() -> (Vec<u8>, DecodeOptions) {
+    let side = u32::MAX;
+    let main = main_header([side, side, 0, 0, side, side, 0, 0], 4, 20, 0);
+    let file = jp2_ending_in_a_passing_colr(&main, &synth::tile_part(0, 0, 1, &[], &[]));
+    let options = DecodeOptions::default()
+        .with_strict(false)
+        .with_resolution_reduction(19);
+    (file, options)
+}
+
+/// Whether `result` refuses a tile past the address space.
+fn past_the_address_space_refused<T>(result: Result<T, Error>) -> bool {
+    matches!(result, Err(Error::Limit(limit)) if limit.kind() == LimitKind::AddressSpace)
+}
+
+/// After a passing `colr` of length 0, `header` held a refusal of a tile
+/// past the address space while the sample limit could grow, under the
+/// default or a `Raised` limit, though no limit admits that tile. Now it
+/// gives it at once, as `read_header_with`, `refine` and `decode_with` do.
+#[test]
+fn header_gives_a_tile_past_the_address_space_at_once_under_a_limit_that_grows() {
+    let (file, options) = past_the_address_space();
+    for limit in [SampleLimit::Default, SampleLimit::Raised(8)] {
+        let options = options.clone().with_sample_limit(limit.clone());
+        let at = format!("{limit:?}");
+        assert!(
+            past_the_address_space_refused(read_header_with(&file, &options)),
+            "{at}"
+        );
+        assert!(
+            past_the_address_space_refused(decode_with(&file, &options)),
+            "{at}"
+        );
+        let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+        decoder.feed(&file);
+        let got = format!("{:?}", inconsistent::checked(decoder.header()));
+        assert_eq!(got, oracle(&file, &options), "{at}: header");
+        assert!(past_the_address_space_refused(decoder.header()), "{at}");
+        assert!(
+            past_the_address_space_refused(decoder.refine()),
+            "{at}: refine"
+        );
+    }
+}
+
+/// With an `xml ` box of length 0 in place of the `colr`, a box the decode
+/// does not check, `header` gave the refusal before too.
+#[test]
+fn an_xml_box_of_length_0_there_gives_the_same() {
+    let (file, options) = past_the_address_space();
+    let colr = file.len() - PASSING_COLR.len();
+    let xml = [&file[..colr], b"\0\0\0\0xml ", &PASSING_COLR[8..]].concat();
+    assert!(past_the_address_space_refused(read_header_with(
+        &xml, &options
+    )));
+    let mut decoder = IncrementalDecoder::new(options).unwrap();
+    decoder.feed(&xml);
+    assert!(past_the_address_space_refused(decoder.header()));
+}
+
+/// 1024 tiles of 16x16, each of 1024 components under 5 levels. A tile's
+/// size does not show it within the default cap on precincts, so each is
+/// counted under the main header, at 6144 steps a tile, and the count stops
+/// at its budget, though no tile is over a cap. Tile 28's first tile-part
+/// is part 2, which the decode's parse of the tile-parts refuses, and which
+/// the read meets where the count stops.
+fn a_budget_stop_meets_a_tile_part_fault() -> Vec<u8> {
+    let main = main_header([512, 512, 0, 0, 16, 16, 0, 0], 1024, 5, 4);
+    jp2_ending_in_a_passing_colr(&main, &synth::tile_part(28, 2, 3, &[], &[]))
+}
+
+/// Whether `result` is the tile-part fault of
+/// [`a_budget_stop_meets_a_tile_part_fault`].
+fn part_fault<T>(result: Result<T, Error>) -> bool {
+    matches!(result, Err(Error::Codestream(detail))
+        if detail.to_string() == "tile 28 tile-part index is 2, but 0 of its tile-parts have been read")
+}
+
+/// Under the default limit the read meets the tile-part fault through the
+/// stop at the budget, and a larger cap, under which each tile's size
+/// admits it, takes that stop away. So after a passing `colr` of length 0
+/// `header` holds it (a hold of only a refusal would not), and `refine`,
+/// whose decode parses every tile-part, gives it. Under a ceiling no byte
+/// raises the cap, and `header` gives it at once.
+#[test]
+fn a_stop_at_the_budget_a_larger_cap_takes_away_is_held() {
+    let file = a_budget_stop_meets_a_tile_part_fault();
+    let options = DecodeOptions::default().with_strict(false);
+    assert!(part_fault(read_header_with(&file, &options)));
+    let unlimited = options.clone().with_sample_limit(SampleLimit::Unlimited);
+    assert!(read_header_with(&file, &unlimited).is_ok());
+    assert!(replaceable::replaceable(&file, &options));
+    let mut decoder = IncrementalDecoder::new(options).unwrap();
+    decoder.feed(&file);
+    assert!(matches!(decoder.header(), Ok(Some(_))));
+    assert!(matches!(decoder.header(), Ok(Some(_))), "again");
+    assert!(part_fault(decoder.refine()));
+    let ceiling = DecodeOptions::default()
+        .with_strict(false)
+        .with_sample_limit(SampleLimit::AtMost(1 << 29));
+    assert!(!replaceable::replaceable(&file, &ceiling));
+    let mut decoder = IncrementalDecoder::new(ceiling).unwrap();
+    decoder.feed(&file);
+    assert!(part_fault(decoder.header()));
+}
+
+/// 16384 tiles of 2^25 x 2^25, each of 16 components under 20 levels, read
+/// under a reduction of 20, with the tile-part fault of
+/// [`a_budget_stop_meets_a_tile_part_fault`]. Even at the samples the
+/// target can address, a tile's size does not show it within the cap on
+/// code-blocks, so each is counted under the main header, at 336 steps a
+/// tile, and the count stops at its budget there too. So no cap takes the
+/// stop away, and `header` gives the fault at once under the default limit.
+#[test]
+fn a_stop_at_the_budget_the_largest_cap_still_meets_is_given_at_once() {
+    let side = u32::MAX;
+    let main = main_header([side, side, 0, 0, 1 << 25, 1 << 25, 0, 0], 16, 20, 4);
+    let file = jp2_ending_in_a_passing_colr(&main, &synth::tile_part(28, 2, 3, &[], &[]));
+    let options = DecodeOptions::default()
+        .with_strict(false)
+        .with_resolution_reduction(20);
+    for limit in [SampleLimit::Default, SampleLimit::Unlimited] {
+        let options = options.clone().with_sample_limit(limit.clone());
+        assert!(part_fault(read_header_with(&file, &options)), "{limit:?}");
+    }
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&file);
+    let got = format!("{:?}", inconsistent::checked(decoder.header()));
+    assert_eq!(got, oracle(&file, &options));
+    assert!(part_fault(decoder.header()));
+}
+
+/// Four tiles, of 4 components under 20 levels and 4x4 code-blocks, read
+/// under a reduction of 19: tile 0 is 4096 x 4096, over the default cap on
+/// code-blocks, tiles 1 and 2 are 2^31 x 4096 and 4096 x 2^31, and tile 3
+/// is 2^31 x 2^31, past what the target can address. Each has one empty
+/// tile-part.
+fn a_liftable_tile_before_one_past_the_address_space() -> (Vec<u8>, DecodeOptions) {
+    let (side, origin, tile) = (u32::MAX, (1 << 31) - 4096, 1 << 31);
+    let main = main_header([side, side, origin, origin, tile, tile, 0, 0], 4, 20, 0);
+    let parts: Vec<u8> = (0..4)
+        .flat_map(|index| synth::tile_part(index, 0, 1, &[], &[]))
+        .collect();
+    let file = jp2_ending_in_a_passing_colr(&main, &parts);
+    let options = DecodeOptions::default()
+        .with_strict(false)
+        .with_resolution_reduction(19);
+    (file, options)
+}
+
+/// The tile and kind of the limit `result` refuses, if it refuses one.
+fn refused<T>(result: Result<T, Error>) -> Option<(u32, LimitKind)> {
+    match result {
+        Err(Error::Limit(limit)) => Some((limit.refused_at()?.tile(), limit.kind())),
+        _ => None,
+    }
+}
+
+/// The read refuses tile 0 over the default cap, which more bytes lift.
+/// Under the largest cap the count refuses tile 3 instead, past the address
+/// space, so a longer input gives that refusal, and `header` holds tile 0's
+/// as `refine` waits on it. It gave tile 0's at once while any refusal under
+/// the largest cap gave the stop at once.
+#[test]
+fn a_refusal_a_larger_cap_replaces_with_a_later_tile_is_held() {
+    let (file, options) = a_liftable_tile_before_one_past_the_address_space();
+    let tile_0 = Some((0, LimitKind::TileCodeBlocks));
+    assert_eq!(refused(read_header_with(&file, &options)), tile_0);
+    let unlimited = options.clone().with_sample_limit(SampleLimit::Unlimited);
+    assert_eq!(
+        refused(read_header_with(&file, &unlimited)),
+        Some((3, LimitKind::AddressSpace))
+    );
+    assert!(replaceable::replaceable(&file, &options));
+    let mut decoder = IncrementalDecoder::new(options.clone()).unwrap();
+    decoder.feed(&file);
+    assert!(matches!(decoder.header(), Ok(Some(_))));
+    assert!(matches!(decoder.header(), Ok(Some(_))), "again");
+    assert!(matches!(
+        decoder.refine(),
+        Ok(rust_j2k::Refined::Waiting(
+            rust_j2k::Waiting::SampleLimit { .. }
+        ))
+    ));
+    // One byte more changes neither.
+    decoder.feed(&[0]);
+    assert!(matches!(decoder.header(), Ok(Some(_))));
 }
