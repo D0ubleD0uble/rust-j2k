@@ -372,10 +372,10 @@ pub(crate) fn settled(after: &AfterCodestream<'_>) -> bool {
 /// of it but the method, the length of an enumerated color space and
 /// whether a profile is empty ([`color::is_usable`]), and not copying the
 /// profile. A rule on the profile's size would break it. OpenJPEG 2.5's
-/// `opj_jp2_read_colr` casts the box's data length to `OPJ_INT32` before taking 3
-/// from it, so it fails a `METH` 2 profile of 2^31 bytes or more. This
-/// decoder does not copy that rule. Such a box sits in the band from 2^31
-/// to 2^32 bytes, where the walk still takes a box of length 0.
+/// `opj_jp2_read_colr` casts the box's data length to `OPJ_INT32` before
+/// taking 3 from it, so it fails a `METH` 2 profile of 2^31 bytes or more.
+/// This decoder does not copy that rule. Such a box sits in the band from
+/// 2^31 to 2^32 bytes, where the walk still takes a box of length 0.
 ///
 /// The other types [`check`] reads can turn at fault as they grow: a
 /// `bpcc` holds one byte for each component, and a `jp2h` can take a child
