@@ -372,13 +372,14 @@ with thirteen targets: `decode`, `header`, `decode_partial`,
 public entry points, and `tile_body`, `tier1_block`, `ht_block`, `mq`,
 `jp2_boxes` and `icc_srgb` over single stages. See
 [`fuzz/README.md`](https://github.com/D0ubleD0uble/rust-j2k/blob/main/fuzz/README.md)
-to run them. The CI smoke runs all thirteen on every push. The bar is no panics, no unbounded allocation and no infinite
-loops: every rejected input returns a typed `Error`. A malformed SIZ cannot
-steer the buffers into an overflowing or out-of-memory allocation. SIZ's
-declared image area, `(Xsiz − XOsiz)·(Ysiz − YOsiz)`, is held to the sample
-limit before any tile is read, or under a window or a tile the area of the tiles
-read ([The sample limit](resource-bounds.md#the-sample-limit)), and the Table
-A-9 constraints on the image and tile origins are enforced before any geometry
+to run them. The CI smoke runs all thirteen on every push. The bar is no panics,
+no unbounded allocation and no infinite loops: every rejected input returns a
+typed `Error`. A malformed SIZ cannot steer the buffers into an overflowing or
+out-of-memory allocation. SIZ's declared image area,
+`(Xsiz − XOsiz)·(Ysiz − YOsiz)`, is held to the sample limit before any tile is
+read, or under a window or a tile the area of the tiles read
+([The sample limit](resource-bounds.md#the-sample-limit)), and the Table A-9
+constraints on the image and tile origins are enforced before any geometry
 reaches the DWT.
 
 Every failure is typed. The flat `Error` enum names the kind of failure, so a
