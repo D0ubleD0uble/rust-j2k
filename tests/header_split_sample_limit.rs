@@ -62,7 +62,7 @@ const FAULT: &str = "tile 28 tile-part index is 2, but 0 of its tile-parts have 
 fn fault_of<T>(result: Result<T, Error>) -> Option<&'static str> {
     match result {
         Err(Error::Codestream(detail)) if detail.to_string() == FAULT => Some(FAULT),
-        Err(Error::Codestream(_)) => Some("another tile-part fault"),
+        Err(Error::Codestream(_)) => Some("another codestream fault"),
         _ => None,
     }
 }
