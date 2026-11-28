@@ -70,11 +70,11 @@ cargo deny check
 
 CI (`.github/workflows/ci.yml`) runs these, plus `cargo test --doc`, the
 small-stack sRGB test at opt-level 0 (`CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo
-test --test srgb_small_stack`), a `cargo check` on the minimum Rust version, the package hygiene check and
-packaged tests ([layer 7](#7-package-contents)), the fuzz smoke ([layer
-3](#3-fuzzing)), `cargo test` on macOS aarch64, and on `wasm32-wasip1` the
-library tests (`--lib`) and the `jp2_icc`, `sample_limit` and `limit_32bit`
-test binaries.
+test --test srgb_small_stack`), a `cargo check` on the minimum Rust version,
+the package hygiene check and packaged tests ([layer
+7](#7-package-contents)), the fuzz smoke ([layer 3](#3-fuzzing)), `cargo test`
+on macOS aarch64, and on `wasm32-wasip1` the library tests (`--lib`) and the
+`jp2_icc`, `sample_limit` and `limit_32bit` test binaries.
 Coverage, CodeQL and Semgrep run in their own workflows.
 
 Each PR also gets an independent review by a reviewer who did not write it.
